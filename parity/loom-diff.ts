@@ -12,9 +12,9 @@
 // (parity -> cutover -> retire). A DIVERGE is a blocker, printed as a
 // line-level diff of the two normalize strings so the fault is legible.
 //
-// Run from utils/:  node_modules/.bin/tsx spec/loom/parity/loom-diff.ts <fmt> <dir> [--ts-parity] [--allow-ts-errors]
+// Run via host tsx against this checkout: tsx parity/loom-diff.ts <fmt> <dir> [--ts-parity] [--allow-ts-errors]
 // Set LOOM_BIN to exercise an immutable release binary directly. Without it,
-// the development fallback is `lake exe loom` from spec/loom.
+// the development fallback is `lake exe loom` from the Loom repository root.
 //   <fmt> in: pi claude codex cursor-agent hermes gais/google-ai-studio
 //   <dir>    : a directory of source-format files (claude/codex/... = *.jsonl,
 //              google-ai-studio = *.json)
@@ -230,8 +230,8 @@ function normalize(header: any, entries: any[], tsParity: boolean): string {
 }
 
 // ---------------------------------------------------------------------------
-// Layout: this file is <utils>/spec/loom/parity/loom-diff.ts.
-//   loomRoot  = <utils>/spec/loom  — lakefile.lean lives here; `lake exe loom`
+// Layout: this file is <loom-repo>/parity/loom-diff.ts.
+//   loomRoot  = repository root — lakefile.lean lives here; `lake exe loom`
 //               MUST run from here (running from utils/ fails: no lakefile).
 //   utilsRoot = <utils>            — convert-to-pi (tsx) runs from here.
 // ---------------------------------------------------------------------------
@@ -454,7 +454,7 @@ function main(): void {
   const allowTsErrors = args.includes("--allow-ts-errors");
   const [fmt, dir] = args.filter((a) => !a.startsWith("--"));
   if (!fmt || !dir) {
-    console.error("usage: tsx spec/loom/parity/loom-diff.ts <fmt> <dir> [--ts-parity] [--allow-ts-errors]");
+    console.error("usage: tsx parity/loom-diff.ts <fmt> <dir> [--ts-parity] [--allow-ts-errors]");
     console.error("  <fmt> in: pi claude codex cursor-agent hermes gais/google-ai-studio");
     console.error("  --ts-parity: ignore known Loom-richer blocks and exact inert event carriers (apples-to-apples cutover gate)");
     console.error("  --allow-ts-errors: accept Lean-success/TS-error files, used for Codex empty-rollout burn-in");

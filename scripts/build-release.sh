@@ -43,7 +43,7 @@ SIGKILL cannot run release rollback. Once a transaction marker exists, it and
 any owned stage/rollback/hold paths are explicit quarantine state and a later
 run fails closed.
 
-The build input is an exact verified archive of the committed spec/loom tree at
+The build input is an exact verified archive of the committed Loom source tree at
 HEAD in a fresh private directory. This binds source bytes, not reproducible
 build provenance; toolchain and host inputs remain separate concerns.
 
@@ -202,25 +202,34 @@ const repo = path.resolve(repoInput);
 const loom = path.resolve(loomInput);
 
 try {
-  if (!gitPath || path.posix.isAbsolute(gitPath) || path.posix.normalize(gitPath) !== gitPath ||
-      gitPath === ".." || gitPath.startsWith("../") ||
-      (gitPath !== "spec/loom" && !gitPath.endsWith("/spec/loom"))) {
+  // Empty git prefix means Loom is the repository root (sourcePath ".").
+  // Nested checkouts may still live at .../spec/loom (e.g. utils host trees).
+  const normalized = gitPath === "" ? "." : gitPath;
+  if (path.posix.isAbsolute(normalized) || path.posix.normalize(normalized) !== normalized ||
+      normalized === ".." || normalized.startsWith("../") ||
+      (normalized !== "." && normalized !== "spec/loom" && !normalized.endsWith("/spec/loom"))) {
     throw new Error(`unexpected Git path for Loom sources: ${JSON.stringify(gitPath)}`);
   }
   const repoStat = fs.lstatSync(repo);
   if (repoStat.isSymbolicLink() || !repoStat.isDirectory() || fs.realpathSync(repo) !== repo) {
     throw new Error(`repository root is not a physical directory: ${repo}`);
   }
-  let current = repo;
-  for (const component of gitPath.split("/")) {
-    current = path.join(current, component);
-    const stat = fs.lstatSync(current);
-    if (stat.isSymbolicLink() || !stat.isDirectory()) {
-      throw new Error(`Git source path contains a symlink or non-directory component: ${current}`);
+  if (normalized === ".") {
+    if (fs.realpathSync(repo) !== loom) {
+      throw new Error(`Git source path does not identify this Loom root: ${repo} != ${loom}`);
     }
-  }
-  if (fs.realpathSync(current) !== loom) {
-    throw new Error(`Git source path does not identify this Loom root: ${current} != ${loom}`);
+  } else {
+    let current = repo;
+    for (const component of normalized.split("/")) {
+      current = path.join(current, component);
+      const stat = fs.lstatSync(current);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        throw new Error(`Git source path contains a symlink or non-directory component: ${current}`);
+      }
+    }
+    if (fs.realpathSync(current) !== loom) {
+      throw new Error(`Git source path does not identify this Loom root: ${current} != ${loom}`);
+    }
   }
 } catch (error) {
   console.error(`error: repository identity/path validation failed: ${error.message}`);
@@ -978,7 +987,7 @@ const validateIdentity = (raw, label, requiredRevision) => {
   if (value.sourceRepository !== "https://github.com/theoriclabs/agent-convert-lean") {
     mismatches.push(`sourceRepository=${JSON.stringify(value.sourceRepository)}`);
   }
-  if (value.sourcePath !== "spec/loom") mismatches.push(`sourcePath=${JSON.stringify(value.sourcePath)}`);
+  if (value.sourcePath !== ".") mismatches.push(`sourcePath=${JSON.stringify(value.sourcePath)}`);
   if (!Array.isArray(value.wireSchemas) || !value.wireSchemas.includes("loom.transcript.v0") ||
       value.wireSchemas.some((schema) => typeof schema !== "string")) {
     mismatches.push(`wireSchemas=${JSON.stringify(value.wireSchemas)}`);
@@ -1875,9 +1884,9 @@ make_fake_binary() {
   local continue_file="${7:-}"
   local identity_json
   if [[ "$duplicate" == "yes" ]]; then
-    identity_json="{\"engine\":\"not-lean\",\"engine\":\"$engine\",\"engineVersion\":\"0.2.0-preview.0\",\"protocolVersion\":\"loom.cli.v1\",\"coreRevision\":\"$revision\",\"sourceRepository\":\"https://github.com/theoriclabs/agent-convert-lean\",\"sourcePath\":\"spec/loom\",\"targetTriple\":\"self-test-target\",\"wireSchemas\":[\"loom.transcript.v0\"]}"
+    identity_json="{\"engine\":\"not-lean\",\"engine\":\"$engine\",\"engineVersion\":\"0.2.0-preview.0\",\"protocolVersion\":\"loom.cli.v1\",\"coreRevision\":\"$revision\",\"sourceRepository\":\"https://github.com/theoriclabs/agent-convert-lean\",\"sourcePath\":\".\",\"targetTriple\":\"self-test-target\",\"wireSchemas\":[\"loom.transcript.v0\"]}"
   else
-    identity_json="{\"engine\":\"$engine\",\"engineVersion\":\"0.2.0-preview.0\",\"protocolVersion\":\"loom.cli.v1\",\"coreRevision\":\"$revision\",\"sourceRepository\":\"https://github.com/theoriclabs/agent-convert-lean\",\"sourcePath\":\"spec/loom\",\"targetTriple\":\"self-test-target\",\"wireSchemas\":[\"loom.transcript.v0\"]}"
+    identity_json="{\"engine\":\"$engine\",\"engineVersion\":\"0.2.0-preview.0\",\"protocolVersion\":\"loom.cli.v1\",\"coreRevision\":\"$revision\",\"sourceRepository\":\"https://github.com/theoriclabs/agent-convert-lean\",\"sourcePath\":\".\",\"targetTriple\":\"self-test-target\",\"wireSchemas\":[\"loom.transcript.v0\"]}"
   fi
   mkdir -p -- "$(dirname -- "$output")"
   {
@@ -2549,10 +2558,10 @@ source_tree="$("$GIT_BIN" -C "$repo_root" rev-parse --verify "$revision:$git_pat
 
 tracked_status=""
 if ! tracked_status="$("$GIT_BIN" -C "$repo_root" status --porcelain=v1 --untracked-files=no -- "$git_path")"; then
-  die "could not inspect tracked spec/loom state"
+  die "could not inspect tracked Loom source state"
 fi
 if [[ -n "$tracked_status" ]]; then
-  printf 'error: tracked spec/loom sources are dirty; commit or restore them before release building:\n%s\n' \
+  printf 'error: tracked Loom sources are dirty; commit or restore them before release building:\n%s\n' \
     "$tracked_status" >&2
   exit 2
 fi
@@ -2589,10 +2598,10 @@ post_build_head="$("$GIT_BIN" -C "$repo_root" rev-parse --verify 'HEAD^{commit}'
 [[ "$post_build_head" == "$revision" ]] || \
   die "checkout HEAD changed during the private build ($revision -> $post_build_head); rerun from a stable checkout"
 if ! tracked_status="$("$GIT_BIN" -C "$repo_root" status --porcelain=v1 --untracked-files=no -- "$git_path")"; then
-  die "could not recheck tracked spec/loom state after the private build"
+  die "could not recheck tracked Loom source state after the private build"
 fi
 if [[ -n "$tracked_status" ]]; then
-  printf 'error: tracked spec/loom sources changed during the private build; refusing publication:\n%s\n' \
+  printf 'error: tracked Loom sources changed during the private build; refusing publication:\n%s\n' \
     "$tracked_status" >&2
   exit 2
 fi

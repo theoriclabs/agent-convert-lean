@@ -65,7 +65,7 @@ protocol is in [`HUMAN_VALIDATION.md`](./HUMAN_VALIDATION.md).
   package commit, tarball digest, platform, command, input digest, and output.
 - Treat prior fixture, corpus, or harness results only as historical
   prerequisites and test-design inputs. They do not satisfy a current box.
-- Use only `spec/loom/.lake/release/loom` for candidate-bound external reruns.
+- Use only `.lake/release/loom` for candidate-bound external reruns.
   `.lake/build/bin/loom` and `coreRevision: working-tree` are development-only.
 - Do not publish, install into a real store, tag, or push a release until the
   relevant phase explicitly permits it.
@@ -102,8 +102,8 @@ contract for every Codex target.
   approval phase completes. They state that the public npm package requires an
   external immutable Loom core and is not currently ready.
 - [ ] An authorized representative of WOW21, Inc. supplies retained written
-  permission before any private Loom file is copied into the public repository.
-  The grant must name the private `utils/spec/loom` source scope, related
+  permission before any private Loom file is copied into a public repository.
+  The grant must name the Loom source scope in this repository, related
   agent-convert release files, the MIT license, and
   `theoriclabs/agent-convert-lean`. Retain the exact grant and the authority of its
   signer outside the public source tree.
@@ -131,7 +131,7 @@ git diff --name-only
   owner's work; stage only the release-approved source set.
 - [ ] Commit the candidate before building it. Record the full 40-character
   commit and verify the candidate scope is clean.
-- [ ] `spec/loom/lean-toolchain` is exactly `leanprover/lean4:v4.28.0`.
+- [ ] `lean-toolchain` is exactly `leanprover/lean4:v4.28.0`.
 - [ ] Core version is exactly `0.2.0-preview.0`; target constants are Claude
   `2.1.216`, Codex `0.144.1`, and Pi `0.74.0`.
 - [ ] Current external probe tools report the selected versions; Claude,
@@ -142,7 +142,7 @@ claude --version
 codex --version
 pi --version
 cursor-agent --version
-(cd spec/loom && lake env lean --version)
+(lake env lean --version)
 ```
 
 Expected version lines:
@@ -201,13 +201,13 @@ developer-preview approval.
 
 ## 4. Immutable release core
 
-The release builder refuses a dirty `spec/loom` scope, stamps the clean `HEAD`,
+The release builder refuses a dirty Loom source scope, stamps the clean `HEAD`,
 verifies identity, and copies the frozen executable to the only candidate path:
 
 ```sh
-spec/loom/scripts/build-release.sh
-spec/loom/.lake/release/loom version
-shasum -a 256 spec/loom/.lake/release/loom
+scripts/build-release.sh
+.lake/release/loom version
+shasum -a 256 .lake/release/loom
 ```
 
 The version line must have this shape:
@@ -233,11 +233,11 @@ agent-convert core 0.2.0-preview.0 (40-lowercase-hex-commit)
 The development gate above binds the source candidate. Repeat the release-
 critical executable checks against the frozen binary itself.
 
-- [ ] Run `spec/loom/.lake/release/loom self-test-sidecar-publication` and retain
+- [ ] Run `.lake/release/loom self-test-sidecar-publication` and retain
   stdout/stderr/status.
 - [ ] Rerun every conversion in the README with
-  `LOOM=spec/loom/.lake/release/loom` or
-  `LOOM_BIN=spec/loom/.lake/release/loom`; verify complete target metadata and
+  `LOOM=.lake/release/loom` or
+  `LOOM_BIN=.lake/release/loom`; verify complete target metadata and
   output digests.
 - [ ] The selected Pi validation reruns use
   `deepseek` / `deepseek-v4-flash`, a fresh valid UUID, absolute cwd, UTC
@@ -288,8 +288,8 @@ case "$EVIDENCE_ROOT" in
   *) printf '%s\n' 'EVIDENCE_ROOT must be absolute' >&2; exit 1 ;;
 esac
 test -d "$EVIDENCE_ROOT"
-test -x spec/loom/.lake/release/loom
-ACTUAL_CORE_SHA256="$(shasum -a 256 spec/loom/.lake/release/loom | awk '{print $1}')"
+test -x .lake/release/loom
+ACTUAL_CORE_SHA256="$(shasum -a 256 .lake/release/loom | awk '{print $1}')"
 test "$ACTUAL_CORE_SHA256" = "$RELEASE_CORE_SHA256"
 
 E037_ROOT="$(mktemp -d "$EVIDENCE_ROOT/e037.XXXXXX")"
@@ -300,8 +300,8 @@ test ! -e "$E037_SCRATCH"
 test ! -e "$E037_OUTPUT"
 test ! -e "$E037_REPORT"
 
-node spec/loom/scripts/audit-lifecycle-matrix.mjs \
-  --loom spec/loom/.lake/release/loom \
+node scripts/audit-lifecycle-matrix.mjs \
+  --loom .lake/release/loom \
   --scratch "$E037_SCRATCH" \
   --output "$E037_OUTPUT" \
   --report "$E037_REPORT" \
@@ -387,8 +387,8 @@ do not quote the historical totals:
 : "${CLAUDE_CORPUS:?set CLAUDE_CORPUS to the absolute Claude corpus directory}"
 : "${CODEX_CORPUS:?set CODEX_CORPUS to the absolute Codex corpus directory}"
 : "${CURSOR_CORPUS:?set CURSOR_CORPUS to the absolute Cursor Agent corpus directory}"
-node spec/loom/scripts/audit-corpora.mjs \
-  --loom spec/loom/.lake/release/loom \
+node scripts/audit-corpora.mjs \
+  --loom .lake/release/loom \
   --out "$EVIDENCE_ROOT/corpus-audit" \
   "claude=$CLAUDE_CORPUS" \
   "codex=$CODEX_CORPUS" \
@@ -411,7 +411,7 @@ passes against the exact release-candidate tarball.
 
 - [ ] The exact MIT authorization in section 1 is retained **before** the first
   private-to-public copy.
-- [ ] Create public core commit **C** containing the authorized `spec/loom`
+- [ ] Create public core commit **C** containing the authorized Loom sources
   source and release documentation. Record its full 40-character commit.
 - [ ] Build and verify the release core at C before package-only work proceeds.
 - [ ] Create later public package commit **P** containing the manifest, thin
@@ -421,7 +421,7 @@ passes against the exact release-candidate tarball.
 - [ ] Prove there is no core specification drift between those commits:
 
 ```sh
-git diff --exit-code C..P -- spec/loom
+git diff --exit-code C..P -- .
 ```
 
 - [ ] Build the package candidate at P against the release core stamped with C;
@@ -435,7 +435,7 @@ git diff --exit-code C..P -- spec/loom
   `engineVersion="0.2.0-preview.0"`, `protocolVersion="loom.cli.v1"`, the full
   lowercase 40-hex `coreRevision`,
   `sourceRepository="https://github.com/theoriclabs/agent-convert-lean"`,
-  `sourcePath="spec/loom"`, and the exact wire-schema list.
+  `sourcePath="."`, and the exact wire-schema list.
 - [ ] `artifacts` is keyed by every supported `targetTriple`; each entry fixes
   one lowercase SHA-256 and exact byte size for the accepted external
   `.lake/release/loom` file. Unsupported triples fail closed.
@@ -533,7 +533,7 @@ without abbreviating or replacing its commands.
 - [ ] The Pi expectation is clean, tracked, current for the selected Pi
   `0.74.0` oracle probe (also the exporter contract pin), and fixes the complete
   oracle closure and ordered expected context.
-- [ ] Preparation uses `spec/loom/.lake/release/loom`, the exact packed npm
+- [ ] Preparation uses `.lake/release/loom`, the exact packed npm
   tarball, a fresh ledger-issued UUIDv4 run id and 32-byte nonce, and a new
   evidence directory outside the repository.
 - [ ] Preparation verifies the build contract Lean `4.28.0`; the selected
@@ -596,7 +596,7 @@ represented as an approved developer preview.
   package version, lockfile, manifest, generated distribution, docs, and
   release notes are committed before packing.
 - [ ] Public commit C contains the authorized core, public commit P contains the
-  package, `git diff --exit-code C..P -- spec/loom` is clean, and P's manifest
+  package, `git diff --exit-code C..P -- .` is clean, and P's manifest
   pins C rather than P.
 - [ ] Re-run clean-tree checks in each repository. Review signed commit
   identities and remote destinations before network operations.

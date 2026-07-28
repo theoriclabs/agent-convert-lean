@@ -394,7 +394,7 @@ const developmentIdentity = {
   engine: "lean",
   engineVersion: "0.2.0-preview.0",
   protocolVersion: "loom.cli.v1",
-  sourcePath: "spec/loom",
+  sourcePath: ".",
   sourceRepository: "https://github.com/theoriclabs/agent-convert-lean",
   targetTriple: "arm64-apple-darwin",
   wireSchemas: ["loom.transcript.v0"],

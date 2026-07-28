@@ -554,8 +554,8 @@ From `utils/`:
 ```sh
 npm run test:loom
 npm run prepublishOnly
-spec/loom/scripts/prepare-human-validation.sh --self-test
-spec/loom/scripts/seal-human-validation.sh --self-test
+scripts/prepare-human-validation.sh --self-test
+scripts/seal-human-validation.sh --self-test
 ```
 
 The focused gate builds the executable and `LoomRequirements`, runs Lean proof

@@ -133,7 +133,7 @@ There are currently two implementations, and they are not interchangeable:
 
 | Surface | Semantic engine | Current role |
 |---|---|---|
-| `spec/loom/.lake/build/bin/loom` | Lean | Intended canonical parser, IR, loss policy, and serializer |
+| `.lake/build/bin/loom` | Lean | Intended canonical parser, IR, loss policy, and serializer |
 | `utils/src/convertToPi.ts` | Lean by subprocess | Thin import-to-pi launcher; `PI_CONVERT_ENGINE=ts` is explicit legacy rollback |
 | sibling `agent-convert/dist/agentConvert.js` | Lean by subprocess | Thin cross-format launcher and target-store installer; `--engine ts-legacy` is explicit rollback |
 | sibling `agent-convert/dist/agentConvertLegacy.js` | TypeScript | Frozen compatibility engine, reachable only by explicit legacy selection |

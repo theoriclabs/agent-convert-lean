@@ -55,7 +55,7 @@ usage: prepare-human-validation.sh --run-id UUID --nonce 64_HEX \
 
 The run id and nonce must be issued by the independently controlled release
 ledger and must never have been used before. The Pi expectation must be a clean,
-Git-tracked file below spec/loom/testdata/release and must pin the complete
+Git-tracked file below testdata/release and must pin the complete
 ordered Pi 0.74.0 context plus the exact oracle closure digests.
 
 When --package is supplied, preparation rejects it unless it is an MIT
@@ -538,13 +538,20 @@ case "$LOOM_ROOT/" in
   "$REPO_ROOT/"*) GIT_SOURCE_PATH="${LOOM_ROOT#"$REPO_ROOT/"}" ;;
   *) echo "error: Loom root is outside its Git repository" >&2; exit 2 ;;
 esac
-if [[ "$GIT_SOURCE_PATH" != "spec/loom" ]]; then
-  echo "error: unexpected Loom source path: $GIT_SOURCE_PATH" >&2
-  exit 2
+# Repo-root checkouts report an empty prefix; stamp/compare as ".".
+if [[ -z "$GIT_SOURCE_PATH" ]]; then
+  GIT_SOURCE_PATH="."
 fi
+case "$GIT_SOURCE_PATH" in
+  .|spec/loom|*/spec/loom) ;;
+  *)
+    echo "error: unexpected Loom source path: $GIT_SOURCE_PATH" >&2
+    exit 2
+    ;;
+esac
 case "$PI_EXPECTATION" in
   "$LOOM_ROOT/testdata/release/"*) ;;
-  *) echo "error: Pi expectation must be below spec/loom/testdata/release" >&2; exit 2 ;;
+  *) echo "error: Pi expectation must be below testdata/release" >&2; exit 2 ;;
 esac
 PI_EXPECTATION_REL="${PI_EXPECTATION#"$REPO_ROOT/"}"
 if ! "$GIT_BIN" -C "$REPO_ROOT" ls-files --error-unmatch "$PI_EXPECTATION_REL" >/dev/null 2>&1; then
@@ -761,7 +768,7 @@ const candidate = JSON.parse(raw);
 if (candidate.engine !== "lean" || candidate.engineVersion !== "0.2.0-preview.0" ||
     candidate.protocolVersion !== "loom.cli.v1" || candidate.coreRevision !== expectedRevision ||
     candidate.sourceRepository !== "https://github.com/theoriclabs/agent-convert-lean" ||
-    candidate.sourcePath !== "spec/loom" || typeof candidate.targetTriple !== "string" ||
+    candidate.sourcePath !== "." || typeof candidate.targetTriple !== "string" ||
     !candidate.targetTriple || !Array.isArray(candidate.wireSchemas) ||
     !candidate.wireSchemas.includes("loom.transcript.v0")) {
   throw new Error(`candidate self-reported identity is ineligible: ${JSON.stringify(candidate)}`);

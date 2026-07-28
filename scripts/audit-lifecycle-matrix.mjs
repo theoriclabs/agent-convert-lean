@@ -3137,7 +3137,7 @@ export function validateCandidateIdentity(identity, requireImmutable = false) {
   invariant(identity.engine === "lean" && nonemptyString(identity.engineVersion) &&
     nonemptyString(identity.coreRevision) && identity.protocolVersion === "loom.cli.v1" &&
     identity.sourceRepository === "https://github.com/theoriclabs/agent-convert-lean" &&
-    identity.sourcePath === "spec/loom" && nonemptyString(identity.targetTriple) &&
+    identity.sourcePath === "." && nonemptyString(identity.targetTriple) &&
     Array.isArray(identity.wireSchemas) && identity.wireSchemas.length > 0 &&
     identity.wireSchemas.every(nonemptyString) &&
     new Set(identity.wireSchemas).size === identity.wireSchemas.length &&

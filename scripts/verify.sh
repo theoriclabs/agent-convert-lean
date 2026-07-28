@@ -2,13 +2,18 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-UTILS_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-LOOM_ROOT="$UTILS_ROOT/spec/loom"
-TSX="$UTILS_ROOT/node_modules/.bin/tsx"
+LOOM_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Optional TypeScript host checkout (utils or agent-convert). Required for host gates.
+UTILS_ROOT="${LOOM_UTILS_ROOT:-}"
+if [[ -z "$UTILS_ROOT" && -f "$LOOM_ROOT/../../package.json" && -d "$LOOM_ROOT/../../src" ]]; then
+  # Nested host layout: <host>/spec/loom → <host>
+  UTILS_ROOT="$(cd "$LOOM_ROOT/../.." && pwd)"
+fi
+TSX="${UTILS_ROOT:+$UTILS_ROOT/node_modules/.bin/tsx}"
 LOOM_BIN="$LOOM_ROOT/.lake/build/bin/loom"
 
-if [[ ! -x "$TSX" ]]; then
-  echo "error: tsx not found at $TSX; run npm install in utils/" >&2
+if [[ -z "$UTILS_ROOT" || ! -x "${TSX:-}" ]]; then
+  echo "error: TypeScript host not found; set LOOM_UTILS_ROOT to a utils/agent-convert checkout with npm install" >&2
   exit 2
 fi
 if ! command -v sqlite3 >/dev/null 2>&1; then
@@ -30,7 +35,7 @@ const revisionOk = version.coreRevision === "working-tree" ||
 if (version.engine !== "lean" || version.engineVersion !== "0.2.0-preview.0" ||
     version.protocolVersion !== "loom.cli.v1" || !revisionOk ||
     version.sourceRepository !== "https://github.com/theoriclabs/agent-convert-lean" ||
-    version.sourcePath !== "spec/loom" || !version.targetTriple ||
+    version.sourcePath !== "." || !version.targetTriple ||
     !Array.isArray(version.wireSchemas) ||
     !version.wireSchemas.includes("loom.transcript.v0")) {
   throw new Error(`unexpected core identity: ${JSON.stringify(version)}`);
@@ -47,8 +52,8 @@ echo "== TypeScript build =="
 npm run build
 
 echo "== focused node regressions =="
-node spec/loom/scripts/audit-corpora.self-test.mjs
-node spec/loom/scripts/audit-codex-claude.self-test.mjs
+node "$LOOM_ROOT/scripts/audit-corpora.self-test.mjs"
+node "$LOOM_ROOT/scripts/audit-codex-claude.self-test.mjs"
 SUBAGENT_SKIP_RUNTIME_FINGERPRINT=1 node --test \
   test/codexAdapter.d13-dedup.test.mjs \
   test/detector-agreement.test.mjs \

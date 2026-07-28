@@ -8,7 +8,7 @@
 // tool calls by name only, no ids, no signatures — so the gate is comparable
 // across formats regardless of each side's id synthesis.
 //
-// Run from utils/:  node_modules/.bin/tsx spec/loom/parity/capture-parity.ts
+// Run via host tsx against this checkout: tsx parity/capture-parity.ts
 import * as sc from "../../../src/pi/sessionCore.ts";
 const { parseSession, getBlocks } = sc as {
   parseSession: (file: string) => { header: any; entries: any[] };

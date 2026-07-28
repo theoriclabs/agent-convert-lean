@@ -1569,7 +1569,7 @@ def coreVersion : String := "0.2.0-preview.0"
 def coreProtocol : String := "loom.cli.v1"
 def coreRevision : String := loomCoreRevision%
 def coreSourceRepository : String := "https://github.com/theoriclabs/agent-convert-lean"
-def coreSourcePath : String := "spec/loom"
+def coreSourcePath : String := "."
 def coreWireSchema : String := "loom.transcript.v0"
 
 private def transcriptMessageCount (t : Transcript) : Nat :=

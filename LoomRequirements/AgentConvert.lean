@@ -614,7 +614,7 @@ def evidence : List Evidence := [
   { id := "E-006", kind := .fixtureTest,
     roles := [.implementationRefinement, .releaseProcess],
     claim := "The focused release script exercises CLI imports, exports, wire compatibility, sidecars, fallback, and refusal behavior.",
-    locator := "spec/loom/scripts/verify.sh via npm run test:loom" },
+    locator := "scripts/verify.sh via npm run test:loom" },
   { id := "E-007", kind := .corpusValidation,
     roles := [.implementationRefinement, .domainValidation],
     claim := "2026-07-08 differential: Codex 429/429 convertible files, Claude 237/237, Cursor Agent 427/427 agree under the declared projections.",
@@ -622,7 +622,7 @@ def evidence : List Evidence := [
   { id := "E-008", kind := .buildValidation,
     roles := [.releaseProcess],
     claim := "Pinned Lean build and standalone binary execution pass in the release gate.",
-    locator := "spec/loom/scripts/verify.sh" },
+    locator := "scripts/verify.sh" },
   { id := "E-009", kind := .decidePin,
     roles := [.implementationRefinement],
     claim := "Loom wire rejects incompatible required structure and preserves additive unknowns.",
@@ -644,7 +644,7 @@ def evidence : List Evidence := [
   { id := "E-013", kind := .fixtureTest,
     roles := [.implementationRefinement],
     claim := "Two identical CLI conversions produce byte-identical stdout, stderr, and status.",
-    locator := "spec/loom/scripts/verify.sh deterministic CLI output gate" },
+    locator := "scripts/verify.sh deterministic CLI output gate" },
   { id := "E-014", kind := .decidePin,
     roles := [.implementationRefinement],
     claim := "The continuation projection distinguishes tool names/arguments; native Codex and pi witnesses preserve tool lifecycle/result state, while Claude foreign tools use a checked readable non-native carrier.",
@@ -652,7 +652,7 @@ def evidence : List Evidence := [
   { id := "E-015", kind := .fixtureTest,
     roles := [.implementationRefinement],
     claim := "The review renderer exposes roles, tool calls/results, links, and structural status without protocol tags on the seeded fixture.",
-    locator := "LoomRequirements.Proofs.readableTranscriptWitness and spec/loom/scripts/verify.sh" },
+    locator := "LoomRequirements.Proofs.readableTranscriptWitness and scripts/verify.sh" },
   { id := "E-016", kind := .review,
     roles := [.releaseProcess],
     claim := "The public continuation claim is restricted to version-pinned targets with successful open/append/re-read evidence; failed targets remain file-only and refuse installation.",
@@ -668,7 +668,7 @@ def evidence : List Evidence := [
   { id := "E-019", kind := .fixtureTest,
     roles := [.implementationRefinement],
     claim := "The default TypeScript launcher has no format-adapter or transcript-IO imports, direct Lean and launcher artifacts are byte-identical, and missing/legacy-only cases refuse without changing engines.",
-    locator := "test/loom-thin-launcher.test.mjs and spec/loom/scripts/verify.sh" },
+    locator := "test/loom-thin-launcher.test.mjs and scripts/verify.sh" },
   { id := "E-020", kind := .harnessValidation,
     roles := [.domainValidation, .gapRecord],
     claim := "A 2026-07-09 real Codex-to-Claude conversion exposed Codex developer permissions, skills, environment context, and other control-plane records as Claude USER prompts; tool reconciliation was not demonstrated to the operator.",
@@ -742,7 +742,7 @@ def evidence : List Evidence := [
   { id := "E-037", kind := .differentialTest,
     roles := [.implementationRefinement, .releaseProcess],
     claim := "The candidate-bound independent raw-source/raw-target lifecycle matrix executes one byte-snapshotted Loom executable against the exact closed 8-source by 5-target manifest. Each of its 40 cells must match the manifest outcome: independently parsed successful output is field-reconciled, or refusal has the exact policy-specific status and diagnostic while the pre-execution and post-exit observations match for the prior artifact's recorded path and opened-file device/inode values, mode, size, digest, and bytes. This finite observation is neither continuous monitoring nor an atomicity proof, does not establish build/source-revision provenance, and does not guarantee inode identity between observations or against inode reuse. It is not a universal proof or real-harness execution.",
-    locator := "spec/loom/scripts/audit-lifecycle-matrix.mjs, spec/loom/testdata/lifecycle/manifest.v1.json, and the retained candidate lifecycle-matrix report" }
+    locator := "scripts/audit-lifecycle-matrix.mjs, testdata/lifecycle/manifest.v1.json, and the retained candidate lifecycle-matrix report" }
 ]
 
 def fitObligations : List FitObligation := [
