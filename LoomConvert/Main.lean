@@ -1897,6 +1897,8 @@ def detectFormat (text : String) : Except String String := do
     | some record => pure record
     | none => .error "empty input"
   if jsonString? first "schema" == some "loom.transcript.v0" then .ok "loom"
+  else if (jsonValue? first "composer").isSome &&
+      (jsonValue? first "bubbles").isSome then .ok "cursor-ide"
   else if (jsonValue? first "chunkedPrompt").isSome then .ok "gais"
   else if (jsonString? first "session_id").isSome &&
       (jsonValue? first "messages").isSome then .ok "hermes"
@@ -1931,6 +1933,10 @@ example : detectsAs "claude"
 example : detectsAs "cursor-agent"
     "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}\n" =
     true := by native_decide
+
+example : detectsAs "cursor-ide"
+    "{\"composer\":{\"composerId\":\"c\"},\"bubbles\":[]}" = true := by
+  native_decide
 
 example : detectionRejects
     ("{\"type\":\"user\",\"uuid\":\"u\",\"sessionId\":\"S\",\"message\":{}}\n" ++
@@ -2416,29 +2422,152 @@ def runInstallClaude (fromFmt inp : String) (opts : CliOptions) : IO UInt32 := d
   IO.println s!"\nresume with:\n  cd {cwd} && claude --resume {sessionId}"
   pure 0
 
+/-! ### One-command conversion
+
+`runConvert` is the explicit protocol surface used by compatibility hosts. The
+public CLI is deliberately smaller: give `loom convert` a session id or path
+and a target. This wrapper resolves and detects the source, derives only target
+values that have an unambiguous continuation default, and delegates to the same
+checked pipeline. Explicit flags always win. -/
+
+private def smartTargetOptions (toFmt : String) (source : Transcript)
+    (opts : CliOptions) : CliOptions :=
+  let continuation : CliOptions := { opts with
+    cwd := opts.cwd.orElse (fun _ => source.env.cwd)
+    sessionId := opts.sessionId.orElse (fun _ => source.env.sessionId)
+    targetTimestamp := opts.targetTimestamp.orElse (fun _ => latestRecordedIso? source) }
+  match toFmt with
+  | "claude" => { continuation with
+      harnessVersion := continuation.harnessVersion.orElse
+        (fun _ => some claudeTargetValidationBuild) }
+  | "pi" => { continuation with
+      provider := continuation.provider.orElse (fun _ =>
+        if source.origin.format == .pi then
+          source.env.provider.orElse (fun _ => some "deepseek")
+        else some "deepseek")
+      model := continuation.model.orElse (fun _ =>
+        if source.origin.format == .pi then
+          source.env.model.orElse (fun _ => some "deepseek-v4-flash")
+        else some "deepseek-v4-flash")
+      harnessVersion := continuation.harnessVersion.orElse (fun _ => some piTargetVersion)
+      piAssistantHistory := continuation.piAssistantHistory.orElse (fun _ => some "context") }
+  | "codex" => { continuation with
+      provider := continuation.provider.orElse (fun _ =>
+        if source.origin.format == .codexCli then
+          source.env.provider.orElse (fun _ => some "openai")
+        else some "openai")
+      model := continuation.model.orElse (fun _ =>
+        if source.origin.format == .codexCli then
+          source.env.model.orElse (fun _ => some "gpt-5.5")
+        else some "gpt-5.5")
+      harnessVersion := continuation.harnessVersion.orElse
+        (fun _ => some codexCliTargetVersion)
+      codexApprovalPolicy := continuation.codexApprovalPolicy.orElse
+        (fun _ => some "on-request")
+      codexNetworkAccess := continuation.codexNetworkAccess.orElse (fun _ => some false)
+      codexExcludeTmpdirEnvVar := continuation.codexExcludeTmpdirEnvVar.orElse
+        (fun _ => some true)
+      codexExcludeSlashTmp := continuation.codexExcludeSlashTmp.orElse (fun _ => some true)
+      codexSummary := continuation.codexSummary.orElse (fun _ => some "auto") }
+  | _ => opts
+
+private def smartTargetDefaultsAreComplete : Bool :=
+  let source : Transcript := {
+    threads := #[{ kind := .main }]
+    entries := #[]
+    env := {
+      cwd := some "/source/project"
+      provider := some "source-provider"
+      model := some "source-model"
+      sessionId := some "41000000-0000-4000-8000-000000000000" }
+    origin := { format := .claudeCode, sourceRef := "smart-defaults" }
+  }
+  let claude := smartTargetOptions "claude" source {}
+  let pi := smartTargetOptions "pi" source {}
+  let codex := smartTargetOptions "codex" source {}
+  let overridden := smartTargetOptions "codex" source {
+    provider := some "chosen-provider", model := some "chosen-model" }
+  claude.cwd == source.env.cwd &&
+    claude.sessionId == source.env.sessionId &&
+    claude.harnessVersion == some claudeTargetValidationBuild &&
+    pi.provider == some "deepseek" &&
+    pi.model == some "deepseek-v4-flash" &&
+    pi.harnessVersion == some piTargetVersion &&
+    pi.piAssistantHistory == some "context" &&
+    codex.provider == some "openai" &&
+    codex.model == some "gpt-5.5" &&
+    codex.harnessVersion == some codexCliTargetVersion &&
+    codex.codexApprovalPolicy == some "on-request" &&
+    codex.codexNetworkAccess == some false &&
+    codex.codexExcludeTmpdirEnvVar == some true &&
+    codex.codexExcludeSlashTmp == some true &&
+    codex.codexSummary == some "auto" &&
+    overridden.provider == some "chosen-provider" &&
+    overridden.model == some "chosen-model"
+
+example : smartTargetDefaultsAreComplete = true := by native_decide
+
+private def smartTarget (target : String) : Bool :=
+  ["loom", "pi", "claude", "codex", "cursor-agent"].contains target
+
+private def explicitSourceName (source : String) : Bool :=
+  ["loom", "pi", "claude", "codex", "cursor-agent", "hermes", "gais",
+    "google-ai-studio", "cursor-ide"].contains source
+
+/-- `loom convert <session-id|input> <target> [output]`.
+
+With no output, Claude is installed into its native project store and every
+other target is written to stdout. Supplying an output always requests a plain
+file conversion. The longer explicit-source form remains supported below for
+existing callers. -/
+def runSmartConvert (ref toFmt : String) (outp : Option String)
+    (opts : CliOptions) : IO UInt32 := do
+  unless smartTarget toFmt do
+    IO.eprintln s!"invocation error: unsupported target '{toFmt}'"
+    return 1
+  let destinationStore := if toFmt == "claude" && outp.isNone then "claude" else ""
+  let (fromFmt, inp) ← match ← resolveSessionInput ref destinationStore with
+    | .error error => IO.eprintln s!"invocation error: {error}"; return 1
+    | .ok resolved => pure resolved
+  let resolution := s!"resolved {ref} -> {fromFmt}: {inp}"
+  -- Keep stdout machine-clean when it is the conversion artifact.
+  if outp.isNone && toFmt != "claude" then IO.eprintln resolution
+  else IO.println resolution
+  if toFmt == "claude" && outp.isNone then
+    runInstallClaude fromFmt inp opts
+  else
+    let text ← match ← readInputText inp with
+      | .error error => IO.eprintln s!"import error: {error}"; return 2
+      | .ok value => pure value
+    let source ← match importByFormat fromFmt text with
+      | .error error => IO.eprintln s!"import error: {error}"; return 2
+      | .ok transcript => pure transcript
+    runConvert fromFmt toFmt inp outp (smartTargetOptions toFmt source opts)
+
 def usage : String :=
-  "loom — Lean transcript converter\n\n" ++
-  "  loom convert <from> <to> <input> [output] [--target-cwd <dir>] [--target-provider <name>] [--target-model <name>] [--target-session-id <id>] [--target-timestamp <iso>] [--target-harness-version <version>] [--pi-assistant-history <context|carrier>] [--json] [--ts-parity] [--with-subagents|--no-subagents]\n" ++
-  "  loom inspect <from> <input> [--json] [--with-subagents|--no-subagents]\n" ++
-  "  loom detect <input> [--json]\n" ++
-  "  loom version [--json]\n" ++
-  "  loom self-test-sidecar-publication\n" ++
-  "  loom install-claude <session-id|input> [target overrides]\n" ++
-  "  loom install-claude <from> <input> [target overrides]\n" ++
-  "  loom cursor-ide <state.vscdb> <composerId> <to> [output] [target options]\n\n" ++
-  "  import formats: loom pi claude codex cursor-agent hermes gais cursor-ide\n" ++
-  "  export formats: loom pi claude codex cursor-agent\n\n" ++
-  "  --ts-parity       codex: apply the codex.ts convert-path renderer (D15) for cutover gating\n" ++
-  "  --with-subagents  force Claude/Cursor Agent sidecar stitch (default on for inspect and loom/claude/cursor-agent targets)\n" ++
-  "  --no-subagents    main-branch only; skip sidecar import/export (default for flat pi/codex targets)\n" ++
-  "  codex target controls (all required): --target-codex-approval-policy <untrusted|on-failure|on-request|never> --target-codex-network-access <true|false> --target-codex-exclude-tmpdir-env-var <true|false> --target-codex-exclude-slash-tmp <true|false> --target-codex-summary <auto|concise|detailed|none>"
+  "loom — convert a coding-agent session to another harness\n\n" ++
+  "  loom convert <session-id|input> <target> [output] [options]\n\n" ++
+  "  target: loom | pi | claude | codex | cursor-agent\n" ++
+  "  no output: install Claude sessions; write other targets to stdout\n" ++
+  "  output:    write a converted file\n\n" ++
+  "Options override detected/default target values:\n" ++
+  "  --target-cwd <dir>  --target-provider <name>  --target-model <name>\n" ++
+  "  --target-session-id <id>  --target-timestamp <iso>\n" ++
+  "  --with-subagents | --no-subagents  --json\n"
 
 def main (args : List String) : IO UInt32 := do
   let (opts, pos) ← match parseCli args with
     | .ok parsed => pure parsed
     | .error e => IO.eprintln s!"invocation error: {e}\n{usage}"; return 1
   match pos with
-  | ["convert", f, t, inp]      => runConvert f t inp none opts
+  | ["convert", ref, target]    => runSmartConvert ref target none opts
+  | ["convert", a, b, c]        =>
+      -- Preserve the established `<from> <to> <input>` form. Otherwise the
+      -- third positional is the output of the one-command form.
+      if explicitSourceName a && smartTarget b then
+        runConvert a b c none opts
+      else
+        runSmartConvert a b (some c) opts
   | ["convert", f, t, inp, o]   => runConvert f t inp (some o) opts
   | ["inspect", f, inp]         =>
       runInspect f inp (resolveWithSubagents none opts.withSubagents) opts.json
