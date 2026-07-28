@@ -217,7 +217,7 @@
     {"name":"codex__to__pi","source":"codex","target":"pi","targetSessionId":"42000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
     {"name":"codex__to__claude","source":"codex","target":"claude","targetSessionId":"43000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
     {"name":"codex__to__codex","source":"codex","target":"codex","targetSessionId":"44000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
-    {"name":"codex__to__cursor-agent","source":"codex","target":"cursor-agent","targetSessionId":null,"expected":{"kind":"success","disposition":"allow-native-to-historical"}},
+    {"name":"codex__to__cursor-agent","source":"codex","target":"cursor-agent","targetSessionId":null,"expected":{"kind":"success","disposition":"allow-call-projection"}},
 
     {"name":"cursor-agent__to__loom","source":"cursor-agent","target":"loom","targetSessionId":null,"expected":{"kind":"success","disposition":"exact"}},
     {"name":"cursor-agent__to__pi","source":"cursor-agent","target":"pi","targetSessionId":"52000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
@@ -229,7 +229,7 @@
     {"name":"hermes__to__pi","source":"hermes","target":"pi","targetSessionId":"62000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
     {"name":"hermes__to__claude","source":"hermes","target":"claude","targetSessionId":"63000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
     {"name":"hermes__to__codex","source":"hermes","target":"codex","targetSessionId":"64000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
-    {"name":"hermes__to__cursor-agent","source":"hermes","target":"cursor-agent","targetSessionId":null,"expected":{"kind":"refusal","status":3,"policy":"destructiveLoss","obligationRepr":"[Loom.Ops.Obligation.dropToolResults, Loom.Ops.Obligation.dropSourceIdentity, Loom.Ops.Obligation.dropEnvironment [\"model\", \"sessionId\"]]"}},
+    {"name":"hermes__to__cursor-agent","source":"hermes","target":"cursor-agent","targetSessionId":null,"expected":{"kind":"refusal","status":3,"policy":"cursorNativePayloadPreflight"}},
 
     {"name":"gais__to__loom","source":"gais","target":"loom","targetSessionId":null,"expected":{"kind":"success","disposition":"exact"}},
     {"name":"gais__to__pi","source":"gais","target":"pi","targetSessionId":"72000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
@@ -241,6 +241,6 @@
     {"name":"cursor-ide__to__pi","source":"cursor-ide","target":"pi","targetSessionId":"82000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
     {"name":"cursor-ide__to__claude","source":"cursor-ide","target":"claude","targetSessionId":"83000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
     {"name":"cursor-ide__to__codex","source":"cursor-ide","target":"codex","targetSessionId":"84000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
-    {"name":"cursor-ide__to__cursor-agent","source":"cursor-ide","target":"cursor-agent","targetSessionId":null,"expected":{"kind":"refusal","status":3,"policy":"destructiveLoss","obligationRepr":"[Loom.Ops.Obligation.dropToolResults, Loom.Ops.Obligation.dropSourceIdentity, Loom.Ops.Obligation.dropEnvironment [\"cwd\", \"sessionId\"], Loom.Ops.Obligation.dropRecordedTime]"}}
+    {"name":"cursor-ide__to__cursor-agent","source":"cursor-ide","target":"cursor-agent","targetSessionId":null,"expected":{"kind":"refusal","status":3,"policy":"cursorNativePayloadPreflight"}}
   ]
 }

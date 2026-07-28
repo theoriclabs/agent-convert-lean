@@ -34,6 +34,7 @@
 //              Loom still imports them; Lean errors and divergences still fail.
 
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import {
   existsSync,
   mkdtempSync,
@@ -49,41 +50,42 @@ import { join, relative, resolve } from "node:path";
 // tsx runs this as CJS, so __dirname is defined at runtime.
 declare const __dirname: string;
 
-// Reuse the exact reader + block extractor the TS toolchain uses everywhere.
-// parseSession auto-detects pi/codex/claude/cursor-agent, so it reads BOTH the
-// Lean pi output and the TS pi output (both carry an explicit `type:"session"`
-// header) and — for the cursor-agent/pi fallback — the raw source too.
-import * as sc from "../../../src/pi/sessionCore.ts";
+// ---------------------------------------------------------------------------
+// Layout: this file is <loom-repo>/parity/loom-diff.ts.
+//   loomRoot  = repository root — lakefile.lean lives here; `lake exe loom`
+//               MUST run from here (running from utils/ fails: no lakefile).
+//   utilsRoot = TypeScript host with convert-to-pi — from LOOM_UTILS_ROOT, or
+//               the nested <host>/spec/loom layout used before the flatten.
+// ---------------------------------------------------------------------------
+const LOOM_ROOT = resolve(__dirname, "..");
+
+function resolveUtilsRoot(): string {
+  const fromEnv = process.env.LOOM_UTILS_ROOT;
+  if (fromEnv && fromEnv.length > 0) {
+    const root = resolve(fromEnv);
+    if (!existsSync(join(root, "src", "pi", "sessionCore.ts"))) {
+      throw new Error(
+        `LOOM_UTILS_ROOT=${root} has no src/pi/sessionCore.ts`);
+    }
+    return root;
+  }
+  // Nested host layout: <host>/spec/loom/parity → <host>
+  const nested = resolve(__dirname, "..", "..", "..");
+  if (existsSync(join(nested, "src", "pi", "sessionCore.ts"))) return nested;
+  throw new Error(
+    "TypeScript host not found; set LOOM_UTILS_ROOT to a utils/agent-convert checkout with src/pi/sessionCore.ts");
+}
+
+const UTILS_ROOT = resolveUtilsRoot();
+const require = createRequire(join(__dirname, "loom-diff.ts"));
+const sc = require(join(UTILS_ROOT, "src", "pi", "sessionCore.ts"));
 const { parseSession, getBlocks } = sc as {
   parseSession: (file: string) => { header: any; entries: any[] };
   getBlocks: (content: unknown) => Array<{ type: string; text?: string; thinking?: string; name?: string }>;
 };
 
-// ---------------------------------------------------------------------------
-// normalize — the base projection is inlined from parity/capture-parity.ts:
-// positional + synthesis-independent, entries keyed by index / parent index,
-// tool calls by name only, no ids, no signatures. The `--ts-parity` variant below
-// intentionally narrows only the known Loom-richer block drops so the gate still
-// reports any unexpected new block type.
-// ---------------------------------------------------------------------------
-// `tsParity` mirrors LoomConvert/Parity.lean's `normalizeTsParity`: in that
-// mode the intended Loom-richer block kinds project to `null` and are filtered
-// out. If a message contains only those richer blocks, the whole projected
-// message is dropped and children collapse to the nearest visible ancestor.
-// Keep this list narrow: any other fall-through type is reported as its raw tag
-// so the gate cannot hide a newly introduced block kind.
-const TS_PARITY_DROPPED_BLOCK_TYPES = new Set(["media", "unmodeled", "fallback", "document"]);
-
-function blockTag(
-  b: { type: string; text?: string; thinking?: string; name?: string },
-  tsParity: boolean,
-): string | null {
-  if (b.type === "text") return "text:" + (b.text ?? "");
-  if (b.type === "thinking") return "think:" + (b.thinking ?? "");
-  if (b.type === "toolCall") return "call"; // name dropped: canonicalization is modeling-in-flux (Design.lean)
-  if (tsParity && TS_PARITY_DROPPED_BLOCK_TYPES.has(b.type)) return null;
-  return b.type;
-}
+const TSX_BIN = join(UTILS_ROOT, "node_modules", ".bin", "tsx");
+const CONVERT_SCRIPT = join(UTILS_ROOT, "src", "convertToPi.ts");
 
 type CarrierProjection = { role: "user" | "assistant" | "toolResult" | null; body: string };
 
@@ -172,6 +174,32 @@ function exactCarrierProjection(e: any, tsParity: boolean): CarrierProjection | 
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// normalize — the base projection is inlined from parity/capture-parity.ts:
+// positional + synthesis-independent, entries keyed by index / parent index,
+// tool calls by name only, no ids, no signatures. The `--ts-parity` variant below
+// intentionally narrows only the known Loom-richer block drops so the gate still
+// reports any unexpected new block type.
+// ---------------------------------------------------------------------------
+// `tsParity` mirrors LoomConvert/Parity.lean's `normalizeTsParity`: in that
+// mode the intended Loom-richer block kinds project to `null` and are filtered
+// out. If a message contains only those richer blocks, the whole projected
+// message is dropped and children collapse to the nearest visible ancestor.
+// Keep this list narrow: any other fall-through type is reported as its raw tag
+// so the gate cannot hide a newly introduced block kind.
+const TS_PARITY_DROPPED_BLOCK_TYPES = new Set(["media", "unmodeled", "fallback", "document"]);
+
+function blockTag(
+  b: { type: string; text?: string; thinking?: string; name?: string },
+  tsParity: boolean,
+): string | null {
+  if (b.type === "text") return "text:" + (b.text ?? "");
+  if (b.type === "thinking") return "think:" + (b.thinking ?? "");
+  if (b.type === "toolCall") return "call"; // name dropped: canonicalization is modeling-in-flux (Design.lean)
+  if (tsParity && TS_PARITY_DROPPED_BLOCK_TYPES.has(b.type)) return null;
+  return b.type;
+}
+
 function normalize(header: any, entries: any[], tsParity: boolean): string {
   const byId = new Map<string, any>();
   entries.forEach((e) => {
@@ -229,16 +257,6 @@ function normalize(header: any, entries: any[], tsParity: boolean): string {
   return lines.join("\n");
 }
 
-// ---------------------------------------------------------------------------
-// Layout: this file is <loom-repo>/parity/loom-diff.ts.
-//   loomRoot  = repository root — lakefile.lean lives here; `lake exe loom`
-//               MUST run from here (running from utils/ fails: no lakefile).
-//   utilsRoot = <utils>            — convert-to-pi (tsx) runs from here.
-// ---------------------------------------------------------------------------
-const LOOM_ROOT = resolve(__dirname, "..");
-const UTILS_ROOT = resolve(__dirname, "..", "..", "..");
-const TSX_BIN = join(UTILS_ROOT, "node_modules", ".bin", "tsx");
-const CONVERT_SCRIPT = join(UTILS_ROOT, "src", "convertToPi.ts");
 const DIRECT_LOOM_BIN = process.env.LOOM_BIN
   ? resolve(process.env.LOOM_BIN)
   : null;

@@ -114,6 +114,7 @@ const CODEX_RESULT_HEADER =
   "[Historical tool result from source transcript; not executed by Codex]";
 const CURSOR_RUNTIME_ARCHIVE_ONLY_POLICY = "cursorRuntimeArchiveOnly";
 const CURSOR_RUNTIME_ARCHIVE_ONLY_REASON = "turnEndedControl";
+const CURSOR_NATIVE_PAYLOAD_POLICY = "cursorNativePayloadPreflight";
 const CURSOR_NATIVE_PAYLOAD_PREFLIGHT =
   "Cursor Agent runtime target requires native user/assistant messages containing only text and exact imported tool_use blocks";
 const CANONICAL_TOOL_NAMES = Object.freeze([
@@ -2031,9 +2032,27 @@ function validateClaudeTargetEnvelope(rows, expected, context) {
           nonemptyString(row.message.model)),
       `${context}: row ${index + 1} invalid role/message envelope`);
       for (const block of row.message.content) {
-        invariant(exactKeys(block, ["text", "type"]) && block.type === "text" &&
-          typeof block.text === "string",
-          `${context}: row ${index + 1} invalid content block`);
+        if (block?.type === "text") {
+          invariant(exactKeys(block, ["text", "type"]) && typeof block.text === "string",
+            `${context}: row ${index + 1} invalid content block`);
+        } else if (block?.type === "tool_use") {
+          invariant(row.type === "assistant" &&
+            exactOptionalKeys(block, ["id", "input", "name", "type"]) &&
+            nonemptyString(block.id) && nonemptyString(block.name) &&
+            isObject(block.input),
+          `${context}: row ${index + 1} invalid native Claude tool_use`);
+        } else if (block?.type === "tool_result") {
+          invariant(row.type === "user" &&
+            exactOptionalKeys(block, ["content", "is_error", "tool_use_id", "type"],
+              ["isError"]) &&
+            nonemptyString(block.tool_use_id) &&
+            (typeof block.content === "string" || Array.isArray(block.content)) &&
+            typeof (block.is_error ?? block.isError ?? false) === "boolean",
+          `${context}: row ${index + 1} invalid native Claude tool_result`);
+        } else {
+          throw new AuditError(
+            `${context}: row ${index + 1} invalid content block`);
+        }
       }
       validateClaudeMarker(row._agent_convert, row.message.content, row.type,
         `${context}: row ${index + 1}`);
@@ -2079,8 +2098,8 @@ function validateCodexSourceArchive(value, context) {
 }
 
 function validateCodexTargetEnvelope(rows, expected, context) {
-  invariant(rows.length >= 4 && rows.length % 2 === 0,
-    `${context}: Codex target requires two headers and response/event pairs`);
+  invariant(rows.length >= 3,
+    `${context}: Codex target requires two headers and at least one body record`);
   const launch = expected.launch;
   const header = rows[0];
   invariant(exactKeys(header, ["payload", "timestamp", "type"]) &&
@@ -2121,16 +2140,44 @@ function validateCodexTargetEnvelope(rows, expected, context) {
     turn.payload.sandbox_policy.network_access === launch.networkAccess,
   `${context}: Codex turn_context does not bind the requested launch bundle`);
 
-  for (let index = 2; index < rows.length; index += 2) {
+  // Native Codex tool lifecycle is unpaired response_item rows. Text/carrier
+  // dialogue remains a response_item.message paired with a mirroring event_msg.
+  for (let index = 2; index < rows.length; ) {
     const response = rows[index];
-    const event = rows[index + 1];
     invariant(exactOptionalKeys(response, ["payload", "timestamp", "type"],
       ["_agent_convert_time"]) && response.type === "response_item" &&
-      isObject(response.payload) && response.payload.type === "message" &&
+      isObject(response.payload) && nonemptyString(response.timestamp),
+    `${context}: row ${index + 1} invalid Codex response envelope`);
+    const payloadType = response.payload.type;
+    if (payloadType === "function_call" || payloadType === "function_call_output") {
+      if (payloadType === "function_call") {
+        invariant(exactOptionalKeys(response.payload,
+          ["arguments", "call_id", "name", "type"], ["id"]) &&
+          nonemptyString(response.payload.call_id) &&
+          nonemptyString(response.payload.name) &&
+          typeof response.payload.arguments === "string",
+        `${context}: row ${index + 1} invalid Codex function_call`);
+      } else {
+        invariant(exactOptionalKeys(response.payload,
+          ["call_id", "output", "type"], ["id"]) &&
+          nonemptyString(response.payload.call_id) &&
+          typeof response.payload.output === "string",
+        `${context}: row ${index + 1} invalid Codex function_call_output`);
+      }
+      if (hasOwn(response, "_agent_convert_time")) {
+        validateCodexTimeStamp(response._agent_convert_time,
+          `${context}: row ${index + 1}`);
+        invariant(response.timestamp === launch.timestamp,
+          `${context}: row ${index + 1} does not use the requested fallback timestamp`);
+      }
+      index += 1;
+      continue;
+    }
+    invariant(payloadType === "message" &&
       ["assistant", "user"].includes(response.payload.role) &&
       exactOptionalKeys(response.payload, ["content", "role", "type"],
         ["_agent_convert"]) && Array.isArray(response.payload.content) &&
-      response.payload.content.length === 1 && nonemptyString(response.timestamp),
+      response.payload.content.length === 1,
     `${context}: row ${index + 1} invalid Codex response envelope`);
     const item = response.payload.content[0];
     const expectedItemType = response.payload.role === "assistant" ? "output_text" : "input_text";
@@ -2146,7 +2193,8 @@ function validateCodexTargetEnvelope(rows, expected, context) {
         ? exactCodexCallCarrier(item.text) : exactCodexResultCarrier(item.text);
       invariant(carrier !== null, `${context}: row ${index + 1} marked carrier is not exact`);
     }
-    invariant(exactOptionalKeys(event, ["payload", "timestamp", "type"],
+    const event = rows[index + 1];
+    invariant(event !== undefined && exactOptionalKeys(event, ["payload", "timestamp", "type"],
       ["_agent_convert_time"]) && event.type === "event_msg" &&
       event.timestamp === response.timestamp && isObject(event.payload),
     `${context}: row ${index + 2} invalid Codex event envelope`);
@@ -2174,6 +2222,7 @@ function validateCodexTargetEnvelope(rows, expected, context) {
       invariant(response.timestamp === launch.timestamp,
         `${context}: rows ${index + 1}-${index + 2} do not use the requested fallback timestamp`);
     }
+    index += 2;
   }
   return {
     schema: "codex-jsonl-0.144.1+agent-convert-carriers-v1",
@@ -2202,9 +2251,12 @@ function validateCursorAgentTargetEnvelope(rows, context) {
       } else if (block?.type === "tool_use") {
         const inputIsNative = isObject(block.input) ||
           (block.name === "ApplyPatch" && typeof block.input === "string");
+        // Optional `id`: Cursor's own corpus includes id-less calls, and foreign
+        // sources that carry a call_id emit one. Both are native tool_use shape.
         invariant(row.role === "assistant" &&
-          exactKeys(block, ["input", "name", "type"]) &&
-          nonemptyString(block.name) && inputIsNative,
+          exactOptionalKeys(block, ["input", "name", "type"], ["id"]) &&
+          nonemptyString(block.name) && inputIsNative &&
+          (!hasOwn(block, "id") || block.id === null || nonemptyString(block.id)),
         `${context}: row ${index + 1} invalid native Cursor Agent tool_use`);
       } else throw new AuditError(
         `${context}: row ${index + 1} contains a non-native Cursor Agent block`);
@@ -2357,10 +2409,26 @@ function compareBlocks(fields, path, expected, actual) {
   }
 }
 
-function compareError(fields, path, expected, actual) {
-  field(fields, `${path}.provenance`, expected?.provenance, actual?.provenance);
+function compareError(fields, path, expected, actual, dispositionPolicy = "exact") {
+  const provenancePass =
+    expected?.provenance === actual?.provenance ||
+    (dispositionPolicy === "allow-native-to-historical" &&
+      expected?.provenance === "inferred" && actual?.provenance === "native" &&
+      expected?.value === actual?.value);
+  field(fields, `${path}.provenance`, expected?.provenance, actual?.provenance,
+    provenancePass,
+    provenancePass && expected?.provenance !== actual?.provenance
+      ? "inferred source error may surface as a native target is_error"
+      : undefined);
   field(fields, `${path}.value`, expected?.value, actual?.value);
-  field(fields, `${path}.heuristic`, expected?.heuristic, actual?.heuristic);
+  // Heuristic identity is source-side only; a native target encoding drops it.
+  if (!(dispositionPolicy === "allow-native-to-historical" &&
+      expected?.provenance === "inferred" && actual?.provenance === "native")) {
+    field(fields, `${path}.heuristic`, expected?.heuristic, actual?.heuristic);
+  } else {
+    field(fields, `${path}.heuristic`, expected?.heuristic, actual?.heuristic,
+      true, "native target encoding does not retain the source inference heuristic");
+  }
 }
 
 function compareLinkage(fields, path, expected, actual) {
@@ -2381,10 +2449,29 @@ function dispositionPass(expected, actual, policy) {
     return { pass: false, note: "historical-to-native upgrade is forbidden" };
   }
   if (expected === "native" && actual === "historicalUnverified" &&
-      policy === "allow-native-to-historical") {
+      (policy === "allow-native-to-historical" ||
+        policy === "allow-call-projection")) {
     return { pass: true, note: "manifest-permitted explicit downgrade" };
   }
   return { pass: false, note: "disposition change is not permitted by this cell" };
+}
+
+function projectLifecycleForPolicy(lifecycle, dispositionPolicy) {
+  if (dispositionPolicy !== "allow-call-projection") return lifecycle;
+  // Cursor Agent has no tool-result slot. A successful export keeps the calls
+  // and drops the results as a forced target limitation (reportOnly), so the
+  // matrix compares the call projection only and treats closed→open as the
+  // honest residual of that forced drop. eventOrder is renumbered because the
+  // dropped results no longer occupy positions in the projected stream.
+  return {
+    ...lifecycle,
+    events: lifecycle.events.filter((event) => event.kind === "call").map((event, index) => ({
+      ...event,
+      eventOrder: index,
+      state: event.state === "closed" ? "open-or-interrupted" : event.state,
+      callOccurrence: index,
+    })),
+  };
 }
 
 export function reconcileLifecycle(expected, actual, dispositionPolicy = "exact") {
@@ -2392,14 +2479,18 @@ export function reconcileLifecycle(expected, actual, dispositionPolicy = "exact"
     "expected lifecycle is invalid");
   invariant(isObject(actual) && Array.isArray(actual.events),
     "actual lifecycle is invalid");
-  invariant(["exact", "allow-native-to-historical"].includes(dispositionPolicy),
+  invariant(["exact", "allow-native-to-historical", "allow-call-projection"]
+      .includes(dispositionPolicy),
     `invalid disposition policy ${dispositionPolicy}`);
+  const projectedExpected = projectLifecycleForPolicy(expected, dispositionPolicy);
+  const projectedActual = projectLifecycleForPolicy(actual, dispositionPolicy);
   const fields = [];
-  const expectedCalls = expected.events.filter((event) => event.kind === "call");
-  const actualCalls = actual.events.filter((event) => event.kind === "call");
-  const expectedResults = expected.events.filter((event) => event.kind === "result");
-  const actualResults = actual.events.filter((event) => event.kind === "result");
-  field(fields, "lifecycle.eventCount", expected.events.length, actual.events.length);
+  const expectedCalls = projectedExpected.events.filter((event) => event.kind === "call");
+  const actualCalls = projectedActual.events.filter((event) => event.kind === "call");
+  const expectedResults = projectedExpected.events.filter((event) => event.kind === "result");
+  const actualResults = projectedActual.events.filter((event) => event.kind === "result");
+  field(fields, "lifecycle.eventCount", projectedExpected.events.length,
+    projectedActual.events.length);
   field(fields, "lifecycle.callCount", expectedCalls.length, actualCalls.length);
   field(fields, "lifecycle.resultCount", expectedResults.length, actualResults.length);
   field(fields, "invariants.noFabricatedResult", true,
@@ -2408,10 +2499,10 @@ export function reconcileLifecycle(expected, actual, dispositionPolicy = "exact"
     "A successful target may not add a result absent from the source fixture.");
 
   let historicalUpgrade = false;
-  const count = Math.max(expected.events.length, actual.events.length);
+  const count = Math.max(projectedExpected.events.length, projectedActual.events.length);
   for (let index = 0; index < count; index++) {
-    const left = expected.events[index];
-    const right = actual.events[index];
+    const left = projectedExpected.events[index];
+    const right = projectedActual.events[index];
     field(fields, `events[${index}].present`, left !== undefined, right !== undefined);
     if (!left || !right) continue;
     field(fields, `events[${index}].kind`, left.kind, right.kind);
@@ -2437,7 +2528,8 @@ export function reconcileLifecycle(expected, actual, dispositionPolicy = "exact"
       field(fields, `events[${index}].resultOccurrence`, left.resultOccurrence,
         right.resultOccurrence);
       compareBlocks(fields, `events[${index}].blocks`, left.blocks, right.blocks);
-      compareError(fields, `events[${index}].error`, left.error, right.error);
+      compareError(fields, `events[${index}].error`, left.error, right.error,
+        dispositionPolicy);
       compareLinkage(fields, `events[${index}].linkage`, left.linkage, right.linkage);
     }
   }
@@ -2614,7 +2706,8 @@ export function validateManifest(manifest) {
     }
     if (cell.expected.kind === "success") {
       invariant(exactKeys(cell.expected, ["disposition", "kind"]) &&
-        ["exact", "allow-native-to-historical"].includes(cell.expected.disposition),
+        ["exact", "allow-native-to-historical", "allow-call-projection"]
+          .includes(cell.expected.disposition),
       `${cell.name} has an invalid success policy`);
     } else if (cell.expected.kind === "refusal") {
       const destructiveLoss = exactKeys(cell.expected,
@@ -2629,7 +2722,12 @@ export function validateManifest(manifest) {
         cell.expected.reason === CURSOR_RUNTIME_ARCHIVE_ONLY_REASON &&
         cell.name === "cursor-agent__to__cursor-agent" &&
         cell.source === "cursor-agent" && cell.target === "cursor-agent";
-      invariant(destructiveLoss || cursorRuntimeArchiveOnly,
+      const cursorNativePayload = exactKeys(cell.expected,
+        ["kind", "policy", "status"]) &&
+        cell.expected.status === 3 &&
+        cell.expected.policy === CURSOR_NATIVE_PAYLOAD_POLICY &&
+        cell.target === "cursor-agent";
+      invariant(destructiveLoss || cursorRuntimeArchiveOnly || cursorNativePayload,
         `${cell.name} has an invalid refusal policy`);
       expectedRefusalStderr(cell);
     } else {
@@ -2801,7 +2899,8 @@ function renderRefusalObligations(repr) {
 }
 
 function expectedRefusalStderr(cell) {
-  if (cell.expected.policy === CURSOR_RUNTIME_ARCHIVE_ONLY_POLICY) {
+  if (cell.expected.policy === CURSOR_RUNTIME_ARCHIVE_ONLY_POLICY ||
+      cell.expected.policy === CURSOR_NATIVE_PAYLOAD_POLICY) {
     return "export error: target 'cursor-agent' validity preflight failed: " +
       `${CURSOR_NATIVE_PAYLOAD_PREFLIGHT}\n`;
   }
@@ -2818,7 +2917,7 @@ function refusalMatch(cell, stderr) {
     policy: cell.expected.policy,
     reason: cell.expected.policy === "destructiveLoss"
       ? cell.expected.obligationRepr
-      : cell.expected.reason,
+      : (cell.expected.reason ?? cell.expected.policy),
   };
 }
 
@@ -2857,7 +2956,8 @@ export function evaluateRefusalCell(cell, observation, runtimePolicyEvidence = n
     ...(cell.expected.policy === "destructiveLoss"
       ? [check("refusal.obligationRepr", cell.expected.obligationRepr,
           match?.reason ?? null)]
-      : [
+      : cell.expected.policy === CURSOR_RUNTIME_ARCHIVE_ONLY_POLICY
+      ? [
           check("refusal.runtimePolicyCell", true,
             cell.name === "cursor-agent__to__cursor-agent" &&
               cell.source === "cursor-agent" && cell.target === "cursor-agent" &&
@@ -2872,6 +2972,12 @@ export function evaluateRefusalCell(cell, observation, runtimePolicyEvidence = n
               runtimePolicyEvidence.reason === CURSOR_RUNTIME_ARCHIVE_ONLY_REASON &&
               runtimePolicyEvidence.archiveOnlyRecords?.length > 0 &&
               runtimePolicyEvidence.nativeEnvelope?.targetNativeOnly === true),
+        ]
+      : [
+          check("refusal.nativePayloadPolicy", CURSOR_NATIVE_PAYLOAD_POLICY,
+            cell.expected.policy),
+          check("refusal.nativePayloadReason", CURSOR_NATIVE_PAYLOAD_POLICY,
+            match?.reason ?? null),
         ]),
     check("refusal.noArtifactReport", "", stdout, observationBytes(observation.stdout).length === 0),
     check("refusal.priorArtifactExists", true, observation.artifactExistedBefore === true,

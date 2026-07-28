@@ -263,8 +263,14 @@ echo "== stdout JSONL framing gate =="
   --target-codex-exclude-slash-tmp true \
   --target-codex-summary concise \
   >"$scratch/stdout.codex.jsonl"
+# Dialogue-only same-format: the parity fixture keeps turn_ended, which the
+# runtime Cursor Agent target refuses (lifecycle cell cursor-agent__to__cursor-agent).
+cat >"$scratch/cursor-agent-dialogue.jsonl" <<'EOF'
+{"role":"user","message":{"content":[{"type":"text","text":"hi"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"yo"},{"type":"tool_use","name":"Bash","input":{}}]}}
+EOF
 "$LOOM_BIN" convert cursor-agent cursor-agent \
-  "$LOOM_ROOT/parity/fixtures/cursor-agent.jsonl" \
+  "$scratch/cursor-agent-dialogue.jsonl" \
   >"$scratch/stdout.cursor-agent.jsonl"
 node -e '
 const { readFileSync } = require("node:fs");
@@ -464,7 +470,7 @@ const relations = {
     summary.toolCallsCarriedAsHistory === 0,
 };
 for (const [claim, held] of Object.entries(relations)) {
-  if (!held) throw new Error(`Codex target broke the relation '${claim}': ${JSON.stringify(summary)}`);
+  if (!held) throw new Error(`Codex target broke the relation "${claim}": ${JSON.stringify(summary)}`);
 }
 ' "$scratch/readable.codex.jsonl" "$scratch/readable.codex.summary.json"
 
@@ -553,8 +559,15 @@ echo "== all JSONL targets end at a record boundary =="
   --target-session-id append-safe-target \
   --target-timestamp 2026-07-20T01:02:03.004Z \
   --target-harness-version 0.74.0
+# Same dialogue-only source as the stdout framing gate: turn_ended is archive-only.
+if [[ ! -f "$scratch/cursor-agent-dialogue.jsonl" ]]; then
+  cat >"$scratch/cursor-agent-dialogue.jsonl" <<'EOF'
+{"role":"user","message":{"content":[{"type":"text","text":"hi"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"yo"},{"type":"tool_use","name":"Bash","input":{}}]}}
+EOF
+fi
 "$LOOM_BIN" convert cursor-agent cursor-agent \
-  "$LOOM_ROOT/parity/fixtures/cursor-agent.jsonl" \
+  "$scratch/cursor-agent-dialogue.jsonl" \
   "$scratch/append-safe.cursor-agent.jsonl"
 node -e '
 const { readFileSync } = require("node:fs");
@@ -622,7 +635,7 @@ else
   expected_invocation="invocation error: unknown or incomplete option: --target-timestamp"
   if [[ "$status" -ne 1 ]] ||
       [[ "$(sed -n '1p' "$scratch/invocation.err")" != "$expected_invocation" ]] ||
-      ! grep -F -q "loom convert <from> <to>" "$scratch/invocation.err"; then
+      ! grep -F -q "loom convert <session-id|input> <target>" "$scratch/invocation.err"; then
     cat "$scratch/invocation.err" >&2
     echo "error: malformed invocation did not preserve the exact class-1 diagnostic" >&2
     exit 1
@@ -1638,7 +1651,7 @@ if (j.engine !== "lean" || j.messagesWritten !== 5 || j.toolCallsImported !== 1 
 ' "$loom_json" "$LOOM_ROOT/parity/fixtures/codex.jsonl"
 
 echo "== convert-to-pi codex default loom engine smoke (repo binary path) =="
-env -u PI_CONVERT_ENGINE -u LOOM_BIN "$TSX" src/convertToPi.ts \
+env -u PI_CONVERT_ENGINE -u LOOM_BIN AGENT_CONVERT_LEAN="$LOOM_ROOT" "$TSX" src/convertToPi.ts \
   --json codex "$LOOM_ROOT/parity/fixtures/codex.jsonl" "$scratch/codex.loom.default.pi.jsonl" \
   --target-cwd /tmp/loom-codex-default --target-provider deepseek \
   --target-model deepseek-v4-flash --target-session-id codex-default-target \

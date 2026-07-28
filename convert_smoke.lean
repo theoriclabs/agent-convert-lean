@@ -3,13 +3,12 @@ import LoomConvert
 
 open Loom LoomConvert
 
-/-- A synthesized pi session (structure only — no real conversation content):
-header + user text turn + assistant turn with thinking(+signature), text, and
-a toolCall block, chained by parentId. -/
+/-- Minimal well-formed Pi session (structure only). Fields match the current
+Pi importer contract used by `parity/fixtures/pi.jsonl`. -/
 def sample : String := String.intercalate "\n" [
-  "{\"type\":\"session\",\"id\":\"s1\",\"cwd\":\"/tmp/x\",\"version\":\"3\"}",
-  "{\"type\":\"message\",\"id\":\"a1\",\"timestamp\":\"T0\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}",
-  "{\"type\":\"message\",\"id\":\"a2\",\"parentId\":\"a1\",\"timestamp\":\"T1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"hmm\",\"thinkingSignature\":\"SIG\"},{\"type\":\"text\",\"text\":\"yo\"},{\"type\":\"toolCall\",\"id\":\"tc1\",\"name\":\"Bash\",\"arguments\":{}}]}}"
+  "{\"type\":\"session\",\"id\":\"s1\",\"cwd\":\"/tmp/x\",\"version\":3,\"timestamp\":\"2024-01-01T00:00:00.000Z\"}",
+  "{\"type\":\"message\",\"id\":\"a1\",\"parentId\":null,\"timestamp\":\"2024-01-01T00:00:00.000Z\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}],\"timestamp\":1704067200000}}",
+  "{\"type\":\"message\",\"id\":\"a2\",\"parentId\":\"a1\",\"timestamp\":\"2024-01-01T00:00:00.001Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"hmm\",\"thinkingSignature\":\"SIG\"},{\"type\":\"text\",\"text\":\"yo\"},{\"type\":\"toolCall\",\"id\":\"tc1\",\"name\":\"Bash\",\"arguments\":{}}],\"api\":\"anthropic-messages\",\"provider\":\"anthropic\",\"model\":\"fixture-model\",\"usage\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"totalTokens\":0,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0}},\"stopReason\":\"toolUse\",\"timestamp\":1704067200001}}"
 ]
 
 -- Import works: 2 entries, and the IR is well-formed (0 structural violations).

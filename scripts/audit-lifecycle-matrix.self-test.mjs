@@ -540,10 +540,10 @@ manifestMutation("refusal obligation spacing is noncanonical", (value) => {
   cell.expected.obligationRepr = cell.expected.obligationRepr.replace(", ", ",  ");
 });
 manifestMutation("refusal obligation delimiters are malformed", (value) => {
-  const cell = cellMatching(value, (repr) => repr.includes("[\"cwd\", \"sessionId\"]"),
-    "a bracketed [\"cwd\", \"sessionId\"] field list");
-  cell.expected.obligationRepr = cell.expected.obligationRepr.replace(
-    "[\"cwd\", \"sessionId\"]", "[\"cwd\", \"sessionId\"");
+  const cell = cellMatching(value, (repr) =>
+    repr.startsWith("[Loom.Ops.Obligation.") && repr.endsWith("]"),
+    "a bracketed Loom.Ops.Obligation list");
+  cell.expected.obligationRepr = cell.expected.obligationRepr.replace(/]$/, "");
 });
 manifestMutation("unapproved disposition policy", (value) => {
   value.cells[0].expected.disposition = "upgrade";
@@ -1520,10 +1520,16 @@ cursorApplyPatchRows[0].message.content[1].input = "*** Begin Patch\n*** End Pat
 positive("Cursor Agent native ApplyPatch string input",
   parseTarget("cursor-agent", jsonlArtifact(cursorApplyPatchRows)).events[0]
     .arguments === "*** Begin Patch\n*** End Patch");
+const cursorWithIdRows = jsonlRows(cursorAgentArtifact);
+cursorWithIdRows[0].message.content[1].id = "call_1";
+positive("Cursor Agent optional tool id is accepted",
+  parseTarget("cursor-agent", jsonlArtifact(cursorWithIdRows)).events.length === 1);
 targetJsonlMutation("Cursor Agent private carrier is rejected", "cursor-agent",
   cursorAgentArtifact, (rows) => { rows[0]._agent_convert = { carrier: "private" }; });
-targetJsonlMutation("Cursor Agent non-native tool id is rejected", "cursor-agent",
-  cursorAgentArtifact, (rows) => { rows[0].message.content[1].id = "invented"; });
+targetJsonlMutation("Cursor Agent empty tool id is rejected", "cursor-agent",
+  cursorAgentArtifact, (rows) => { rows[0].message.content[1].id = ""; });
+targetJsonlMutation("Cursor Agent non-string tool id is rejected", "cursor-agent",
+  cursorAgentArtifact, (rows) => { rows[0].message.content[1].id = 7; });
 targetJsonlMutation("Cursor Agent role mutation is rejected", "cursor-agent",
   cursorAgentArtifact, (rows) => { rows[0].role = "system"; });
 targetJsonlMutation("Cursor Agent ignored message metadata is rejected", "cursor-agent",

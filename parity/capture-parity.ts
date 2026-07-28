@@ -9,17 +9,37 @@
 // across formats regardless of each side's id synthesis.
 //
 // Run via host tsx against this checkout: tsx parity/capture-parity.ts
-import * as sc from "../../../src/pi/sessionCore.ts";
-const { parseSession, getBlocks } = sc as {
-  parseSession: (file: string) => { header: any; entries: any[] };
-  getBlocks: (content: unknown) => Array<{ type: string; text?: string; thinking?: string; name?: string }>;
-};
-import { readdirSync } from "node:fs";
-import { join } from "node:path";
+// Requires LOOM_UTILS_ROOT (or the nested <host>/spec/loom layout).
+import { createRequire } from "node:module";
+import { existsSync, readdirSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 // tsx runs this as CJS, so __dirname is defined at runtime.
 declare const __dirname: string;
 const FIXDIR = join(__dirname, "fixtures");
+
+function resolveUtilsRoot(): string {
+  const fromEnv = process.env.LOOM_UTILS_ROOT;
+  if (fromEnv && fromEnv.length > 0) {
+    const root = resolve(fromEnv);
+    if (!existsSync(join(root, "src", "pi", "sessionCore.ts"))) {
+      throw new Error(
+        `LOOM_UTILS_ROOT=${root} has no src/pi/sessionCore.ts`);
+    }
+    return root;
+  }
+  const nested = resolve(__dirname, "..", "..", "..");
+  if (existsSync(join(nested, "src", "pi", "sessionCore.ts"))) return nested;
+  throw new Error(
+    "TypeScript host not found; set LOOM_UTILS_ROOT to a utils/agent-convert checkout with src/pi/sessionCore.ts");
+}
+
+const require = createRequire(join(__dirname, "capture-parity.ts"));
+const sc = require(join(resolveUtilsRoot(), "src", "pi", "sessionCore.ts"));
+const { parseSession, getBlocks } = sc as {
+  parseSession: (file: string) => { header: any; entries: any[] };
+  getBlocks: (content: unknown) => Array<{ type: string; text?: string; thinking?: string; name?: string }>;
+};
 
 function blockTag(b: { type: string; text?: string; thinking?: string; name?: string }): string {
   if (b.type === "text") return "text:" + (b.text ?? "");
