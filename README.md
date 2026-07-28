@@ -164,6 +164,7 @@ loom convert <from> <to> <input> [output]
   [--target-codex-exclude-slash-tmp <true|false>]
   [--target-codex-summary <auto|concise|detailed|none>]
   [--json] [--ts-parity] [--with-subagents|--no-subagents]
+loom convert claude <session-id|input> [target overrides]
 loom inspect <from> <input> [--json] [--with-subagents|--no-subagents]
 loom detect <input> [--json]
 loom version [--json]
@@ -175,11 +176,21 @@ Target launch metadata belongs to the new target. It never overwrites source
 `EnvInfo`; source identity and environment remain typed provenance or an inert
 carrier. Retargeted output fails closed when its launch bundle is incomplete.
 
+Converting **to Claude with no output path** publishes under
+`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`, fills missing launch
+fields from the source transcript, and prints a `claude --resume` command.
+`<input>` may be a file path or a bare session id resolved across
+`~/.codex/sessions`, `~/.claude/projects`, and `~/.pi/agent/sessions` (the
+Claude destination store is skipped so a prior publication is not treated as a
+source). `loom convert claude <session-id|input>` is the same path with source
+format detected from the bytes. Pass an explicit output path to write a file
+instead of publishing into Claude's store.
+
 | Target | Mandatory metadata for a foreign source | Current contract |
 |---|---|---|
 | Loom wire | None | `schema: "loom.transcript.v0"`; preserves modeled threads |
 | Pi | cwd, provider, model, session id, UTC timestamp, harness version | Harness version must be `0.74.0`; provider/model must not use the reserved history identity |
-| Claude Code | absolute cwd, UUID session id, UTC timestamp, harness version | Harness version must be `2.1.216` |
+| Claude Code | absolute cwd, UUID session id, UTC timestamp, harness version | Harness version must be `2.1.216`; omitted output path publishes into Claude's project store |
 | Codex CLI | absolute cwd, provider, model, UUID session id, UTC timestamp, harness version, and all five Codex controls | Harness version must be `0.144.1` |
 | Cursor Agent | No launch bundle is accepted by the JSONL target | File output only; runtime metadata it cannot encode is reported or refused; no resume/install claim |
 
@@ -345,7 +356,9 @@ Output:
 }
 ```
 
-Claude native sidecar export supplies the full Claude target bundle:
+Claude native sidecar export supplies the full Claude target bundle. With an
+explicit output path this writes a file; omit the path to publish into Claude's
+project store instead:
 
 ```sh
 LOOM=.lake/build/bin/loom

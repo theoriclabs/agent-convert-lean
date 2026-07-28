@@ -2141,18 +2141,19 @@ private def runCursorIde (db composerId toFmt : String) (outp : Option String)
             reportExportObligations toFmt source
             emit output outp source.entries.size
 
-/-! ## `resume` — one-command handoff into a resumable target session
+/-! ## Claude store publication via `convert`
 
-`loom resume <to> …` converts a session and publishes it where that harness
-will find it, deriving launch metadata from the source instead of asking the
-caller to restate facts the transcript already contains. Everything this needs
-is already typed in the IR, so it stays in Lean: the source's `EnvInfo`
-carries `cwd` and `sessionId`, and `Loom.epochMsToIso8601` turns a recorded
-entry time into the launch stamp. No shell, no second JSON parser, no
-re-derivation of facts the importer already established.
+`loom convert <from> claude <input>` with no output path converts a session and
+publishes it where Claude Code will find it, deriving launch metadata from the
+source instead of asking the caller to restate facts the transcript already
+contains. Everything this needs is already typed in the IR, so it stays in Lean:
+the source's `EnvInfo` carries `cwd` and `sessionId`, and
+`Loom.epochMsToIso8601` turns a recorded entry time into the launch stamp. No
+shell, no second JSON parser, no re-derivation of facts the importer already
+established.
 
-Today only `claude` is wired as a resume target. Other exporters remain
-`convert` destinations until they grow an equivalent store publication path. -/
+An explicit output path keeps ordinary file export. Other targets still write to
+stdout or an output path; they have no equivalent store publication path yet. -/
 
 /-- Claude Code names a project directory by replacing every character outside
 `[A-Za-z0-9]` in the absolute cwd with `-`.
@@ -2308,16 +2309,15 @@ An existing path is used as given. Otherwise the argument is treated as a
 session id and looked up across the known stores.
 
 Three rules keep this from guessing. The DESTINATION store is not a source:
-`install-claude` writes into `~/.claude/projects`, so a Claude file with this id
-is this command's own previous output, not an input. Skipping it is what makes
-the command re-runnable — otherwise the second run of the same conversion is
-always "ambiguous" with the first run's result. Ambiguity among the remaining
-stores is still an ERROR: every match is printed and the explicit
-two-positional form demanded, because picking one would silently convert a
-session the caller did not name. And the format comes from `detectFormat`
-reading the bytes, never from which directory the file sat in — the store layout
-is a hint for FINDING the file, and a hint is not evidence about what is inside
-it. -/
+Claude store publication writes into `~/.claude/projects`, so a Claude file with
+this id is this command's own previous output, not an input. Skipping it is what
+makes the command re-runnable — otherwise the second run of the same conversion
+is always "ambiguous" with the first run's result. Ambiguity among the remaining
+stores is still an ERROR: every match is printed and an explicit `<from> <input>`
+demanded, because picking one would silently convert a session the caller did
+not name. And the format comes from `detectFormat` reading the bytes, never from
+which directory the file sat in — the store layout is a hint for FINDING the
+file, and a hint is not evidence about what is inside it. -/
 private def resolveSessionInput (arg : String) (destinationStore : String) :
     IO (Except String (String × String)) := do
   let readDetect := fun (path : String) => do
@@ -2347,7 +2347,7 @@ private def resolveSessionInput (arg : String) (destinationStore : String) :
         return .error (s!"no file and no session named '{arg}' in " ++
           "~/.codex/sessions, ~/.claude/projects, or ~/.pi/agent/sessions")
       else
-        return .error (s!"session '{arg}' exists only as an installed " ++
+        return .error (s!"session '{arg}' exists only as a published " ++
           s!"{destinationStore} session, which is this command's output rather " ++
           "than a source; pass an explicit <from> <input> to convert it anyway")
   | [only] => readDetect only.toString
@@ -2356,10 +2356,27 @@ private def resolveSessionInput (arg : String) (destinationStore : String) :
         "pass an explicit <from> <input> instead:\n  " ++
         String.intercalate "\n  " (several.map (·.toString)))
 
-/-- Convert a session and install it where Claude Code will find it, deriving
+/-- Resolve `inp` when it may be either a path or a bare session id. An existing
+path keeps its declared `fromFmt`; a session id is looked up and its format is
+detected from the bytes. -/
+private def resolveConvertInput (fromFmt inp : String) (destinationStore : String) :
+    IO (Except String (String × String)) := do
+  if ← (System.FilePath.mk inp).pathExists then
+    return .ok (fromFmt, inp)
+  match ← resolveSessionInput inp destinationStore with
+  | .error error => pure (.error error)
+  | .ok (detected, path) =>
+      if fromFmt != detected then
+        pure (.error (s!"session '{inp}' resolved as {detected} at {path}, " ++
+          s!"not the declared source format '{fromFmt}'"))
+      else
+        pure (.ok (fromFmt, path))
+
+/-- Convert a session and publish it where Claude Code will find it, deriving
 every target field from the source instead of asking the caller to restate
-facts the transcript already contains. -/
-def runInstallClaude (fromFmt inp : String) (opts : CliOptions) : IO UInt32 := do
+facts the transcript already contains. This is what
+`loom convert <from> claude <input>` does when no output path is given. -/
+def runConvertClaudeStore (fromFmt inp : String) (opts : CliOptions) : IO UInt32 := do
   let sourceText ← match ← readInputText inp with
     | .ok text => pure text
     | .error error => IO.eprintln s!"import error: {error}"; return 2
@@ -2412,22 +2429,43 @@ def runInstallClaude (fromFmt inp : String) (opts : CliOptions) : IO UInt32 := d
         ((mergeSessionIndex existing sessionId entry).pretty ++ "\n")).toBaseIO with
     | .ok _ => pure ()
     | .error error =>
-        IO.eprintln s!"warning: transcript installed but session index not updated: {error}"
+        IO.eprintln s!"warning: transcript published but session index not updated: {error}"
   IO.println s!"\nresume with:\n  cd {cwd} && claude --resume {sessionId}"
   pure 0
+
+/-- `loom convert … claude` with no output path: resolve a path or session id,
+then publish into Claude's project store. -/
+private def runConvertToClaude (fromFmt inp : String) (opts : CliOptions) : IO UInt32 := do
+  match ← resolveConvertInput fromFmt inp "claude" with
+  | .error error => IO.eprintln s!"invocation error: {error}"; pure 1
+  | .ok (format, path) =>
+      if path != inp then
+        IO.println s!"resolved {inp} -> {format}: {path}"
+      runConvertClaudeStore format path opts
+
+/-- `loom convert claude <session-id|input>`: detect the source format from the
+resolved file, then publish into Claude's project store. -/
+private def runConvertClaudeResolved (ref : String) (opts : CliOptions) : IO UInt32 := do
+  match ← resolveSessionInput ref "claude" with
+  | .error error => IO.eprintln s!"invocation error: {error}"; pure 1
+  | .ok (format, path) =>
+      if path != ref then
+        IO.println s!"resolved {ref} -> {format}: {path}"
+      runConvertClaudeStore format path opts
 
 def usage : String :=
   "loom — Lean transcript converter\n\n" ++
   "  loom convert <from> <to> <input> [output] [--target-cwd <dir>] [--target-provider <name>] [--target-model <name>] [--target-session-id <id>] [--target-timestamp <iso>] [--target-harness-version <version>] [--pi-assistant-history <context|carrier>] [--json] [--ts-parity] [--with-subagents|--no-subagents]\n" ++
+  "  loom convert claude <session-id|input> [target overrides]\n" ++
   "  loom inspect <from> <input> [--json] [--with-subagents|--no-subagents]\n" ++
   "  loom detect <input> [--json]\n" ++
   "  loom version [--json]\n" ++
   "  loom self-test-sidecar-publication\n" ++
-  "  loom install-claude <session-id|input> [target overrides]\n" ++
-  "  loom install-claude <from> <input> [target overrides]\n" ++
   "  loom cursor-ide <state.vscdb> <composerId> <to> [output] [target options]\n\n" ++
   "  import formats: loom pi claude codex cursor-agent hermes gais cursor-ide\n" ++
   "  export formats: loom pi claude codex cursor-agent\n\n" ++
+  "  converting to claude with no output path publishes under ~/.claude/projects and prints a resume command;\n" ++
+  "  <input> may be a file path or a bare session id looked up in known harness stores\n" ++
   "  --ts-parity       codex: apply the codex.ts convert-path renderer (D15) for cutover gating\n" ++
   "  --with-subagents  force Claude/Cursor Agent sidecar stitch (default on for inspect and loom/claude/cursor-agent targets)\n" ++
   "  --no-subagents    main-branch only; skip sidecar import/export (default for flat pi/codex targets)\n" ++
@@ -2438,6 +2476,11 @@ def main (args : List String) : IO UInt32 := do
     | .ok parsed => pure parsed
     | .error e => IO.eprintln s!"invocation error: {e}\n{usage}"; return 1
   match pos with
+  -- Detect source + publish into Claude's store. Listed before the ordinary
+  -- three-arg convert form so `loom convert claude <ref>` is not parsed as
+  -- from=claude to=<ref>.
+  | ["convert", "claude", ref] => runConvertClaudeResolved ref opts
+  | ["convert", f, "claude", inp] => runConvertToClaude f inp opts
   | ["convert", f, t, inp]      => runConvert f t inp none opts
   | ["convert", f, t, inp, o]   => runConvert f t inp (some o) opts
   | ["inspect", f, inp]         =>
@@ -2445,16 +2488,6 @@ def main (args : List String) : IO UInt32 := do
   | ["detect", inp]             => runDetect inp opts.json
   | ["version"]                 => runVersion opts.json
   | ["self-test-sidecar-publication"] => runSidecarPublicationSelfTest
-  | ["install-claude", f, inp] => runInstallClaude f inp opts
-  -- One positional: a path or a bare session id, with the format detected from
-  -- the bytes. The two-positional form above stays exactly as it was — this CLI
-  -- has production callers, so the shorthand is additive.
-  | ["install-claude", ref] =>
-      match ← resolveSessionInput ref "claude" with
-      | .error error => IO.eprintln s!"invocation error: {error}"; pure 1
-      | .ok (format, path) =>
-          IO.println s!"resolved {ref} -> {format}: {path}"
-          runInstallClaude format path opts
   | ["cursor-ide", db, cid, to] => runCursorIde db cid to none opts
   | ["cursor-ide", db, cid, to, outp] => runCursorIde db cid to (some outp) opts
   | _ => IO.eprintln usage; pure 1
