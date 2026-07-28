@@ -1,0 +1,65 @@
+{
+  "session_id": "lifecycle-hermes",
+  "model": "fixture-model",
+  "base_url": "https://example.invalid/v1",
+  "platform": "cli",
+  "session_start": "2026-07-21T00:00:00.000Z",
+  "last_updated": "2026-07-21T00:00:05.000Z",
+  "message_count": 6,
+  "messages": [
+    {
+      "role": "assistant",
+      "content": "dispatching",
+      "tool_calls": [
+        {
+          "id": "duplicate-id",
+          "type": "function",
+          "function": {
+            "name": "terminal",
+            "arguments": "{\"command\":\"printf first\",\"flags\":[true,null]}"
+          }
+        },
+        {
+          "id": "duplicate-id",
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"path\":\"README.md\",\"range\":{\"start\":1,\"end\":4}}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "duplicate-id",
+      "name": "read_file",
+      "content": "second-hermes-result"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "duplicate-id",
+      "name": "terminal",
+      "content": "first-hermes-result"
+    },
+    {
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "type": "function",
+          "function": {
+            "name": "search_files",
+            "arguments": "{\"query\":\"open\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": "no result was recorded for the last call"
+    },
+    {
+      "role": "assistant",
+      "content": "interrupted"
+    }
+  ]
+}

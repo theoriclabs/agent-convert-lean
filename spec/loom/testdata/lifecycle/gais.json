@@ -1,0 +1,90 @@
+{
+  "runSettings": {
+    "model": "models/gemini-fixture"
+  },
+  "chunkedPrompt": {
+    "chunks": [
+      {
+        "role": "model",
+        "parts": [
+          {
+            "functionCall": {
+              "id": "duplicate-id",
+              "name": "gais_first",
+              "args": {
+                "command": "one",
+                "nested": {
+                  "ok": true
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "functionResponse": {
+              "id": "duplicate-id",
+              "name": "gais_first",
+              "isError": false,
+              "response": "first-gais-result"
+            }
+          }
+        ]
+      },
+      {
+        "role": "model",
+        "parts": [
+          {
+            "functionCall": {
+              "id": "duplicate-id",
+              "name": "gais_second",
+              "args": {
+                "values": [
+                  1,
+                  2,
+                  3
+                ]
+              }
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "functionResponse": {
+              "id": "duplicate-id",
+              "name": "gais_second",
+              "response": {
+                "error": {
+                  "code": 9
+                },
+                "details": [
+                  "exact",
+                  null
+                ]
+              }
+            }
+          }
+        ]
+      },
+      {
+        "role": "model",
+        "parts": [
+          {
+            "functionCall": {
+              "name": "gais_open",
+              "args": {
+                "pending": true
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

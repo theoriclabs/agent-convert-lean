@@ -1,0 +1,83 @@
+{
+  "workspaceIdentifier": {
+    "uri": {
+      "fsPath": "/tmp/lifecycle-cursor-ide"
+    }
+  },
+  "composer": {
+    "composerId": "lifecycle-cursor-ide",
+    "fullConversationHeadersOnly": [
+      {
+        "bubbleId": "cursor-call-1",
+        "type": 2
+      },
+      {
+        "bubbleId": "cursor-call-2",
+        "type": 2
+      },
+      {
+        "bubbleId": "cursor-open",
+        "type": 2
+      }
+    ]
+  },
+  "bubbles": [
+    {
+      "_v": 3,
+      "type": 2,
+      "bubbleId": "cursor-call-1",
+      "createdAt": 1784592001000,
+      "toolFormerData": {
+        "tool": 15,
+        "name": "cursor_first",
+        "toolCallId": "duplicate-id",
+        "rawArgs": {
+          "command": "one",
+          "flags": [
+            true,
+            null
+          ]
+        },
+        "result": "first-cursor-result",
+        "status": "completed"
+      }
+    },
+    {
+      "_v": 3,
+      "type": 2,
+      "bubbleId": "cursor-call-2",
+      "createdAt": 1784592002000,
+      "toolFormerData": {
+        "tool": 40,
+        "name": "cursor_second",
+        "toolCallId": "duplicate-id",
+        "rawArgs": {
+          "path": "README.md",
+          "range": {
+            "start": 1,
+            "end": 4
+          }
+        },
+        "result": {
+          "stdout": "second-cursor-result",
+          "exitCode": 7
+        },
+        "status": "error"
+      }
+    },
+    {
+      "_v": 3,
+      "type": 2,
+      "bubbleId": "cursor-open",
+      "createdAt": 1784592003000,
+      "toolFormerData": {
+        "tool": 57,
+        "name": "cursor_open",
+        "rawArgs": {
+          "pending": true
+        },
+        "status": "loading"
+      }
+    }
+  ]
+}

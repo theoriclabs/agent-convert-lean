@@ -1,0 +1,109 @@
+{
+  "schema": "loom.transcript.v0",
+  "x-top-level": {
+    "ignored": true
+  },
+  "origin": {
+    "format": "future-format",
+    "sourceRef": "unknown-labels",
+    "rawId": "u-session",
+    "x-origin": true
+  },
+  "env": {
+    "cwd": "/tmp/loom-wire-unknown",
+    "x-env": true
+  },
+  "threads": [
+    {
+      "index": "0",
+      "kind": {
+        "kind": "main",
+        "x-kind": true
+      },
+      "label": "main",
+      "x-thread": "ignored"
+    }
+  ],
+  "entries": [
+    {
+      "index": "0",
+      "thread": "0",
+      "time": {
+        "kind": "absent",
+        "x-time": true
+      },
+      "payload": {
+        "type": "userMsg",
+        "blocks": [
+          {
+            "type": "futureUserBlock",
+            "future": "kept as raw",
+            "x": 1
+          }
+        ],
+        "x-payload": true
+      },
+      "origin": {
+        "format": "future-format",
+        "sourceRef": "unknown-labels",
+        "rawId": "u0"
+      }
+    },
+    {
+      "index": "1",
+      "parent": "0",
+      "thread": "0",
+      "time": {
+        "kind": "absent"
+      },
+      "payload": {
+        "type": "assistantMsg",
+        "blocks": [
+          {
+            "type": "futureAssistantBlock",
+            "text": "not interpreted",
+            "nested": {
+              "ok": true
+            }
+          }
+        ]
+      },
+      "origin": {
+        "format": "future-format",
+        "sourceRef": "unknown-labels",
+        "rawId": "u1"
+      }
+    },
+    {
+      "index": "2",
+      "parent": "1",
+      "thread": "0",
+      "time": {
+        "kind": "absent"
+      },
+      "payload": {
+        "type": "event",
+        "event": {
+          "type": "futureEvent",
+          "payload": {
+            "ok": true
+          }
+        }
+      },
+      "origin": {
+        "format": "future-format",
+        "sourceRef": "unknown-labels",
+        "rawId": "u2"
+      }
+    }
+  ],
+  "importNotes": [
+    {
+      "kind": "futureAssumption",
+      "loc": "fixture",
+      "detail": "unknown assumption kind survives",
+      "x-note": true
+    }
+  ],
+  "activeLeaf": "2"
+}

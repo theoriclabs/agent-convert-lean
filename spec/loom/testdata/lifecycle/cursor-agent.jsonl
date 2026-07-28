@@ -1,0 +1,2 @@
+{"role":"assistant","message":{"content":[{"type":"text","text":"starting calls"},{"type":"tool_use","name":"Shell","input":{"command":"printf one","nested":{"flag":true}}},{"type":"tool_use","name":"Read","input":{"path":"README.md","lines":[1,4]}}]}}
+{"type":"turn_ended","status":"error","error":"session interrupted before tool results were recorded"}

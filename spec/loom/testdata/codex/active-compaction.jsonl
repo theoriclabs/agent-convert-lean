@@ -1,0 +1,4 @@
+{"type":"session_meta","timestamp":"2026-07-20T00:00:00.000Z","payload":{"id":"62000000-0000-4000-8000-000000000000","timestamp":"2026-07-20T00:00:00.000Z","cwd":"/tmp/loom-active-compaction","cli_version":"0.144.1","originator":"codex-tui","model_provider":"openai","instructions":"retain the active context"}}
+{"type":"response_item","timestamp":"2026-07-20T00:00:01.000Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"OLD context that the latest compaction replaces"}]}}
+{"type":"compacted","timestamp":"2026-07-20T00:00:02.000Z","payload":{"message":"summary","replacement_history":[{"type":"message","role":"user","content":[{"type":"input_text","text":"ACTIVE summarized context"}]}]}}
+{"type":"response_item","timestamp":"2026-07-20T00:00:03.000Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Active context restored."}]}}

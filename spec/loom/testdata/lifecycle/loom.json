@@ -1,0 +1,165 @@
+{
+  "schema": "loom.transcript.v0",
+  "origin": {
+    "format": "loom-lifecycle-fixture",
+    "sourceRef": "lifecycle/loom.json"
+  },
+  "env": {},
+  "threads": [
+    {
+      "index": "0",
+      "kind": {
+        "kind": "main"
+      }
+    }
+  ],
+  "entries": [
+    {
+      "index": "0",
+      "thread": "0",
+      "time": {
+        "kind": "absent"
+      },
+      "payload": {
+        "type": "assistantMsg",
+        "blocks": [
+          {
+            "type": "toolCall",
+            "name": "foreign_first",
+            "arguments": [
+              "alpha",
+              true,
+              null
+            ],
+            "id": "duplicate-id"
+          },
+          {
+            "type": "toolCall",
+            "name": "foreign_second",
+            "arguments": {
+              "nested": {
+                "count": 2
+              }
+            },
+            "id": "duplicate-id"
+          }
+        ]
+      },
+      "origin": {
+        "format": "loom-lifecycle-fixture",
+        "sourceRef": "entry-0"
+      }
+    },
+    {
+      "index": "1",
+      "thread": "0",
+      "time": {
+        "kind": "absent"
+      },
+      "payload": {
+        "type": "envMsg",
+        "blocks": [
+          {
+            "type": "toolResult",
+            "call": {
+              "kind": "resolved",
+              "entry": "0",
+              "block": "1"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "second-result"
+              },
+              {
+                "type": "media",
+                "mimeType": "image/png",
+                "data": "data:image/png;base64,aGVsbG8="
+              },
+              {
+                "type": "unmodeled",
+                "label": "structured-result",
+                "raw": {
+                  "items": [
+                    false,
+                    null,
+                    7
+                  ]
+                }
+              }
+            ],
+            "error": {
+              "kind": "inferred",
+              "isError": "true",
+              "heuristic": "fixture-inferred-error"
+            }
+          }
+        ]
+      },
+      "origin": {
+        "format": "loom-lifecycle-fixture",
+        "sourceRef": "entry-1"
+      },
+      "parent": "0"
+    },
+    {
+      "index": "2",
+      "thread": "0",
+      "time": {
+        "kind": "absent"
+      },
+      "payload": {
+        "type": "envMsg",
+        "blocks": [
+          {
+            "type": "toolResult",
+            "call": {
+              "kind": "resolved",
+              "entry": "0",
+              "block": "0"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "first-result"
+              }
+            ],
+            "error": {
+              "kind": "native",
+              "isError": "false"
+            }
+          }
+        ]
+      },
+      "origin": {
+        "format": "loom-lifecycle-fixture",
+        "sourceRef": "entry-2"
+      },
+      "parent": "1"
+    },
+    {
+      "index": "3",
+      "thread": "0",
+      "time": {
+        "kind": "absent"
+      },
+      "payload": {
+        "type": "assistantMsg",
+        "blocks": [
+          {
+            "type": "toolCall",
+            "name": "foreign_open",
+            "arguments": null
+          }
+        ]
+      },
+      "origin": {
+        "format": "loom-lifecycle-fixture",
+        "sourceRef": "entry-3"
+      },
+      "parent": "2"
+    }
+  ],
+  "importNotes": [],
+  "activeLeaf": "3"
+}

@@ -1,0 +1,124 @@
+{
+  "schema": "loom.transcript.v0",
+  "origin": {
+    "format": "claude",
+    "sourceRef": "interleaved-sidecar-anchor"
+  },
+  "env": {
+    "cwd": "/tmp/loom-interleaved"
+  },
+  "threads": [
+    {
+      "index": "0",
+      "kind": {
+        "kind": "main"
+      }
+    },
+    {
+      "index": "1",
+      "kind": {
+        "kind": "sidechain",
+        "anchor": {
+          "kind": "resolved",
+          "entry": "2",
+          "block": "0"
+        }
+      },
+      "label": "interleaved child"
+    }
+  ],
+  "entries": [
+    {
+      "index": "0",
+      "thread": "0",
+      "time": {
+        "kind": "absent"
+      },
+      "payload": {
+        "type": "userMsg",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "root"
+          }
+        ]
+      },
+      "origin": {
+        "format": "claude",
+        "sourceRef": "interleaved-sidecar-anchor",
+        "rawId": "root-user"
+      }
+    },
+    {
+      "index": "1",
+      "thread": "1",
+      "time": {
+        "kind": "absent"
+      },
+      "payload": {
+        "type": "userMsg",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "child work"
+          }
+        ]
+      },
+      "origin": {
+        "format": "claude",
+        "sourceRef": "interleaved-sidecar-anchor",
+        "rawId": "child-user"
+      }
+    },
+    {
+      "index": "2",
+      "thread": "0",
+      "time": {
+        "kind": "absent"
+      },
+      "payload": {
+        "type": "assistantMsg",
+        "blocks": [
+          {
+            "type": "toolCall",
+            "name": "Task",
+            "arguments": {
+              "prompt": "child work"
+            },
+            "id": "toolu_interleaved"
+          }
+        ]
+      },
+      "origin": {
+        "format": "claude",
+        "sourceRef": "interleaved-sidecar-anchor",
+        "rawId": "root-call"
+      },
+      "parent": "0"
+    },
+    {
+      "index": "3",
+      "thread": "1",
+      "time": {
+        "kind": "absent"
+      },
+      "payload": {
+        "type": "assistantMsg",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "child done"
+          }
+        ]
+      },
+      "origin": {
+        "format": "claude",
+        "sourceRef": "interleaved-sidecar-anchor",
+        "rawId": "child-assistant"
+      },
+      "parent": "1"
+    }
+  ],
+  "importNotes": [],
+  "activeLeaf": "3"
+}

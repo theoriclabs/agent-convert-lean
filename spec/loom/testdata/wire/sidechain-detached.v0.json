@@ -1,0 +1,167 @@
+{
+  "schema": "loom.transcript.v0",
+  "origin": {
+    "format": "claude",
+    "sourceRef": "wire-roundtrip",
+    "rawId": "S-wire"
+  },
+  "env": {
+    "cwd": "/tmp/loom-wire",
+    "model": "fixture-model"
+  },
+  "threads": [
+    {
+      "index": "0",
+      "kind": {
+        "kind": "main"
+      },
+      "label": "main"
+    },
+    {
+      "index": "1",
+      "kind": {
+        "kind": "sidechain",
+        "anchor": {
+          "kind": "resolved",
+          "entry": "1",
+          "block": "1"
+        }
+      },
+      "label": "anchored child"
+    },
+    {
+      "index": "2",
+      "kind": {
+        "kind": "detached",
+        "note": "toolUseId=missing unmatched"
+      },
+      "label": "detached child"
+    }
+  ],
+  "entries": [
+    {
+      "index": "0",
+      "thread": "0",
+      "time": {
+        "kind": "absent"
+      },
+      "payload": {
+        "type": "userMsg",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "root"
+          }
+        ]
+      },
+      "origin": {
+        "format": "claude",
+        "sourceRef": "wire-roundtrip",
+        "rawId": "u0"
+      }
+    },
+    {
+      "index": "1",
+      "thread": "0",
+      "time": {
+        "kind": "sequenced",
+        "ord": "1"
+      },
+      "payload": {
+        "type": "assistantMsg",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "dispatch"
+          },
+          {
+            "type": "toolCall",
+            "name": "Task",
+            "arguments": {
+              "prompt": "child"
+            },
+            "id": "toolu_child"
+          }
+        ]
+      },
+      "origin": {
+        "format": "claude",
+        "sourceRef": "wire-roundtrip",
+        "rawId": "a1"
+      },
+      "parent": "0"
+    },
+    {
+      "index": "2",
+      "thread": "1",
+      "time": {
+        "kind": "absent"
+      },
+      "payload": {
+        "type": "userMsg",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "child work"
+          }
+        ]
+      },
+      "origin": {
+        "format": "claude",
+        "sourceRef": "wire-roundtrip",
+        "rawId": "c2"
+      }
+    },
+    {
+      "index": "3",
+      "thread": "1",
+      "time": {
+        "kind": "absent"
+      },
+      "payload": {
+        "type": "assistantMsg",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "child done"
+          }
+        ]
+      },
+      "origin": {
+        "format": "claude",
+        "sourceRef": "wire-roundtrip",
+        "rawId": "c3"
+      },
+      "parent": "2"
+    },
+    {
+      "index": "4",
+      "thread": "2",
+      "time": {
+        "kind": "absent"
+      },
+      "payload": {
+        "type": "userMsg",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "orphan work"
+          }
+        ]
+      },
+      "origin": {
+        "format": "claude",
+        "sourceRef": "wire-roundtrip",
+        "rawId": "d4"
+      }
+    }
+  ],
+  "importNotes": [
+    {
+      "kind": "idSynthesized",
+      "loc": "fixture",
+      "detail": "wire round-trip fixture"
+    }
+  ],
+  "activeLeaf": "3"
+}

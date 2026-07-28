@@ -1,0 +1,35 @@
+{
+  "session_id": "hermes-loom-smoke",
+  "model": "deepseek-chat",
+  "base_url": "https://api.deepseek.com/v1",
+  "platform": "cli",
+  "session_start": "2026-01-01T00:00:00.000Z",
+  "last_updated": "2026-01-01T00:00:02.000Z",
+  "messages": [
+    {
+      "role": "user",
+      "content": "list"
+    },
+    {
+      "role": "assistant",
+      "content": "running",
+      "reasoning_content": "think",
+      "tool_calls": [
+        {
+          "id": "call_1",
+          "type": "function",
+          "function": {
+            "name": "terminal",
+            "arguments": "{\"command\":\"ls\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_1",
+      "name": "terminal",
+      "content": "README.md"
+    }
+  ]
+}

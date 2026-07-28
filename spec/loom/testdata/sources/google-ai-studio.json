@@ -1,0 +1,28 @@
+{
+  "runSettings": {
+    "model": "models/gemini-test",
+    "thinkingLevel": "thinking_high"
+  },
+  "chunkedPrompt": {
+    "chunks": [
+      {
+        "role": "user",
+        "text": "What is 2+2?"
+      },
+      {
+        "role": "model",
+        "isThought": true,
+        "text": "Add the integers."
+      },
+      {
+        "role": "model",
+        "errorMessage": "RESOURCE_EXHAUSTED: quota exceeded"
+      },
+      {
+        "role": "model",
+        "text": "4",
+        "tokenCount": 3
+      }
+    ]
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "schema": "loom.transcript.v1",
+  "origin": {
+    "format": "claude",
+    "sourceRef": "wrong-schema"
+  },
+  "env": {},
+  "threads": [],
+  "entries": [],
+  "importNotes": []
+}

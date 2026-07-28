@@ -1,0 +1,246 @@
+{
+  "schema": "agent-convert.lifecycle-matrix-manifest.v1",
+  "sources": [
+    {
+      "name": "loom",
+      "fixture": "loom.json",
+      "coverage": {
+        "calls": 3,
+        "results": 2,
+        "duplicateCallIds": 2,
+        "missingCallIds": 1,
+        "openCalls": 1,
+        "resultBlockKinds": ["media", "text", "unmodeled"],
+        "errorProvenance": ["inferred", "native"]
+      },
+      "limitations": [
+        "An unresolved Loom CallRef is serializable but violates conversion well-formedness, so the accepted fixture does not use an orphan result."
+      ]
+    },
+    {
+      "name": "pi",
+      "fixture": "pi.jsonl",
+      "coverage": {
+        "calls": 3,
+        "results": 2,
+        "duplicateCallIds": 0,
+        "missingCallIds": 0,
+        "openCalls": 1,
+        "resultBlockKinds": ["media", "text"],
+        "errorProvenance": ["native"]
+      },
+      "limitations": [
+        "Native Pi toolCall.id and toolResult.toolCallId are required nonempty strings; accepted native records cannot exercise a missing ID.",
+        "Native Pi result error state is a boolean; inferred and unrecorded provenance require a Loom-owned extension carrier."
+      ]
+    },
+    {
+      "name": "claude",
+      "fixture": "claude.jsonl",
+      "coverage": {
+        "calls": 3,
+        "results": 2,
+        "duplicateCallIds": 2,
+        "missingCallIds": 0,
+        "openCalls": 1,
+        "resultBlockKinds": ["media", "text", "unmodeled"],
+        "errorProvenance": ["native"]
+      },
+      "limitations": [
+        "Native Claude tool_use.id is required and native tool_result error state is only a boolean.",
+        "An unmatched final tool_use is the only native evidence for an open or interrupted call; no per-call interruption discriminator exists."
+      ]
+    },
+    {
+      "name": "codex",
+      "fixture": "codex.jsonl",
+      "coverage": {
+        "calls": 3,
+        "results": 2,
+        "duplicateCallIds": 0,
+        "missingCallIds": 0,
+        "openCalls": 1,
+        "resultBlockKinds": ["text"],
+        "errorProvenance": ["inferred"]
+      },
+      "limitations": [
+        "Recognized native Codex call and output records require a nonempty call_id.",
+        "Codex function_call_output has no native error boolean; the fixture records the converter's documented text heuristic as inferred provenance.",
+        "The checked candidate rejects open-world array output items as a recognized lifecycle result, so exact raw structured-result coverage comes from other declared sources."
+      ]
+    },
+    {
+      "name": "cursor-agent",
+      "fixture": "cursor-agent.jsonl",
+      "coverage": {
+        "calls": 2,
+        "results": 0,
+        "duplicateCallIds": 0,
+        "missingCallIds": 2,
+        "openCalls": 2,
+        "resultBlockKinds": [],
+        "errorProvenance": []
+      },
+      "limitations": [
+        "Cursor Agent JSONL records call names and inputs but no tool-call IDs, tool results, or tool-level error state.",
+        "turn_ended.error is session-level evidence and is not attributed to either open call or converted into a fabricated result."
+      ]
+    },
+    {
+      "name": "hermes",
+      "fixture": "hermes.json",
+      "coverage": {
+        "calls": 3,
+        "results": 2,
+        "duplicateCallIds": 2,
+        "missingCallIds": 1,
+        "openCalls": 1,
+        "resultBlockKinds": ["text"],
+        "errorProvenance": ["unrecorded"]
+      },
+      "limitations": [
+        "Corpus-native Hermes tool results are strings and carry no error field, so error value remains unrecorded.",
+        "Hermes has no per-call interruption marker; an unmatched call remains open or interrupted without a fabricated result."
+      ]
+    },
+    {
+      "name": "gais",
+      "fixture": "gais.json",
+      "coverage": {
+        "calls": 3,
+        "results": 2,
+        "duplicateCallIds": 2,
+        "missingCallIds": 1,
+        "openCalls": 1,
+        "resultBlockKinds": ["text", "unmodeled"],
+        "errorProvenance": ["inferred", "native"]
+      },
+      "limitations": [
+        "Google AI Studio functionCall and functionResponse IDs are optional; a missing-ID response cannot be linked from name and order alone.",
+        "A response object is retained as one exact typed raw block rather than projected into invented text fields."
+      ]
+    },
+    {
+      "name": "cursor-ide",
+      "fixture": "cursor-ide.json",
+      "coverage": {
+        "calls": 3,
+        "results": 2,
+        "duplicateCallIds": 2,
+        "missingCallIds": 1,
+        "openCalls": 1,
+        "resultBlockKinds": ["text", "unmodeled"],
+        "errorProvenance": ["native"]
+      },
+      "limitations": [
+        "Cursor IDE colocates a call, optional raw result, and status in toolFormerData; a terminal status without result must not fabricate a result.",
+        "The converter allocates unique IR IDs for duplicate or missing native IDs; this audit continues to compare the raw fixture IDs and therefore detects any target that omits that provenance."
+      ]
+    }
+  ],
+  "targets": [
+    {
+      "name": "loom",
+      "extension": ".json",
+      "launch": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "pi",
+      "extension": ".jsonl",
+      "launch": {
+        "kind": "pi-0.74.0",
+        "cwdPrefix": "/tmp/agent-convert-lifecycle-matrix",
+        "provider": "lifecycle-provider",
+        "model": "lifecycle-model",
+        "timestamp": "2026-07-21T12:34:56.000Z",
+        "harnessVersion": "0.74.0",
+        "assistantHistory": "carrier"
+      }
+    },
+    {
+      "name": "claude",
+      "extension": ".jsonl",
+      "launch": {
+        "kind": "claude-2.1.216",
+        "cwdPrefix": "/tmp/agent-convert-lifecycle-matrix",
+        "timestamp": "2026-07-21T12:34:56.000Z",
+        "harnessVersion": "2.1.216"
+      }
+    },
+    {
+      "name": "codex",
+      "extension": ".jsonl",
+      "launch": {
+        "kind": "codex-0.144.1",
+        "cwdPrefix": "/tmp/agent-convert-lifecycle-matrix",
+        "provider": "openai",
+        "model": "gpt-5.5",
+        "timestamp": "2026-07-21T12:34:56.000Z",
+        "harnessVersion": "0.144.1",
+        "approvalPolicy": "on-request",
+        "networkAccess": false,
+        "excludeTmpdirEnvVar": true,
+        "excludeSlashTmp": true,
+        "summary": "concise"
+      }
+    },
+    {
+      "name": "cursor-agent",
+      "extension": ".jsonl",
+      "launch": {
+        "kind": "none"
+      }
+    }
+  ],
+  "cells": [
+    {"name":"loom__to__loom","source":"loom","target":"loom","targetSessionId":null,"expected":{"kind":"success","disposition":"exact"}},
+    {"name":"loom__to__pi","source":"loom","target":"pi","targetSessionId":"12000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
+    {"name":"loom__to__claude","source":"loom","target":"claude","targetSessionId":"13000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
+    {"name":"loom__to__codex","source":"loom","target":"codex","targetSessionId":"14000000-0000-4000-8000-000000000000","expected":{"kind":"refusal","status":3,"policy":"destructiveLoss","obligationRepr":"[Loom.Ops.Obligation.dropMedia]"}},
+    {"name":"loom__to__cursor-agent","source":"loom","target":"cursor-agent","targetSessionId":null,"expected":{"kind":"refusal","status":3,"policy":"destructiveLoss","obligationRepr":"[Loom.Ops.Obligation.dropMedia, Loom.Ops.Obligation.dropUnmodeled]"}},
+
+    {"name":"pi__to__loom","source":"pi","target":"loom","targetSessionId":null,"expected":{"kind":"success","disposition":"exact"}},
+    {"name":"pi__to__pi","source":"pi","target":"pi","targetSessionId":"22000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"exact"}},
+    {"name":"pi__to__claude","source":"pi","target":"claude","targetSessionId":"23000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
+    {"name":"pi__to__codex","source":"pi","target":"codex","targetSessionId":"24000000-0000-4000-8000-000000000000","expected":{"kind":"refusal","status":3,"policy":"destructiveLoss","obligationRepr":"[Loom.Ops.Obligation.dropMedia]"}},
+    {"name":"pi__to__cursor-agent","source":"pi","target":"cursor-agent","targetSessionId":null,"expected":{"kind":"refusal","status":3,"policy":"destructiveLoss","obligationRepr":"[Loom.Ops.Obligation.dropMedia]"}},
+
+    {"name":"claude__to__loom","source":"claude","target":"loom","targetSessionId":null,"expected":{"kind":"success","disposition":"exact"}},
+    {"name":"claude__to__pi","source":"claude","target":"pi","targetSessionId":"32000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
+    {"name":"claude__to__claude","source":"claude","target":"claude","targetSessionId":"33000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
+    {"name":"claude__to__codex","source":"claude","target":"codex","targetSessionId":"34000000-0000-4000-8000-000000000000","expected":{"kind":"refusal","status":3,"policy":"destructiveLoss","obligationRepr":"[Loom.Ops.Obligation.dropMedia]"}},
+    {"name":"claude__to__cursor-agent","source":"claude","target":"cursor-agent","targetSessionId":null,"expected":{"kind":"refusal","status":3,"policy":"destructiveLoss","obligationRepr":"[Loom.Ops.Obligation.dropMedia]"}},
+
+    {"name":"codex__to__loom","source":"codex","target":"loom","targetSessionId":null,"expected":{"kind":"success","disposition":"exact"}},
+    {"name":"codex__to__pi","source":"codex","target":"pi","targetSessionId":"42000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
+    {"name":"codex__to__claude","source":"codex","target":"claude","targetSessionId":"43000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
+    {"name":"codex__to__codex","source":"codex","target":"codex","targetSessionId":"44000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
+    {"name":"codex__to__cursor-agent","source":"codex","target":"cursor-agent","targetSessionId":null,"expected":{"kind":"success","disposition":"allow-native-to-historical"}},
+
+    {"name":"cursor-agent__to__loom","source":"cursor-agent","target":"loom","targetSessionId":null,"expected":{"kind":"success","disposition":"exact"}},
+    {"name":"cursor-agent__to__pi","source":"cursor-agent","target":"pi","targetSessionId":"52000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
+    {"name":"cursor-agent__to__claude","source":"cursor-agent","target":"claude","targetSessionId":"53000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
+    {"name":"cursor-agent__to__codex","source":"cursor-agent","target":"codex","targetSessionId":"54000000-0000-4000-8000-000000000000","expected":{"kind":"refusal","status":3,"policy":"destructiveLoss","obligationRepr":"[Loom.Ops.Obligation.dropEvents]"}},
+    {"name":"cursor-agent__to__cursor-agent","source":"cursor-agent","target":"cursor-agent","targetSessionId":null,"expected":{"kind":"refusal","status":3,"policy":"cursorRuntimeArchiveOnly","reason":"turnEndedControl"}},
+
+    {"name":"hermes__to__loom","source":"hermes","target":"loom","targetSessionId":null,"expected":{"kind":"success","disposition":"exact"}},
+    {"name":"hermes__to__pi","source":"hermes","target":"pi","targetSessionId":"62000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
+    {"name":"hermes__to__claude","source":"hermes","target":"claude","targetSessionId":"63000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
+    {"name":"hermes__to__codex","source":"hermes","target":"codex","targetSessionId":"64000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
+    {"name":"hermes__to__cursor-agent","source":"hermes","target":"cursor-agent","targetSessionId":null,"expected":{"kind":"refusal","status":3,"policy":"destructiveLoss","obligationRepr":"[Loom.Ops.Obligation.dropToolResults, Loom.Ops.Obligation.dropSourceIdentity, Loom.Ops.Obligation.dropEnvironment [\"model\", \"sessionId\"]]"}},
+
+    {"name":"gais__to__loom","source":"gais","target":"loom","targetSessionId":null,"expected":{"kind":"success","disposition":"exact"}},
+    {"name":"gais__to__pi","source":"gais","target":"pi","targetSessionId":"72000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
+    {"name":"gais__to__claude","source":"gais","target":"claude","targetSessionId":"73000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
+    {"name":"gais__to__codex","source":"gais","target":"codex","targetSessionId":"74000000-0000-4000-8000-000000000000","expected":{"kind":"refusal","status":3,"policy":"destructiveLoss","obligationRepr":"[Loom.Ops.Obligation.dropEvents]"}},
+    {"name":"gais__to__cursor-agent","source":"gais","target":"cursor-agent","targetSessionId":null,"expected":{"kind":"refusal","status":3,"policy":"destructiveLoss","obligationRepr":"[Loom.Ops.Obligation.dropEvents]"}},
+
+    {"name":"cursor-ide__to__loom","source":"cursor-ide","target":"loom","targetSessionId":null,"expected":{"kind":"success","disposition":"exact"}},
+    {"name":"cursor-ide__to__pi","source":"cursor-ide","target":"pi","targetSessionId":"82000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
+    {"name":"cursor-ide__to__claude","source":"cursor-ide","target":"claude","targetSessionId":"83000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
+    {"name":"cursor-ide__to__codex","source":"cursor-ide","target":"codex","targetSessionId":"84000000-0000-4000-8000-000000000000","expected":{"kind":"success","disposition":"allow-native-to-historical"}},
+    {"name":"cursor-ide__to__cursor-agent","source":"cursor-ide","target":"cursor-agent","targetSessionId":null,"expected":{"kind":"refusal","status":3,"policy":"destructiveLoss","obligationRepr":"[Loom.Ops.Obligation.dropToolResults, Loom.Ops.Obligation.dropSourceIdentity, Loom.Ops.Obligation.dropEnvironment [\"cwd\", \"sessionId\"], Loom.Ops.Obligation.dropRecordedTime]"}}
+  ]
+}

@@ -1,0 +1,68 @@
+{
+  "schema": "loom.transcript.v0",
+  "origin": {
+    "format": "codex",
+    "sourceRef": "wire-number-indexes"
+  },
+  "env": {
+    "cwd": "/tmp/loom-wire-numbers"
+  },
+  "threads": [
+    {
+      "index": 0,
+      "kind": {
+        "kind": "main"
+      },
+      "label": "main"
+    }
+  ],
+  "entries": [
+    {
+      "index": 0,
+      "thread": 0,
+      "time": {
+        "kind": "sequenced",
+        "ord": 0
+      },
+      "payload": {
+        "type": "userMsg",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "number index root"
+          }
+        ]
+      },
+      "origin": {
+        "format": "codex",
+        "sourceRef": "wire-number-indexes",
+        "rawId": "n0"
+      }
+    },
+    {
+      "index": 1,
+      "parent": 0,
+      "thread": 0,
+      "time": {
+        "kind": "sequenced",
+        "ord": 1
+      },
+      "payload": {
+        "type": "assistantMsg",
+        "blocks": [
+          {
+            "type": "text",
+            "text": "number index reply"
+          }
+        ]
+      },
+      "origin": {
+        "format": "codex",
+        "sourceRef": "wire-number-indexes",
+        "rawId": "n1"
+      }
+    }
+  ],
+  "importNotes": [],
+  "activeLeaf": 1
+}

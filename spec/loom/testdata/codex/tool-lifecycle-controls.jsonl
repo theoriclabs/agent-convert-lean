@@ -1,0 +1,11 @@
+{"type":"session_meta","timestamp":"2026-07-10T00:00:00Z","payload":{"id":"codex-tool-control-fixture","cwd":"/tmp/codex-tool-control","cli_version":"0.144.1"}}
+{"type":"response_item","timestamp":"2026-07-10T00:00:01Z","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<permissions instructions>\nread-only\n</permissions instructions>"},{"type":"input_text","text":"plain developer policy remains control-plane"}]}}
+{"type":"response_item","timestamp":"2026-07-10T00:00:02Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n<cwd>/tmp/codex-tool-control</cwd>\n</environment_context>"}]}}
+{"type":"event_msg","timestamp":"2026-07-10T00:00:02Z","payload":{"type":"user_message","message":"<environment_context>\n<cwd>/tmp/codex-tool-control</cwd>\n</environment_context>"}}
+{"type":"response_item","timestamp":"2026-07-10T00:00:03Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Run the checks and retain every result block."}]}}
+{"type":"response_item","timestamp":"2026-07-10T00:00:04Z","payload":{"type":"function_call","name":"exec_command","call_id":"call-function","arguments":"{\"cmd\":\"printf ok\",\"timeout_ms\":3210}"}}
+{"type":"response_item","timestamp":"2026-07-10T00:00:05Z","payload":{"type":"function_call_output","call_id":"call-function","output":[{"type":"input_text","text":"first block\n"},{"type":"future_block","nested":{"kept":true}},{"type":"output_text","text":"last block\n"}]}}
+{"type":"response_item","timestamp":"2026-07-10T00:00:06Z","payload":{"type":"tool_search_call","id":"tsc-fixture","call_id":"call-search","status":"completed","arguments":{"query":"multi-agent tools","limit":3}}}
+{"type":"response_item","timestamp":"2026-07-10T00:00:07Z","payload":{"type":"tool_search_output","call_id":"call-search","status":"completed","execution":"client","tools":[{"type":"namespace","name":"multi_agent_v1"}]}}
+{"type":"response_item","timestamp":"2026-07-10T00:00:08Z","payload":{"type":"custom_tool_call","name":"exec","call_id":"call-interrupted","input":"text(await tools.exec_command({cmd: 'pwd'}))"}}
+{"type":"response_item","timestamp":"2026-07-10T00:00:09Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"The recorded checks are complete."}]}}
