@@ -36,33 +36,6 @@ Convert a Codex or Pi session to Claude Code:
 loom convert <session-id> claude
 ```
 
-Loom finds the session, installs the conversion under `~/.claude/projects`,
-and prints the exact resume command:
-
-```text
-cd /path/to/project && claude --resume <session-id>
-```
-
-Paths work too:
-
-```sh
-loom convert ~/.codex/sessions/2026/07/27/rollout-….jsonl claude
-```
-
-Add an output path to write a file instead of installing:
-
-```sh
-loom convert session.jsonl loom session.loom.json
-loom convert session.jsonl codex session.codex.jsonl
-loom convert session.jsonl pi session.pi.jsonl
-```
-
-Without an output path, Claude is installed and other targets go to stdout:
-
-```sh
-loom convert session.jsonl loom > session.loom.json
-```
-
 ## Good defaults
 
 `convert` automatically:
