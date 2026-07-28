@@ -79,28 +79,4 @@ Pi and Codex are flat targets, so they default to the main conversation. If a
 caller explicitly requests non-main threads, Loom refuses instead of silently
 flattening them.
 
-## Checked, not guessed
-
-Agent sessions contain more than chat: tool calls, results, reasoning,
-compaction, branches, subagents, environment records, and harness controls.
-Loom converts through a typed, format-neutral transcript:
-
-```text
-source -> parse -> validate -> Loom IR -> target policy -> validate -> publish
-```
-
-Exports are rendered completely before an atomic rename. Failures are explicit:
-invocation `1`, import `2`, and export/validation/publication `3`.
-
-Build the executable and proof-bearing requirements together:
-
-```sh
-lake build loom LoomRequirements
-```
-
-Deep dives: [requirements](./REQUIREMENTS.md),
-[evidence](./REQUIREMENTS_EVIDENCE.md),
-[human validation](./HUMAN_VALIDATION.md),
-[release procedure](./RELEASE_CHECKLIST.md), and [audit history](./AUDIT.md).
-
 MIT licensed. See [`LICENSE`](./LICENSE).
