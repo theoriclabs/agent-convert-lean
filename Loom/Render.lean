@@ -23,6 +23,7 @@ private def formatText : Format -> String
   | .cursorIde => "cursor-ide"
   | .hermes => "hermes"
   | .googleAiStudio => "google-ai-studio"
+  | .openCode => "opencode"
   | .other name => name
 
 private def timeText : Time -> String

@@ -9,7 +9,7 @@ public command:
 loom convert <session-id-or-file> <target> [output]
 ```
 
-Targets are `claude`, `codex`, `pi`, `cursor-agent`, and `loom`.
+Targets are `claude`, `codex`, `pi`, `cursor-agent`, `opencode`, and `loom`.
 
 ## Do the conversion
 
@@ -35,6 +35,10 @@ A bare session ID is resolved across the standard Codex, Claude Code, and Pi
 stores. An explicit path can point to any supported source. Loom detects the
 format from the transcript itself.
 
+For OpenCode, use its supported interchange file: `opencode export
+<session-id> > session.json`. A Loom OpenCode target can be installed with
+`opencode import <output.json>`.
+
 When the target is Claude and `output` is omitted, Loom installs the session in
 `~/.claude/projects` and prints the exact `claude --resume` command. For every
 other target, provide a new output path; omit it only when stdout is intended.
@@ -50,6 +54,10 @@ Examples:
 
 # Convert an explicit source to a Codex file using safe defaults.
 "$LOOM" convert /absolute/path/to/session.jsonl codex ./session.codex.jsonl
+
+# Convert to OpenCode, then register the resulting session.
+"$LOOM" convert /absolute/path/to/session.jsonl opencode ./session.opencode.json
+opencode import ./session.opencode.json
 ```
 
 ## What you must check

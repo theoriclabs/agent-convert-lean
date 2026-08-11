@@ -187,6 +187,7 @@ private def formatJson : Format -> Json
   | .cursorIde => Json.str "cursor-ide"
   | .hermes => Json.str "hermes"
   | .googleAiStudio => Json.str "google-ai-studio"
+  | .openCode => Json.str "opencode"
   | .other name => Json.mkObj [("other", Json.str name)]
 
 private def timeJson : Time -> Json

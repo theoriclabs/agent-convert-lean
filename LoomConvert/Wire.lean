@@ -127,6 +127,7 @@ def formatToWireString : Format → String
   | .cursorIde => "cursor-ide"
   | .hermes => "hermes"
   | .googleAiStudio => "google-ai-studio"
+  | .openCode => "opencode"
   | .other name => name
 
 def formatFromWireString : String → Format
@@ -137,6 +138,7 @@ def formatFromWireString : String → Format
   | "cursor-ide" => .cursorIde
   | "hermes" => .hermes
   | "google-ai-studio" => .googleAiStudio
+  | "opencode" => .openCode
   | name => .other name
 
 /-- A legacy bare label is ambiguous only when an open `.other` value reuses a
@@ -896,7 +898,7 @@ private def wireEntryDispositions : List EntryDisposition :=
 
 private def wireBuiltinFormats : List Format := [
   .pi, .claudeCode, .codexCli, .cursorAgent, .cursorIde, .hermes,
-  .googleAiStudio]
+  .googleAiStudio, .openCode]
 
 private def wireFormats : List Format :=
   wireBuiltinFormats ++ [.other "future-format"]

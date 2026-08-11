@@ -733,6 +733,7 @@ private def transcriptRawIdentityPreserved (tgt : Format) (t : Transcript) : Boo
             emitted == some rawId
         | .claudeCode => true -- changed identities use the versioned identity carrier
         | .codexCli => t.env.sessionId == some rawId
+        | .openCode => true -- source identities ride in _agentConvert metadata
         | _ => false
 
 def hasUnpreservedSourceIdentity (tgt : Format) (t : Transcript) : Bool :=
@@ -745,6 +746,7 @@ def hasUnpreservedSourceIdentity (tgt : Format) (t : Transcript) : Bool :=
     else match tgt with
       | .pi => !plannedEntryIdsPreservePresentIds t
       | .claudeCode => false -- invalid/duplicate IDs are archived before UUID synthesis
+      | .openCode => false -- source ids are retained in part/session metadata
       | _ => true
   sessionLost || entryIdsLost || !transcriptRawIdentityPreserved tgt t
 
@@ -816,6 +818,7 @@ private def targetPreservesEnvironmentField
         claudeNativePreservesEnvironmentField t field
   | _, .codexCli => codexCarriesSourceEnvironment t ||
       t.origin.format == Format.codexCli
+  | _, .openCode => true
   | _, _ => false
 
 def unpreservedEnvironmentFields (tgt : Format) (t : Transcript) : List String :=
@@ -881,7 +884,7 @@ non-recorded `Time` constructor exactly. Codex still uses its launch timestamp
 operationally, but its separate carrier restores the source value. Cursor has
 no carrier for interpolated/sequenced facts. -/
 def preservesNonRecordedTimeProvenance : Format → Bool
-  | .pi | .claudeCode | .codexCli => true
+  | .pi | .claudeCode | .codexCli | .openCode => true
   | _ => false
 
 private def losesNonRecordedTimeProvenance (tgt : Format) (t : Transcript) : Bool :=
@@ -926,7 +929,7 @@ def hasRecordedTime (t : Transcript) : Bool :=
 /-- Timestamped target exporters that serialize `Time.recorded` as UTC and
 whose importers lift that exact millisecond value back into the IR. -/
 def preservesRecordedTime : Format → Bool
-  | .pi | .claudeCode | .codexCli => true
+  | .pi | .claudeCode | .codexCli | .openCode => true
   | _ => false
 
 /-- Actual recorded time is destructive only when the target cannot carry the
@@ -940,7 +943,7 @@ def hasUnexportableTime (tgt : Format) (t : Transcript) : Bool :=
     | .absent | .interpolated _ _ | .sequenced _ => false
 
 def synthesizesTargetTimestamps : Format → Bool
-  | .pi | .claudeCode | .codexCli => true
+  | .pi | .claudeCode | .codexCli | .openCode => true
   | _ => false
 
 /-- Pi's exporter currently prefers a source-scoped `extras.ts` or explicit
@@ -1216,14 +1219,14 @@ def obligations (tgt : Format) (t : Transcript) : List Obligation := Id.run do
   -- exact native checkpoint or a typed historical carrier. Cursor has no native
   -- compaction form.
   if hasCompaction nativeSurface then
-    if tgt == Format.pi || tgt == Format.claudeCode then
+    if tgt == Format.pi || tgt == Format.claudeCode || tgt == Format.openCode then
       pure ()
     else if tgt == Format.codexCli then
       if !codexTargetCompactionsValid t then out := out.push .dropCompaction
     else
       out := out.push .dropCompaction
   if hasEvents nativeSurface then
-    if tgt = Format.pi || tgt = Format.claudeCode then
+    if tgt = Format.pi || tgt = Format.claudeCode || tgt = Format.openCode then
       pure ()
     else if tgt = Format.codexCli then
       if hasCodexUnexportableEvents nativeSurface then out := out.push .dropEvents

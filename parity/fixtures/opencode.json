@@ -1,0 +1,87 @@
+{
+  "info": {
+    "id": "ses_fixture",
+    "slug": "fixture",
+    "projectID": "global",
+    "directory": "/tmp/project",
+    "title": "OpenCode fixture",
+    "version": "1.1.34",
+    "time": { "created": 1000, "updated": 1002 }
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "msg_user",
+        "sessionID": "ses_fixture",
+        "role": "user",
+        "time": { "created": 1000 },
+        "agent": "build",
+        "model": { "providerID": "openai", "modelID": "gpt-5" }
+      },
+      "parts": [
+        {
+          "id": "prt_user",
+          "sessionID": "ses_fixture",
+          "messageID": "msg_user",
+          "type": "text",
+          "text": "hello"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "msg_assistant",
+        "sessionID": "ses_fixture",
+        "role": "assistant",
+        "time": { "created": 1001, "completed": 1002 },
+        "parentID": "msg_user",
+        "modelID": "gpt-5",
+        "providerID": "openai",
+        "mode": "build",
+        "agent": "build",
+        "path": { "cwd": "/tmp/project", "root": "/tmp/project" },
+        "cost": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": { "read": 0, "write": 0 }
+        },
+        "finish": "stop"
+      },
+      "parts": [
+        {
+          "id": "prt_reason",
+          "sessionID": "ses_fixture",
+          "messageID": "msg_assistant",
+          "type": "reasoning",
+          "text": "think",
+          "time": { "start": 1001 }
+        },
+        {
+          "id": "prt_tool",
+          "sessionID": "ses_fixture",
+          "messageID": "msg_assistant",
+          "type": "tool",
+          "callID": "call_1",
+          "tool": "bash",
+          "state": {
+            "status": "completed",
+            "input": { "command": "pwd" },
+            "output": "/tmp/project",
+            "title": "pwd",
+            "metadata": {},
+            "time": { "start": 1001, "end": 1002 }
+          }
+        },
+        {
+          "id": "prt_text",
+          "sessionID": "ses_fixture",
+          "messageID": "msg_assistant",
+          "type": "text",
+          "text": "done"
+        }
+      ]
+    }
+  ]
+}
