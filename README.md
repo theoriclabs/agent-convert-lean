@@ -36,6 +36,16 @@ Convert a Codex or Pi session to Claude Code:
 loom convert <session-id> claude
 ```
 
+Convert an exported OpenCode chat, or produce a file OpenCode can import:
+
+```sh
+opencode export <session-id> > session.opencode.json
+loom convert session.opencode.json codex session.codex.jsonl
+
+loom convert session.codex.jsonl opencode session.opencode.json
+opencode import session.opencode.json
+```
+
 ## Good defaults
 
 `convert` automatically:
@@ -68,14 +78,16 @@ Run `loom` with no arguments to see the available overrides.
 | Codex CLI | yes | yes | File / stdout |
 | Pi | yes | yes | File / stdout |
 | Cursor Agent | yes | yes | File / stdout |
+| OpenCode | yes | yes | Import/export JSON file |
 | Loom wire | yes | yes | Portable archive |
 | Cursor IDE | yes | — | Source only |
 | Hermes | yes | — | Source only |
 | Google AI Studio | yes | — | Source only |
 
-Targets: `claude`, `codex`, `pi`, `cursor-agent`, and `loom`.
+Targets: `claude`, `codex`, `pi`, `cursor-agent`, `opencode`, and `loom`.
 
-Pi and Codex are flat targets, so they default to the main conversation. If a
+Pi, Codex, and OpenCode are flat targets, so they default to the main
+conversation. If a
 caller explicitly requests non-main threads, Loom refuses instead of silently
 flattening them.
 

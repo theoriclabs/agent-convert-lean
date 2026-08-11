@@ -6,6 +6,7 @@ import Loom.Formats.CursorAgent
 import Loom.Formats.CursorIde
 import Loom.Formats.Hermes
 import Loom.Formats.GoogleAiStudio
+import Loom.Formats.OpenCode
 
 /-!
 # Loom — the format registry
@@ -33,6 +34,7 @@ def supports : Format → Concept → Support
   | .cursorIde,      c => Formats.CursorIde.supports c
   | .hermes,         c => Formats.Hermes.supports c
   | .googleAiStudio, c => Formats.GoogleAiStudio.supports c
+  | .openCode,       c => Formats.OpenCode.supports c
   | .other _,        _ => .unverified
 
 /-- Concepts degraded or dropped when converting `src → tgt`.

@@ -24,6 +24,7 @@ def formatByCliName? (fmt : String) : Option Format :=
   | "hermes"                    => some .hermes
   | "gais" | "google-ai-studio" => some .googleAiStudio
   | "cursor-ide"                => some .cursorIde
+  | "opencode"                  => some .openCode
   | _                           => none
 
 /-- Single-file flat exporters write only the main thread. Sidechain/detached
@@ -971,6 +972,7 @@ private def targetValidityBlocker? (toFmt : String) (t : Transcript) : Option St
     | "cursor-agent" => match LoomConvert.exportCursorAgentTargetChecked t with
       | .ok _ => none
       | .error error => some error
+    | "opencode" => (openCodeTargetExportPrerequisiteFailures t).head?
     | _ => none
   failure?.map (fun error => s!"target '{toFmt}' validity preflight failed: {error}")
 
@@ -1037,6 +1039,7 @@ def importByFormat (fmt text : String) : Except String Transcript :=
   | "hermes"                    => importHermes text
   | "gais" | "google-ai-studio" => importGoogleAiStudio text
   | "cursor-ide"                => importCursorIde text  -- text = {composer,bubbles} JSON
+  | "opencode"                  => importOpenCode text
   | _ => .error s!"unknown source format: {fmt}"
 
 /-- Loom IR → target format text. `loom` is the versioned, thread-preserving
@@ -1048,7 +1051,8 @@ def exportByFormat (fmt : String) (t : Transcript) : Except String String :=
   | "claude"       => exportClaudeCodeChecked t
   | "codex"        => exportCodexCliChecked t
   | "cursor-agent" => LoomConvert.exportCursorAgentTargetChecked t
-  | _ => .error s!"no exporter for target '{fmt}' (exporters: loom, pi, claude, codex, cursor-agent)"
+  | "opencode"     => exportOpenCodeChecked t
+  | _ => .error s!"no exporter for target '{fmt}' (exporters: loom, pi, claude, codex, cursor-agent, opencode)"
 
 /-- Import → (well-formedness + hard export-obligation checks) → export. Refuses
 to emit a structurally invalid IR, or a stitched sidechain transcript through a
@@ -1897,6 +1901,11 @@ def detectFormat (text : String) : Except String String := do
     | some record => pure record
     | none => .error "empty input"
   if jsonString? first "schema" == some "loom.transcript.v0" then .ok "loom"
+  else if (jsonValue? first "info").isSome &&
+      (jsonValue? first "messages").isSome &&
+      ((jsonValue? first "info").bind (fun info => jsonString? info "id")).isSome &&
+      ((jsonValue? first "info").bind (fun info => jsonString? info "version")).isSome
+    then .ok "opencode"
   else if (jsonValue? first "composer").isSome &&
       (jsonValue? first "bubbles").isSome then .ok "cursor-ide"
   else if (jsonValue? first "chunkedPrompt").isSome then .ok "gais"
@@ -1936,6 +1945,10 @@ example : detectsAs "cursor-agent"
 
 example : detectsAs "cursor-ide"
     "{\"composer\":{\"composerId\":\"c\"},\"bubbles\":[]}" = true := by
+  native_decide
+
+example : detectsAs "opencode"
+    "{\"info\":{\"id\":\"ses_x\",\"version\":\"1.1.34\"},\"messages\":[]}" = true := by
   native_decide
 
 example : detectionRejects
@@ -2430,6 +2443,21 @@ and a target. This wrapper resolves and detects the source, derives only target
 values that have an unambiguous continuation default, and delegates to the same
 checked pipeline. Explicit flags always win. -/
 
+/-- Stable UUIDv8 for a foreign source whose native session id is not a UUID.
+An explicit `--target-session-id` is never repaired, so invalid caller input
+still receives the target validator's diagnostic. -/
+private def smartGeneratedUuid (material : String) : String :=
+  let upper := (String.hash ("agent-convert.smart.uuid.a|" ++ material)).toNat
+  let lower := (String.hash ("agent-convert.smart.uuid.b|" ++ material)).toNat
+  let packed := upper * (2 ^ 64) + lower
+  let raw := (Nat.toDigits 16 packed).reverse.take 30 |>.reverse
+  let digits := List.replicate (30 - raw.length) '0' ++ raw
+  String.ofList (digits.take 8) ++ "-" ++
+    String.ofList ((digits.drop 8).take 4) ++ "-8" ++
+    String.ofList ((digits.drop 12).take 3) ++ "-8" ++
+    String.ofList ((digits.drop 15).take 3) ++ "-" ++
+    String.ofList ((digits.drop 18).take 12)
+
 private def smartTargetOptions (toFmt : String) (source : Transcript)
     (opts : CliOptions) : CliOptions :=
   let continuation : CliOptions := { opts with
@@ -2452,6 +2480,14 @@ private def smartTargetOptions (toFmt : String) (source : Transcript)
       harnessVersion := continuation.harnessVersion.orElse (fun _ => some piTargetVersion)
       piAssistantHistory := continuation.piAssistantHistory.orElse (fun _ => some "context") }
   | "codex" => { continuation with
+      sessionId := match opts.sessionId with
+        | some explicit => some explicit
+        | none => match source.env.sessionId with
+          | some native =>
+              if codexUuidValid native then some native
+              else some (smartGeneratedUuid (native ++ "|" ++ toString source.entries.size))
+          | none => some (smartGeneratedUuid
+              (source.origin.sourceRef ++ "|" ++ toString source.entries.size))
       provider := continuation.provider.orElse (fun _ =>
         if source.origin.format == .codexCli then
           source.env.provider.orElse (fun _ => some "openai")
@@ -2469,6 +2505,11 @@ private def smartTargetOptions (toFmt : String) (source : Transcript)
         (fun _ => some true)
       codexExcludeSlashTmp := continuation.codexExcludeSlashTmp.orElse (fun _ => some true)
       codexSummary := continuation.codexSummary.orElse (fun _ => some "auto") }
+  | "opencode" => { continuation with
+      provider := continuation.provider.orElse (fun _ => some "openai")
+      model := continuation.model.orElse (fun _ => some "gpt-5")
+      harnessVersion := continuation.harnessVersion.orElse
+        (fun _ => some openCodeTargetVersion) }
   | _ => opts
 
 private def smartTargetDefaultsAreComplete : Bool :=
@@ -2508,11 +2549,11 @@ private def smartTargetDefaultsAreComplete : Bool :=
 example : smartTargetDefaultsAreComplete = true := by native_decide
 
 private def smartTarget (target : String) : Bool :=
-  ["loom", "pi", "claude", "codex", "cursor-agent"].contains target
+  ["loom", "pi", "claude", "codex", "cursor-agent", "opencode"].contains target
 
 private def explicitSourceName (source : String) : Bool :=
   ["loom", "pi", "claude", "codex", "cursor-agent", "hermes", "gais",
-    "google-ai-studio", "cursor-ide"].contains source
+    "google-ai-studio", "cursor-ide", "opencode"].contains source
 
 /-- `loom convert <session-id|input> <target> [output]`.
 
@@ -2547,7 +2588,7 @@ def runSmartConvert (ref toFmt : String) (outp : Option String)
 def usage : String :=
   "loom — convert a coding-agent session to another harness\n\n" ++
   "  loom convert <session-id|input> <target> [output] [options]\n\n" ++
-  "  target: loom | pi | claude | codex | cursor-agent\n" ++
+  "  target: loom | pi | claude | codex | cursor-agent | opencode\n" ++
   "  no output: install Claude sessions; write other targets to stdout\n" ++
   "  output:    write a converted file\n\n" ++
   "Options override detected/default target values:\n" ++

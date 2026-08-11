@@ -28,6 +28,7 @@ inductive Format where
   | cursorIde
   | hermes
   | googleAiStudio
+  | openCode
   | other (name : String)
   deriving Repr, DecidableEq
 
