@@ -22,7 +22,7 @@ three-digit millisecond component. -/
 def epochMsToIso8601 (value : Timestamp) : String :=
   let stamp := Std.Time.Timestamp.ofMillisecondsSinceUnixEpoch
     (Std.Time.Millisecond.Offset.ofNat value.ms)
-  let utc := Std.Time.DateTime.ofTimestamp stamp .GMT
+  let utc := Std.Time.DateTime.ofTimestamp stamp .UTC
   let wholeSeconds := Std.Time.DateTime.toISO8601String utc
   let utcPrefix := if wholeSeconds.endsWith "Z" then
       (wholeSeconds.dropEnd 1).toString
@@ -30,10 +30,10 @@ def epochMsToIso8601 (value : Timestamp) : String :=
   utcPrefix ++ "." ++ padNat 3 (value.ms % 1000) ++ "Z"
 
 private def wholeSecondEpochMs? (value : String) : Option Nat := do
-  let parsed ← (Std.Time.ZonedDateTime.fromISO8601String value).toOption
+  let parsed ← (Std.Time.DateTime.fromISO8601String value).toOption
   let milliseconds := parsed.timestamp.toMillisecondsSinceUnixEpoch.val
   guard (milliseconds ≥ 0)
-  pure milliseconds.toNat
+  pure milliseconds.natAbs
 
 /-- Parse the UTC forms emitted by supported harnesses when their precision is
 exactly representable by `Timestamp`: `YYYY-MM-DDTHH:mm:ssZ` or the same form with

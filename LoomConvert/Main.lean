@@ -1569,12 +1569,16 @@ elab "loomCoreRevision%" : term => do
   let revision := loom.coreRevision.get (← getOptions)
   elabTerm (Syntax.mkStrLit revision) (some (mkConst ``String))
 
-def coreVersion : String := "0.2.0-preview.0"
+def coreVersion : String := "0.2.0-preview.1"
 def coreProtocol : String := "loom.cli.v1"
 def coreRevision : String := loomCoreRevision%
 def coreSourceRepository : String := "https://github.com/theoriclabs/agent-convert-lean"
 def coreSourcePath : String := "."
 def coreWireSchema : String := "loom.transcript.v0"
+def coreCapabilities : Array String := #["claude.semantic-tool-translation.v1"]
+
+private def coreCapabilitiesJson : Lean.Json :=
+  Lean.Json.arr (coreCapabilities.map Lean.Json.str)
 
 private def transcriptMessageCount (t : Transcript) : Nat :=
   t.entries.toList.countP (fun e => match e.payload with
@@ -1755,6 +1759,7 @@ private def transcriptSummaryJson
     ("engineVersion", Lean.Json.str coreVersion),
     ("protocolVersion", Lean.Json.str coreProtocol),
     ("coreRevision", Lean.Json.str coreRevision),
+    ("capabilities", coreCapabilitiesJson),
     ("targetTriple", Lean.Json.str System.Platform.target),
     ("from", Lean.Json.str fromFmt),
     ("to", Lean.Json.str toFmt), ("input", Lean.Json.str inp),
@@ -1982,6 +1987,8 @@ def runVersion (json : Bool) : IO UInt32 := do
     ("engineVersion", Lean.Json.str coreVersion),
     ("protocolVersion", Lean.Json.str coreProtocol),
     ("coreRevision", Lean.Json.str coreRevision),
+    ("compilerVersion", Lean.Json.str Lean.versionString),
+    ("capabilities", coreCapabilitiesJson),
     ("sourceRepository", Lean.Json.str coreSourceRepository),
     ("sourcePath", Lean.Json.str coreSourcePath),
     ("targetTriple", Lean.Json.str System.Platform.target),

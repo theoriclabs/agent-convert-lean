@@ -455,12 +455,12 @@ private def claudeSourceEnvRawCarrierExtrasKey : String :=
   "claudeSourceEnvRawCarrier"
 
 /-- The external Claude Code build these emissions are validated against
-(installed 2.1.216; the resumable JSONL schema was stable across 2.1.206–2.1.216).
+(installed 2.1.251; the resumable JSONL schema was stable across 2.1.206–2.1.251).
 This is an assumption we *report*, not a value we emit: Claude's resumable JSONL
 has no grounded target-version slot, so no harness/version string is ever written
 into the target records. A source harnessVersion is preserved only as inert
 provenance in the source-environment carrier, never conflated with this target. -/
-def claudeTargetValidationBuild : String := "2.1.216"
+def claudeTargetValidationBuild : String := "2.1.251"
 
 /-- Encode a complete `EnvInfo` as the versioned source-environment payload.
 Every field is emitted as string-or-null so absence is explicit and reversible. -/
@@ -1220,6 +1220,45 @@ private def cCarrierBlockIndices? (j : Json) : Option (List Nat) := do
 private def cCarrierBlockIndices (j : Json) : List Nat :=
   (cCarrierBlockIndices? j).getD []
 
+/-! ### Error-status inference for results whose source omitted `is_error`
+
+Claude Code omits `is_error` on some real results (async agent launches, some
+file tools). A missing field is not an asserted success, so the value is
+*guessed* from the output text into `ErrorSignal.inferred` — the same policy the
+Codex importer already applies via `codexOutputIndicatesError`
+(`codexAdapter.ts:75`). The guess feeds a named heuristic plus an
+`errorInferred` import note so it stays auditable; `.unrecorded` would make
+every such result unexportable to targets that require a terminal status.
+Word boundaries (`\b`) are approximated by substring, matching the Codex port. -/
+
+private def claudeStatusHeuristic : String :=
+  "claudeOutputIndicatesError (port of codexAdapter.ts:75)"
+
+private def cLower (s : String) : String :=
+  String.ofList (s.toList.map Char.toLower)
+
+private def cHasSub (s sub : String) : Bool := decide ((s.splitOn sub).length > 1)
+
+/-- True when text contains `Process exited with code N` with `N` nonzero. -/
+private def cExitedNonzero (out : String) : Bool :=
+  ((out.splitOn "Process exited with code ").drop 1).any (fun part =>
+    match part.toList.head? with
+    | some c => decide (49 ≤ c.toNat ∧ c.toNat ≤ 57)   -- '1'..'9'
+    | none => false)
+
+def claudeOutputIndicatesError (out : String) : Bool :=
+  let lc := cLower out
+  cExitedNonzero out
+    || cHasSub lc "timed out after"
+    || cHasSub lc "command timed out"
+    || (cHasSub lc "timeout" && (cHasSub lc "exceeded" || cHasSub lc "expired" || cHasSub lc "limit"))
+
+/-- Concatenated `text` content of a parsed tool-result block list. -/
+private def cResultText : List UserBlock → String
+  | [] => ""
+  | .text s :: rest => s ++ cResultText rest
+  | _ :: rest => cResultText rest
+
 /-- Recover `ToolName.canonical` for natively emitted `tool_use` blocks.
 
 Claude's `tool_use` block has slots for exactly `{id, name, input}` and no slot
@@ -1247,6 +1286,27 @@ private def cCarrierToolCanonical? (j : Json) : Option (List (Nat × CanonicalTo
 
 private def cCarrierToolCanonical (j : Json) : List (Nat × CanonicalTool) :=
   (cCarrierToolCanonical? j).getD []
+
+/-- Exact source-side spelling and arguments for a call that was semantically
+translated into a different native Claude tool. The target call remains the
+executable truth; this sidecar is audit/round-trip provenance only. -/
+private def cCarrierToolTranslation? (j : Json) : Option (List Json) := do
+  let marker ← cobj j claudeCarrierMarkerKey
+  guard (cstr marker "protocol" == some claudeCarrierProtocol)
+  match cobj marker "toolTranslation" with
+  | none => pure []
+  | some (Json.arr values) =>
+      values.toList.mapM (fun value => do
+        let _ ← (cobj value "block").bind (fun raw => raw.getNat?.toOption)
+        let sourceFormat ← cstr value "sourceFormat"
+        let sourceName ← cstr value "sourceName"
+        guard (!sourceFormat.isEmpty && !sourceName.isEmpty)
+        let _ ← cobj value "sourceInput"
+        pure value)
+  | some _ => none
+
+private def cCarrierToolTranslation (j : Json) : List Json :=
+  (cCarrierToolTranslation? j).getD []
 
 private def cCanonicalForBlock
     (overrides : List (Nat × CanonicalTool)) (blockIdx : Nat) : Option CanonicalTool :=
@@ -1352,6 +1412,9 @@ private structure Proto where
   identityProvenance : Option Json := none
   unverifiedCarrier : Bool := false
   timeOverride : Option Time := none
+  /-- Set when the source omitted `is_error` and the status was inferred from
+  the result text; drives the post-fold `errorInferred` import notes. -/
+  inferredError : Option Bool := none
 
 /-- Fold state: the protos so far, a `tool_use` id → (entryIndex, blockIndex)
 map, and the call sites already consumed by native results. Tracking sites rather
@@ -1369,12 +1432,14 @@ private def mkProto (uuid parentUuid ts : Option String) (payload : Payload)
     (rawCompactionBoundary : Option Json := none)
     (identityProvenance : Option Json := none)
     (unverifiedCarrier : Bool := false)
-    (timeOverride : Option Time := none) : Proto :=
+    (timeOverride : Option Time := none)
+    (inferredError : Option Bool := none) : Proto :=
   { uuid := uuid, parentUuid := parentUuid, ts := ts, payload := payload,
     carrierBlocks := carrierBlocks, rawEnvelope := rawEnvelope,
     rawCompactionBoundary := rawCompactionBoundary,
     identityProvenance := identityProvenance,
-    unverifiedCarrier := unverifiedCarrier, timeOverride := timeOverride }
+    unverifiedCarrier := unverifiedCarrier, timeOverride := timeOverride,
+    inferredError := inferredError }
 
 /-- Construct ordinary user text after the caller has ruled out a complete
 synthetic control envelope. -/
@@ -1859,15 +1924,27 @@ private def stepLine (byUuid : List (String × Json)) (acc : Acc) (j : Json) : A
                           "no unmatched earlier tool_use occurrence"
                       | _ => CallRef.unresolved (cstr b "tool_use_id")
                           "ambiguous tool_use_id: multiple unmatched earlier occurrences"
-                    let blk := EnvBlock.toolResult call
-                      (parseToolResultContent carrierMarked (cobj b "content"))
-                      (match cobj b "is_error" with
-                       | some (Json.bool value) => ErrorSignal.native value
-                       | _ => ErrorSignal.unrecorded)
+                    let resultBlocks := parseToolResultContent carrierMarked (cobj b "content")
+                    -- A carrier-marked result is inert historical data: keep the
+                    -- honest `.unrecorded` and infer nothing. For live results an
+                    -- absent `is_error` is inferred from the output text (see
+                    -- claudeStatusHeuristic above) so targets that require a
+                    -- terminal status stay reachable without asserting a value
+                    -- the source never wrote.
+                    let errSignal := match cobj b "is_error" with
+                      | some (Json.bool value) => ErrorSignal.native value
+                      | _ => if carrierMarked then ErrorSignal.unrecorded
+                        else ErrorSignal.inferred
+                          (claudeOutputIndicatesError (cResultText resultBlocks))
+                          claudeStatusHeuristic
+                    let blk := EnvBlock.toolResult call resultBlocks errSignal
                     { a with
                       protos := a.protos.push (mkProto uuid parentUuid ts
                         (Payload.envMsg [blk]) (if carrierMarked then [0] else [])
-                        (rawEnvelope := some raw)),
+                        (rawEnvelope := some raw)
+                        (inferredError := match errSignal with
+                          | .inferred value _ => some value
+                          | _ => none)),
                       matchedCalls := cRememberResolvedCall a.matchedCalls call }
                 | some "text" =>
                     let t := (cstr b "text").getD ""
@@ -2162,7 +2239,7 @@ private def cValidateConversationCarrierMarker
       else pure ()
       let recognizedPurpose :=
         ["contentBlocks", "provenance", "identityProvenance", "timeProvenance",
-          "toolCanonical"].any
+          "toolCanonical", "toolTranslation"].any
           (fun key => (marker.getObjVal? key).toOption.isSome)
       if !recognizedPurpose then
         cSchemaError line claudeCarrierMarkerKey
@@ -2197,6 +2274,35 @@ private def cValidateConversationCarrierMarker
               s!"block index {blockIdx} does not address a native tool_use block")
       | .ok _ => (cSchemaError line
           (claudeCarrierMarkerKey ++ ".toolCanonical") "must be an array")
+      match marker.getObjVal? "toolTranslation" with
+      | .error _ => pure ()
+      | .ok (Json.arr rawTranslations) =>
+          if rawTranslations.isEmpty then
+            cSchemaError line (claudeCarrierMarkerKey ++ ".toolTranslation")
+              "must not be empty when present"
+          else pure ()
+          let translations ← match cCarrierToolTranslation? record with
+            | some values => pure values
+            | none => (cSchemaError line
+                (claudeCarrierMarkerKey ++ ".toolTranslation")
+                "must list block/sourceFormat/sourceName/sourceInput members")
+          let indices := translations.filterMap (fun value =>
+            (cobj value "block").bind (fun raw => raw.getNat?.toOption))
+          if cHasDuplicateNat indices then
+            cSchemaError line (claudeCarrierMarkerKey ++ ".toolTranslation")
+              "must not contain duplicate block indices"
+          else pure ()
+          let nativeCallIndices : List Nat := match content with
+            | Json.arr blocks => blocks.toList.zipIdx.filterMap
+                (fun (block, blockIdx) =>
+                  if cstr block "type" == some "tool_use" then some blockIdx else none)
+            | _ => []
+          indices.forM (fun blockIdx =>
+            if nativeCallIndices.contains blockIdx then pure ()
+            else cSchemaError line (claudeCarrierMarkerKey ++ ".toolTranslation")
+              s!"block index {blockIdx} does not address a native tool_use block")
+      | .ok _ => (cSchemaError line
+          (claudeCarrierMarkerKey ++ ".toolTranslation") "must be an array")
       match marker.getObjVal? "provenance" with
       | .error _ => pure ()
       | .ok _ =>
@@ -2821,33 +2927,36 @@ def importClaudeCode (text : String) : Except String Transcript := do
       controls := decodedControls.toArray, archived := decodedRecords.toArray }
     let leafUuid := cstr leaf.1 "uuid"
     let representedLeafUuid := folded0.protos.back?.bind (fun proto => proto.uuid)
-    let needsAuthoritativeLeafCarrier :=
-      lastPrompt.isSome && representedLeafUuid != leafUuid
-    let folded :=
-      if needsAuthoritativeLeafCarrier then
-        { folded0 with protos := folded0.protos.push (mkProto
-            (cstr leaf.1 "uuid") (cstr leaf.1 "parentUuid") (cstr leaf.1 "timestamp")
-            (cAuthoritativeLeafPayload leaf.1) (rawEnvelope := some leaf.1)
-            -- Graph bridges (attachment leaves, etc.) are not dialogue; keep them
-            -- historical so flat targets can retain them via inert carriers
-            -- instead of refusing dropOtherRoles.
-            (unverifiedCarrier := true)) }
-      else folded0
+    -- True when the active branch's newest record is a non-dialogue graph
+    -- record (attachment/bridge) that `stepLine` cannot represent as an entry.
+    -- Such a record is ARCHIVED as inert provenance instead of being turned
+    -- into a synthetic `historicalUnverified` entry: flat targets without a
+    -- reviewed historical carrier (OpenCode) refuse any historicalUnverified
+    -- entry outright, so the carrier made those conversions impossible while
+    -- adding no conversational content. Archiving keeps the exact bytes in
+    -- transcript provenance, lets `activeLeaf` select the last real entry,
+    -- and reports the provenance drop at export time where the target has no
+    -- slot for it.
+    let leafIsGraphRecord := lastPrompt.isSome && representedLeafUuid != leafUuid
+    let folded := folded0
     let archivedRecords0 := indexed.filterMap (fun (record, index) =>
       match cParseTranscriptProvenanceCarrier? record with
       | some _ => none
       | none =>
           if cstr record "type" == some "last-prompt" &&
               authoritativePointerIndex == some index then none else
-          if needsAuthoritativeLeafCarrier && index == leaf.2 then none else
-          match cArchivedRecordReason? record with
-          | some reason => some (cMkArchivedRecord record reason)
-          | none =>
-              if cGraphRecord record &&
-                  !(selectedIndices.contains index) then
-                some (cMkArchivedRecord record
-                  "record is outside the authoritative active branch; retained as inert provenance")
-              else none)
+          if leafIsGraphRecord && index == leaf.2 then
+            some (cMkArchivedRecord record
+              "active-branch leaf is a non-dialogue graph record; retained as inert provenance")
+          else
+            match cArchivedRecordReason? record with
+            | some reason => some (cMkArchivedRecord record reason)
+            | none =>
+                if cGraphRecord record &&
+                    !(selectedIndices.contains index) then
+                  some (cMkArchivedRecord record
+                    "record is outside the authoritative active branch; retained as inert provenance")
+                else none)
     let folded := { folded with archived := (decodedRecords ++ archivedRecords0).toArray }
     let protos0 := folded.protos.toList
     let archivedControls := folded.controls.toList
@@ -2917,8 +3026,17 @@ def importClaudeCode (text : String) : Except String Transcript := do
           detail := "inert source-environment carrier decoded; source EnvInfo restored as provenance, target launch identity taken from the physical Claude records" }
           : ImportNote)]
       | none => []
+    let errorNotes : List ImportNote := protos.filterMap (fun p =>
+      match p.inferredError with
+      | none => none
+      | some isErr => some ({
+          kind := AssumptionKind.errorInferred
+          loc := p.uuid
+          detail := "tool_result error status inferred (isError=" ++ toString isErr ++
+            ") via claudeOutputIndicatesError; the source omitted is_error" }
+        : ImportNote))
     let notes := roleNotes ++ carrierNotes ++ controlNotes ++ archivedNotes ++
-      graphNotes ++ leafNotes ++ sourceEnvNotes
+      graphNotes ++ leafNotes ++ sourceEnvNotes ++ errorNotes
     let n := entries.length
     -- Retargeted artifacts restore the inert source env; native sessions keep the
     -- physical record identity as their env. The target launch identity is always
@@ -3725,6 +3843,287 @@ private def cJsonIsObject : Json → Bool
   | Json.obj _ => true
   | _ => false
 
+/-! ### Target-native tool translation
+
+`tool_use.name` is executable model context, not an arbitrary display label.
+Foreign raw names therefore cannot be copied merely because they satisfy
+Claude's identifier regex. We select a Claude built-in from the reviewed
+canonical meaning and translate its arguments. A genuine Claude source keeps
+its physical name/input unchanged.
+
+Current Codex also records many calls through a custom outer tool named `exec`.
+Its input is generated JavaScript over `tools.*`; `exec` itself is not the
+semantic operation and Claude Code does not expose it. The restricted parser
+below recognizes only one literal `await tools.exec_command({...})` invocation
+whose command and optional workdir are literal strings. It never evaluates
+JavaScript. Composite, dynamic, or malformed wrappers fall back to the existing
+historical carrier. -/
+
+private structure ClaudeTargetTool where
+  name      : String
+  input     : Json
+  canonical : Option CanonicalTool := none
+  deriving Inhabited
+
+private def cJsSpace (c : Char) : Bool :=
+  c == ' ' || c == '\n' || c == '\r' || c == '\t'
+
+private def cDropJsSpace : List Char → List Char
+  | c :: rest => if cJsSpace c then cDropJsSpace rest else c :: rest
+  | [] => []
+
+private def cJsIdentChar (c : Char) : Bool :=
+  cAsciiAlphaNum c || c == '_' || c == '-'
+
+private def cTakeJsIdent (chars : List Char) : Option (String × List Char) :=
+  let key := chars.takeWhile cJsIdentChar
+  if key.isEmpty then none else some (String.ofList key, chars.drop key.length)
+
+private def cJsEscapedChar? : Char → Option Char
+  | 'n' => some '\n'
+  | 'r' => some '\r'
+  | 't' => some '\t'
+  | 'b' => some '\x08'
+  | 'f' => some '\x0c'
+  | 'v' => some '\x0b'
+  | '0' => some '\x00'
+  | '\\' => some '\\'
+  | '\'' => some '\''
+  | '"' => some '"'
+  | _ => none
+
+private partial def cParseJsStringBody
+    (quote : Char) (chars acc : List Char) : Option (String × List Char) :=
+  match chars with
+  | [] => none
+  | '\\' :: escaped :: rest => do
+      let decoded ← cJsEscapedChar? escaped
+      cParseJsStringBody quote rest (decoded :: acc)
+  | c :: rest =>
+      if c == quote then some (String.ofList acc.reverse, rest)
+      else cParseJsStringBody quote rest (c :: acc)
+
+private def cParseJsString (chars : List Char) : Option (String × List Char) :=
+  match cDropJsSpace chars with
+  | ('"' :: rest) => cParseJsStringBody '"' rest []
+  | ('\'' :: rest) => cParseJsStringBody '\'' rest []
+  | _ => none
+
+private partial def cSkipJsValue
+    (chars : List Char) (curly square paren : Nat := 0)
+    (quote : Option Char := none) (escaped : Bool := false)
+    (seen : Bool := false) : Option (List Char) :=
+  match chars with
+  | [] => none
+  | c :: rest =>
+      match quote with
+      | some q =>
+          if escaped then cSkipJsValue rest curly square paren (some q) false true
+          else if c == '\\' then cSkipJsValue rest curly square paren (some q) true true
+          else if c == q then cSkipJsValue rest curly square paren none false true
+          else cSkipJsValue rest curly square paren (some q) false true
+      | none =>
+          if c == '"' || c == '\'' then
+            cSkipJsValue rest curly square paren (some c) false true
+          else if c == '`' then none
+          else if c == '/' && (rest.head? == some '/' || rest.head? == some '*') then none
+          else if c == '{' then cSkipJsValue rest (curly + 1) square paren none false true
+          else if c == '}' then
+            if curly == 0 then if seen then some chars else none
+            else cSkipJsValue rest (curly - 1) square paren none false true
+          else if c == '[' then cSkipJsValue rest curly (square + 1) paren none false true
+          else if c == ']' then
+            if square == 0 then none
+            else cSkipJsValue rest curly (square - 1) paren none false true
+          else if c == '(' then cSkipJsValue rest curly square (paren + 1) none false true
+          else if c == ')' then
+            if paren == 0 then none
+            else cSkipJsValue rest curly square (paren - 1) none false true
+          else if c == ',' && curly == 0 && square == 0 && paren == 0 then
+            if seen then some chars else none
+          else cSkipJsValue rest curly square paren none false (seen || !cJsSpace c)
+
+private structure CodexExecLiteral where
+  command : String
+  cwd : Option String := none
+
+private partial def cParseCodexExecFields
+    (chars : List Char) (command cwd : Option String := none) :
+    Option (CodexExecLiteral × List Char) := do
+  let chars := cDropJsSpace chars
+  match chars with
+  | '}' :: rest =>
+      let command ← command
+      guard (!command.isEmpty)
+      pure ({ command, cwd }, rest)
+  | _ =>
+      let (key, afterKey) ← match chars with
+        | '"' :: _ | '\'' :: _ => cParseJsString chars
+        | _ => cTakeJsIdent chars
+      let afterColon ← match cDropJsSpace afterKey with
+        | ':' :: rest => some rest
+        | _ => none
+      let (command, cwd, afterValue) ←
+        if key == "cmd" || key == "command" then do
+          guard command.isNone
+          let (value, rest) ← cParseJsString afterColon
+          pure (some value, cwd, rest)
+        else if key == "workdir" || key == "cwd" then do
+          guard cwd.isNone
+          let (value, rest) ← cParseJsString afterColon
+          guard (!value.isEmpty)
+          pure (command, some value, rest)
+        else if key == "yield_time_ms" || key == "max_output_tokens" then do
+          -- These tune how long/output-rich the orchestration response is;
+          -- they do not alter the spawned command. Claude's persisted Bash
+          -- input has no equivalent and may omit them without changing the
+          -- resumed operation.
+          let rest ← cSkipJsValue afterColon
+          pure (command, cwd, rest)
+        else none
+      match cDropJsSpace afterValue with
+      | ',' :: rest => cParseCodexExecFields rest command cwd
+      | '}' :: rest =>
+          let command ← command
+          guard (!command.isEmpty)
+          pure ({ command, cwd }, rest)
+      | _ => none
+
+private def cParseCodexExecObject (chars : List Char) :
+    Option (CodexExecLiteral × List Char) := do
+  match cDropJsSpace chars with
+  | '{' :: rest => cParseCodexExecFields rest
+  | _ => none
+
+private def cCodexWrappedExec? (input : String) : Option CodexExecLiteral := do
+  guard ((input.splitOn "tools.").length == 2)
+  match input.splitOn "tools.exec_command(" with
+  | [beforeCall, rest] =>
+      guard (beforeCall.endsWith "await ")
+      let (call, afterObject) ← cParseCodexExecObject rest.toList
+      match cDropJsSpace afterObject with
+      | ')' :: _ => pure call
+      | _ => none
+  | _ => none
+
+private def cShellQuote (value : String) : String :=
+  "'" ++ value.replace "'" "'\"'\"'" ++ "'"
+
+private def cClaudeBashInput (command : String) (cwd : Option String) : Json :=
+  let command := match cwd with
+    | some cwd => "cd -- " ++ cShellQuote cwd ++ " && " ++ command
+    | none => command
+  Json.mkObj [("command", Json.str command)]
+
+private def cFirstString (args : Json) : List String → Option String
+  | [] => none
+  | key :: rest => (cstr args key).orElse (fun _ => cFirstString args rest)
+
+private def cFirstJson (args : Json) : List String → Option Json
+  | [] => none
+  | key :: rest => (cobj args key).orElse (fun _ => cFirstJson args rest)
+
+private def cJsonFields (fields : List (String × Option Json)) : Json :=
+  Json.mkObj (fields.filterMap (fun (key, value) => value.map (fun v => (key, v))))
+
+private def cCanonicalClaudeTool?
+    (canonical : CanonicalTool) (args : Json) : Option ClaudeTargetTool := do
+  match canonical with
+  | .bash =>
+      let command ← cFirstString args ["command", "cmd"]
+      guard (!command.isEmpty)
+      let cwd := cFirstString args ["workdir", "cwd"]
+      let input := cClaudeBashInput command cwd
+      pure { name := "Bash", input, canonical := some .bash }
+  | .read =>
+      let path ← cFirstString args ["file_path", "path"]
+      pure { name := "Read", canonical := some .read, input := cJsonFields [
+        ("file_path", some (Json.str path)), ("offset", cFirstJson args ["offset"]),
+        ("limit", cFirstJson args ["limit"])] }
+  | .write =>
+      let path ← cFirstString args ["file_path", "path"]
+      let content ← cFirstString args ["content"]
+      pure { name := "Write", canonical := some .write, input := Json.mkObj [
+        ("file_path", Json.str path), ("content", Json.str content)] }
+  | .edit =>
+      let path ← cFirstString args ["file_path", "path"]
+      let oldText ← cFirstString args ["old_string", "oldText", "old_text"]
+      let newText ← cFirstString args ["new_string", "newText", "new_text"]
+      pure { name := "Edit", canonical := some .edit, input := cJsonFields [
+        ("file_path", some (Json.str path)), ("old_string", some (Json.str oldText)),
+        ("new_string", some (Json.str newText)),
+        ("replace_all", cFirstJson args ["replace_all", "replaceAll"])] }
+  | .grep =>
+      let pattern ← cFirstString args ["pattern", "query"]
+      pure { name := "Grep", canonical := some .grep, input := cJsonFields [
+        ("pattern", some (Json.str pattern)), ("path", cFirstJson args ["path"]),
+        ("glob", cFirstJson args ["glob"]), ("type", cFirstJson args ["type"]),
+        ("output_mode", cFirstJson args ["output_mode"]),
+        ("head_limit", cFirstJson args ["head_limit"]),
+        ("offset", cFirstJson args ["offset"]), ("-i", cFirstJson args ["-i"]),
+        ("-n", cFirstJson args ["-n"]), ("-A", cFirstJson args ["-A"]),
+        ("-B", cFirstJson args ["-B"]), ("-C", cFirstJson args ["-C"])] }
+  | .glob =>
+      let pattern ← cFirstString args ["pattern"]
+      pure { name := "Glob", canonical := some .glob, input := cJsonFields [
+        ("pattern", some (Json.str pattern)), ("path", cFirstJson args ["path"])] }
+  | .webFetch =>
+      let url ← cFirstString args ["url"]
+      let prompt := (cFirstString args ["prompt"]).getD "Summarize this page."
+      pure { name := "WebFetch", canonical := some .webFetch, input := Json.mkObj [
+        ("url", Json.str url), ("prompt", Json.str prompt)] }
+  | .webSearch =>
+      let query ← cFirstString args ["query", "search_term"]
+      pure { name := "WebSearch", canonical := some .webSearch, input := cJsonFields [
+        ("query", some (Json.str query)),
+        ("allowed_domains", cFirstJson args ["allowed_domains"]),
+        ("blocked_domains", cFirstJson args ["blocked_domains"])] }
+  | .agentSpawn =>
+      let prompt ← cFirstString args ["prompt"]
+      let description := (cFirstString args ["description"]).getD "Continue delegated work"
+      let subagent := (cFirstString args ["subagent_type", "subagentType"]).getD
+        "general-purpose"
+      pure { name := "Task", canonical := some .agentSpawn, input := cJsonFields [
+        ("description", some (Json.str description)), ("prompt", some (Json.str prompt)),
+        ("subagent_type", some (Json.str subagent)), ("model", cFirstJson args ["model"]),
+        ("run_in_background", cFirstJson args ["run_in_background"]),
+        ("max_turns", cFirstJson args ["max_turns"])] }
+  | .applyPatch => none
+
+private def cJsonOnlyKeys (args : Json) (allowed : List String) : Bool :=
+  match args with
+  | Json.obj fields => fields.toList.all (fun pair => allowed.contains pair.1)
+  | _ => false
+
+/-- Reviewed physical Codex schemas. This is deliberately narrower than
+guessing from familiar-looking names: an unreviewed source schema is carried,
+not partially projected into an executable target call. -/
+private def cCodexObservedCanonical? (name : String) (args : Json) : Option CanonicalTool :=
+  match name with
+  | "exec_command" =>
+      if cJsonOnlyKeys args ["cmd", "command", "workdir", "cwd",
+          "yield_time_ms", "max_output_tokens"] then some .bash else none
+  | _ => none
+
+private def cClaudeTargetToolAt?
+    (t : Transcript) (entryIdx : Nat) (name : ToolName) (args : Json) :
+    Option ClaudeTargetTool := do
+  let entry ← t.entries[entryIdx]?
+  if entry.origin.format == Format.claudeCode then
+    guard (cClaudeToolNameValid name.raw && cJsonIsObject args)
+    pure { name := name.raw, input := args, canonical := name.canonical }
+  else if entry.origin.format == Format.codexCli && name.raw == "exec" then
+    let source ← cstr args "input"
+    let wrapped ← cCodexWrappedExec? source
+    let input := cClaudeBashInput wrapped.command wrapped.cwd
+    pure { name := "Bash", input, canonical := some .bash }
+  else
+    let canonical ← name.canonical.orElse (fun _ =>
+      if entry.origin.format == Format.codexCli then
+        cCodexObservedCanonical? name.raw args
+      else none)
+    cCanonicalClaudeTool? canonical args
+
 private def cNativeResultContentValid (content : List UserBlock) : Bool :=
   content.all (fun block => match block with
     | .text _ => true
@@ -3790,7 +4189,7 @@ private def cNativeClaudeCallAt
     (name : ToolName) (args : Json) (rawId : Option String) : Bool :=
   cClaudeNativeEntryProvenance t entryIdx &&
   !(cEntryCarrierForced t entryIdx blockIdx) &&
-  cClaudeToolNameValid name.raw && cJsonIsObject args &&
+  (cClaudeTargetToolAt? t entryIdx name args).isSome &&
   match rawId with
   | none => false
   | some id =>
@@ -3825,17 +4224,26 @@ def claudeToolCallEmitsNativeAt (t : Transcript) (entry block : Nat) : Bool :=
   cCallAtIsNative t entry block
 
 private def cHistoricalCallReason
-    (_t : Transcript) (_entry _block : Nat) (_args : Json)
+    (t : Transcript) (entry block : Nat) (args : Json)
     (_rawId : Option String) : String :=
-  "historical source lifecycle"
+  match t.entries[entry]? with
+  | some { payload := .assistantMsg blocks, .. } =>
+      match blocks[block]? with
+      | some (.toolCall name _ _) =>
+          if (cClaudeTargetToolAt? t entry name args).isNone then
+            "no sound target-native Claude translation"
+          else "historical or structurally invalid source lifecycle"
+      | _ => "historical source lifecycle"
+  | _ => "historical source lifecycle"
 
 private def cAssistantBlockToJsonAt
     (t : Transcript) (entryIdx blockIdx : Nat) : AssistantBlock → Json
   | .toolCall name args rawId =>
       if cNativeClaudeCallAt t entryIdx blockIdx name args rawId then
+        let target := (cClaudeTargetToolAt? t entryIdx name args).get!
         Json.mkObj [
           ("type", Json.str "tool_use"), ("id", Json.str rawId.get!),
-          ("name", Json.str name.raw), ("input", args)]
+          ("name", Json.str target.name), ("input", target.input)]
       else
         Json.mkObj [("type", Json.str "text"),
           ("text", Json.str (cHistoricalToolCallCarrierTextAt entryIdx blockIdx
@@ -3980,10 +4388,45 @@ private def cEntryToolCanonical
       match block with
       | .toolCall name args rawId =>
           if cNativeClaudeCallAt t entryIdx blockIdx name args rawId then
-            name.canonical.map (fun canonical => (blockIdx, canonical))
+            (cClaudeTargetToolAt? t entryIdx name args).bind (fun target =>
+              target.canonical.map (fun canonical => (blockIdx, canonical)))
           else none
       | _ => none)
   | _ => []
+
+private def cToolSourceFormatName : Format → String
+  | .pi => "pi"
+  | .claudeCode => "claude"
+  | .codexCli => "codex"
+  | .cursorAgent => "cursor-agent"
+  | .cursorIde => "cursor-ide"
+  | .hermes => "hermes"
+  | .googleAiStudio => "gais"
+  | .openCode => "opencode"
+  | .other name => name
+
+/-- Preserve the exact foreign spelling/input beside a translated native
+Claude call. On Claude re-export, recover the already-validated provenance
+from the imported raw envelope so E-I-E does not erase it. -/
+private def cEntryToolTranslation
+    (t : Transcript) (entryIdx : Nat) (entry : Entry) : List Json :=
+  if entry.origin.format == .claudeCode then
+    (entry.origin.extras >>= fun extras => cobj extras "claudeRawEnvelope")
+      |>.map cCarrierToolTranslation |>.getD []
+  else
+    match entry.payload with
+    | .assistantMsg blocks => blocks.zipIdx.filterMap (fun (block, blockIdx) =>
+        match block with
+        | .toolCall name args rawId =>
+            if cNativeClaudeCallAt t entryIdx blockIdx name args rawId then
+              some (Json.mkObj [
+                ("block", Json.num (Lean.JsonNumber.fromNat blockIdx)),
+                ("sourceFormat", Json.str (cToolSourceFormatName entry.origin.format)),
+                ("sourceName", Json.str name.raw),
+                ("sourceInput", args)])
+            else none
+        | _ => none)
+    | _ => []
 
 /-- If a carrier-bearing entry also contains a block that would otherwise look
 native, carry the whole payload in a system record. Entries made entirely of
@@ -4092,9 +4535,10 @@ private def cCarrierMarker
     (indices : List Nat) (rawEnvelope : Option Json := none)
     (identityProvenance : Option Json := none)
     (timeProvenance : Option Json := none)
-    (toolCanonical : List (Nat × CanonicalTool) := []) : Option Json :=
+    (toolCanonical : List (Nat × CanonicalTool) := [])
+    (toolTranslation : List Json := []) : Option Json :=
   if indices.isEmpty && rawEnvelope.isNone && identityProvenance.isNone &&
-      timeProvenance.isNone && toolCanonical.isEmpty then none else
+      timeProvenance.isNone && toolCanonical.isEmpty && toolTranslation.isEmpty then none else
     some (Json.mkObj ([
       ("protocol", Json.str claudeCarrierProtocol)] ++
       (if indices.isEmpty then [] else [
@@ -4102,6 +4546,8 @@ private def cCarrierMarker
           Json.num (Lean.JsonNumber.fromNat n))).toArray)]) ++
       (if toolCanonical.isEmpty then [] else [
         ("toolCanonical", cToolCanonicalJson toolCanonical)]) ++
+      (if toolTranslation.isEmpty then [] else [
+        ("toolTranslation", Json.arr toolTranslation.toArray)]) ++
       (match rawEnvelope with
        | some raw => [("provenance", Json.mkObj [
            ("carrier", Json.str "agent-convert.claude-envelope-provenance.v1"),
@@ -4123,9 +4569,10 @@ private def cCarrierTopLevelStampWithRaw
     (indices : List Nat) (rawEnvelope : Option Json)
     (identityProvenance : Option Json := none)
     (timeProvenance : Option Json := none)
-    (toolCanonical : List (Nat × CanonicalTool) := []) : List (String × Json) :=
+    (toolCanonical : List (Nat × CanonicalTool) := [])
+    (toolTranslation : List Json := []) : List (String × Json) :=
   match cCarrierMarker indices rawEnvelope identityProvenance timeProvenance
-      toolCanonical with
+      toolCanonical toolTranslation with
   | some marker => [(claudeCarrierMarkerKey, marker)]
   | none => []
 
@@ -4219,6 +4666,7 @@ private def cClaudeEntryToJson
   let identityProvenance := cEntryIdentityProvenance? t uuidPlan i e
   let timeProvenance := cTimeProvenanceJson e.time
   let toolCanonical := cEntryToolCanonical t i e
+  let toolTranslation := cEntryToolTranslation t i e
   let stamp : List (String × Json) :=
     [("uuid", Json.str uuid), ("parentUuid", parentUuid)]
     ++ [("sessionId", Json.str (cClaudeTargetSessionId t))]
@@ -4228,7 +4676,7 @@ private def cClaudeEntryToJson
   let render := fun (provenanceRaw : Option Json) =>
     let ordinaryStamp := stamp ++
       cCarrierTopLevelStampWithRaw carrierIndices provenanceRaw
-        identityProvenance timeProvenance toolCanonical
+        identityProvenance timeProvenance toolCanonical toolTranslation
     if cEntryNeedsWholeHistoricalCarrier t i e carrierIndices then
       match e.payload with
       | Payload.compaction summary coverage tokensBefore =>
@@ -5154,40 +5602,119 @@ private def cRawToolUseRestored (text : String) : Bool :=
       | none => false
   | .error _ => false
 
-/-- Native lifecycle output depends on target capability and structural
-validity, never on source format.
+/-- Native lifecycle output depends on target capability, semantic identity,
+and structural validity. A foreign raw name with no reviewed meaning is not a
+Claude capability merely because it matches Claude's identifier grammar.
 
-A closed, structurally valid call therefore emits a native Claude lifecycle
-whatever harness it came from, and survives re-import unchanged — this is the
-property that makes a converted session resumable (`LoomOps.Interop`, P1).
-This pin is the deliberate inverse of its former self, which asserted that
-cross-format exports must NOT contain `tool_use`; that assertion made the
-product's central defect a theorem of this codebase.
+An unknown Pi call therefore stays a reversible carrier. Reviewed canonical
+calls and recognized source-tool mappings are tested separately below; those
+are the calls that make a converted session resumable (`LoomOps.Interop`, P1).
 
 Raw lifecycle-SHAPED open-world blocks stay carriers: an `.unmodeled` blob
 must never be promoted to executable state merely because its JSON resembles a
 tool call. That distinction is structural, not provenance-based. -/
 def claudeNativeRegistryPolicyChecked : Bool :=
-  let foreignArgs := Json.mkObj [("path", Json.str "/tmp/foreign")]
   let crossExport := cExportClaudeFixture claudeCrossFormatClosedToolFixture
   let mixedOrigin := { claudeCrossFormatClosedToolFixture with
     origin := { format := .claudeCode, sourceRef := "mixed-origin-tool-fixture" } }
   let mixedExport := cExportClaudeFixture mixedOrigin
   let rawExport := cExportClaudeFixture claudeRawToolUseFixture
-  cContains crossExport "\"type\":\"tool_use\"" &&
-  cContains crossExport "\"type\":\"tool_result\"" &&
-  cContains mixedExport "\"type\":\"tool_use\"" &&
-  cContains mixedExport "\"type\":\"tool_result\"" &&
+  !cContains crossExport "\"type\":\"tool_use\"" &&
+  !cContains crossExport "\"type\":\"tool_result\"" &&
+  !cContains mixedExport "\"type\":\"tool_use\"" &&
+  !cContains mixedExport "\"type\":\"tool_result\"" &&
+  cContains crossExport ("\"" ++ claudeCarrierMarkerKey ++ "\"") &&
+  cContains mixedExport ("\"" ++ claudeCarrierMarkerKey ++ "\"") &&
   !cContains rawExport "\"type\":\"tool_use\"" &&
   cContains rawExport ("\"" ++ claudeCarrierMarkerKey ++ "\"") &&
-  cForeignToolRestored "foreign-call" foreignArgs crossExport &&
-  cForeignToolRestored "foreign-call" foreignArgs mixedExport &&
-  cRawToolUseRestored rawExport &&
-  match importClaudeCode crossExport with
-  | .ok restored => exportClaudeCode restored == crossExport
-  | .error _ => false
+  cRawToolUseRestored rawExport
 
 example : claudeNativeRegistryPolicyChecked = true := by native_decide
+
+private def cCodexClosedToolFixture
+    (rawName rawId : String) (args : Json) : Transcript :=
+  let origin (id : String) : Origin := {
+    format := .codexCli, sourceRef := "codex-target-tool-fixture", rawId := some id }
+  { threads := #[{ kind := .main }],
+    entries := #[
+      { payload := .assistantMsg [
+          .toolCall { raw := rawName, canonical := none } args (some rawId)],
+        origin := origin (rawId ++ "-call") },
+      { parent := some 0,
+        payload := .envMsg [
+          .toolResult (.resolved 0 0) [.text "command-result"]
+            (.inferred false "Codex result fixture")],
+        origin := origin (rawId ++ "-result") }],
+    activeLeaf := some 1,
+    origin := { format := .codexCli, sourceRef := "codex-target-tool-fixture" } }
+
+private def cTranslatedBashRestored (expected : String) (text : String) : Bool :=
+  match importClaudeCode text with
+  | .ok transcript =>
+      (match transcript.entries[0]? with
+       | some entry => match entry.payload with
+         | .assistantMsg [.toolCall name args (some _)] =>
+             name.raw == "Bash" && name.canonical == some .bash &&
+               cstr args "command" == some expected
+         | _ => false
+       | _ => false) &&
+      (match transcript.entries[1]? with
+       | some entry => match entry.payload with
+         | .envMsg [
+             .toolResult (.resolved 0 0) [.text "command-result"] (.native false)] =>
+             true
+         | _ => false
+       | _ => false) &&
+      exportClaudeCode transcript == text
+  | .error _ => false
+
+/-- Continuation fidelity for the Codex orchestration boundary:
+
+* a direct reviewed `exec_command` becomes target-native Claude `Bash`;
+* the common one-operation JavaScript `exec` envelope is structurally
+  decomposed into the same native operation;
+* composite, dynamic, privileged, or otherwise unreviewed envelopes remain
+  reversible historical carriers rather than executable approximations.
+
+In particular, no converted artifact emits a native tool named `exec`; that
+raw name identifies Codex's JavaScript orchestrator, not the operation. -/
+def claudeCodexSemanticToolTranslationChecked : Bool :=
+  let directCommand := "cd -- '/tmp/a b' && printf ok"
+  let direct := cExportClaudeFixture (cCodexClosedToolFixture
+    "exec_command" "call-direct" (Json.mkObj [
+      ("cmd", Json.str "printf ok"), ("workdir", Json.str "/tmp/a b"),
+      ("yield_time_ms", Json.num 1000)]))
+  let wrappedCommand := "printf wrapped"
+  let wrapped := cExportClaudeFixture (cCodexClosedToolFixture
+    "exec" "call-wrapped" (Json.mkObj [("input", Json.str
+      "const r = await tools.exec_command({cmd: 'printf wrapped', max_output_tokens: 1000}); text(r);")]))
+  let composite := cExportClaudeFixture (cCodexClosedToolFixture
+    "exec" "call-composite" (Json.mkObj [("input", Json.str
+      "const p = await tools.update_plan({plan: []}); const r = await tools.exec_command({cmd: 'pwd'}); text(r);")]))
+  let dynamic := cExportClaudeFixture (cCodexClosedToolFixture
+    "exec" "call-dynamic" (Json.mkObj [("input", Json.str
+      "const cmd = 'pwd'; text(await tools.exec_command({cmd}));")]))
+  let privileged := cExportClaudeFixture (cCodexClosedToolFixture
+    "exec" "call-privileged" (Json.mkObj [("input", Json.str
+      "text(await tools.exec_command({cmd: 'pwd', sandbox_permissions: 'require_escalated'}));")]))
+  cContains direct "\"name\":\"Bash\"" &&
+  cContains direct "\"type\":\"tool_result\"" &&
+  cContains direct "\"sourceFormat\":\"codex\"" &&
+  cContains direct "\"sourceName\":\"exec_command\"" &&
+  cTranslatedBashRestored directCommand direct &&
+  cContains wrapped "\"name\":\"Bash\"" &&
+  cContains wrapped "\"type\":\"tool_result\"" &&
+  cContains wrapped "\"sourceFormat\":\"codex\"" &&
+  cContains wrapped "\"sourceName\":\"exec\"" &&
+  cTranslatedBashRestored wrappedCommand wrapped &&
+  [direct, wrapped, composite, dynamic, privileged].all (fun exported =>
+    !cContains exported "\"name\":\"exec\"") &&
+  [composite, dynamic, privileged].all (fun exported =>
+    !cContains exported "\"type\":\"tool_use\"" &&
+      !cContains exported "\"type\":\"tool_result\"" &&
+      cContains exported ("\"" ++ claudeCarrierMarkerKey ++ "\""))
+
+example : claudeCodexSemanticToolTranslationChecked = true := by native_decide
 
 private def claudeValidNativeImageFixture : Transcript :=
   let origin (id : String) : Origin := {
@@ -5331,31 +5858,39 @@ private def claudeLastPromptFixture : String := String.intercalate "\n" [
 
 def claudeLastPromptAuthoritativeChecked : Bool :=
   let shape := fun (transcript : Transcript) =>
-    transcript.entries.size == 3 && transcript.activeLeaf == some 2 &&
-    (match transcript.entries[1]?, transcript.entries[2]? with
-     | some selected, some leaf =>
-         (match selected.payload with
+    -- A non-dialogue graph-record leaf (attachment) is ARCHIVED as inert
+    -- provenance rather than becoming a synthetic historicalUnverified entry,
+    -- so the newest real message stays the active leaf and flat targets
+    -- without a reviewed historical carrier remain exportable.
+    transcript.entries.size == 2 && transcript.activeLeaf == some 1 &&
+    (match transcript.entries[1]? with
+     | some leaf =>
+         (match leaf.payload with
           | .assistantMsg [.text "selected"] => true
           | _ => false) &&
-         (match leaf.payload with
-          | .otherMsg "claude.graph-record" [
-              .unmodeled "attachment" raw] =>
-                cstr raw "uuid" == some (cClaudeFixtureUuid "lp-attachment")
-          | _ => false) &&
-         leaf.disposition == EntryDisposition.historicalUnverified &&
-         leaf.origin.rawId == some (cClaudeFixtureUuid "lp-attachment")
-     | _, _ => false)
+         leaf.disposition == EntryDisposition.native &&
+         leaf.origin.rawId == some (cClaudeFixtureUuid "lp-selected")
+     | none => false) &&
+    transcript.importNotes.any (fun note =>
+      match note.kind with
+      | .contentSkipped =>
+          note.loc == some (cClaudeFixtureUuid "lp-attachment") &&
+            (note.detail.contains "non-dialogue graph record")
+      | _ => false)
   match importClaudeCode claudeLastPromptFixture with
   | .ok transcript =>
       shape transcript &&
       (transcript.origin.extras >>= fun extras => cobj extras "raw_last_prompt" >>=
         fun record => cstr record "leafUuid") ==
-          some (cClaudeFixtureUuid "lp-attachment") &&
+        some (cClaudeFixtureUuid "lp-attachment") &&
       let exported := exportClaudeCode transcript
       (match cParseClaudeJsonLines exported with
        | .ok records =>
+           -- The source pointer addressed an archived non-dialogue record.
+           -- Physical output must instead point at the represented active
+           -- conversational leaf or the resumed artifact is dangling.
            (records.getLast? >>= fun pointer => cstr pointer "leafUuid") ==
-             some (cClaudeFixtureUuid "lp-attachment")
+             some (cClaudeFixtureUuid "lp-selected")
        | .error _ => false) &&
       match importClaudeCode exported with
       | .ok restored => shape restored && exportClaudeCode restored == exported
@@ -5553,11 +6088,13 @@ def claudeRecognizedSchemaRefusalChecked : Bool :=
 
 example : claudeRecognizedSchemaRefusalChecked = true := by native_decide
 
-/-- A missing native error flag is represented as unknown, not fabricated as
-success and not rejected. Present non-boolean flags remain schema errors above. -/
+/-- A missing native error flag is inferred from the output text
+(`claudeOutputIndicatesError`) and recorded as `ErrorSignal.inferred` with an
+`errorInferred` import note — the same policy the Codex importer applies.
+Present non-boolean flags remain schema errors above. -/
 def claudeOptionalToolResultErrorChecked : Bool :=
   let missingError := Json.mkObj [
-    ("type", Json.str "tool_result"), ("tool_use_id", Json.str "call"),
+    ("type", Json.str "tool_result"), ("tool_use_id", "call"),
     ("content", Json.str "result")]
   let source := (cMalformedEnvelope (some "missing-error")
     (some (Json.arr #[missingError]))).compress
@@ -5566,7 +6103,10 @@ def claudeOptionalToolResultErrorChecked : Bool :=
       match transcript.entries[0]? with
       | some entry => match entry.payload with
         | .envMsg [.toolResult (.unresolved (some "call") _) [.text "result"]
-            .unrecorded] => true
+            (.inferred false heuristic)] =>
+              heuristic == claudeStatusHeuristic &&
+                transcript.importNotes.any (fun note =>
+                  note.kind == AssumptionKind.errorInferred)
         | _ => false
       | none => false
   | .error _ => false
@@ -6327,9 +6867,9 @@ def claudeExportPrerequisitesAndStabilityChecked : Bool :=
   claudeExportPrerequisiteErrors invalidSession ==
     ["Claude export target sessionId must be a UUID"] &&
   claudeExportPrerequisiteErrors missingHarnessVersion ==
-    ["Claude export requires origin.extras.target_harness_version = '2.1.216' for a non-native target"] &&
+    ["Claude export requires origin.extras.target_harness_version = '2.1.251' for a non-native target"] &&
   claudeExportPrerequisiteErrors wrongHarnessVersion ==
-    ["Claude export target_harness_version must be '2.1.216', got '2.1.206'"] &&
+    ["Claude export target_harness_version must be '2.1.251', got '2.1.206'"] &&
   claudeExportPrerequisiteErrors interpolated == [] &&
   claudeExportPrerequisiteErrors sequenced == [] &&
   emitsTarget valid && emitsTarget interpolated && emitsTarget sequenced &&
@@ -7052,7 +7592,7 @@ def claudeCompleteTargetBundleRequiredChecked : Bool :=
     exportClaudeCode nativeWrongVersion == "" &&
     (match exportClaudeCodeChecked nativeWrongVersion with
      | .error error => error ==
-         "Claude export target_harness_version must be '2.1.216', got '2.1.206'"
+         "Claude export target_harness_version must be '2.1.251', got '2.1.206'"
      | .ok _ => false)
 
 example : claudeCompleteTargetBundleRequiredChecked = true := by native_decide
