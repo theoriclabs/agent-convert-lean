@@ -1113,6 +1113,9 @@ structure CliOptions where
   codexExcludeTmpdirEnvVar : Option Bool := none
   codexExcludeSlashTmp : Option Bool := none
   codexSummary : Option String := none
+  store        : Option String := none
+  limit        : Option Nat := none
+  role         : Option String := none
 
 private def parseCliBool (option value : String) : Except String Bool :=
   if value == "true" then .ok true
@@ -1164,6 +1167,12 @@ private def parseCli (args : List String) : Except String (CliOptions × List St
         | .error error => .error error
     | "--target-codex-summary" :: value :: rest =>
         loop rest { opts with codexSummary := some value } positional
+    | "--store" :: value :: rest => loop rest { opts with store := some value } positional
+    | "--role" :: value :: rest => loop rest { opts with role := some value } positional
+    | "--limit" :: value :: rest =>
+        match value.toNat? with
+        | some n => loop rest { opts with limit := some n } positional
+        | none => .error s!"--limit requires a non-negative integer, got '{value}'"
     | arg :: rest =>
         if arg.startsWith "--" then .error s!"unknown or incomplete option: {arg}"
         else loop rest opts (arg :: positional)
@@ -2630,10 +2639,131 @@ def runText (refs : List String) (withSubagents : Bool) : IO UInt32 := do
             IO.print (String.intercalate "\n" rows ++ "\n")
   pure (if failures == refs.length then 2 else 0)
 
+/-! ## `loom search` — native cross-store transcript search
+
+Queries every known session store, matching a whitespace-separated,
+case-insensitive AND-of-tokens against the canonical `Loom.searchText`
+projection of each entry. A cheap raw-byte prefilter skips importing any
+file that cannot contain every token, so a specific query imports only a
+handful of sessions even across a multi-gigabyte store. This keeps the
+match semantics in the verified core rather than re-deriving them per host.
+-/
+
+/-- Case-insensitive: does `haystack` contain every token? Tokens are already
+lowercased; the haystack is lowercased by the caller. An empty token list
+matches nothing (guarded before use). -/
+private def strHasCI (haystackLower needleLower : String) : Bool :=
+  (haystackLower.splitOn needleLower).length > 1
+
+private def matchesAllTokens (haystackLower : String) (tokens : List String) : Bool :=
+  tokens.all (fun t => strHasCI haystackLower t)
+
+/-- Split a query into lowercased, non-empty whitespace tokens. -/
+private def searchTokens (query : String) : List String :=
+  List.filterMap
+    (fun t => if t.isEmpty then none else some (t.map Char.toLower))
+    (query.splitOn " " |>.flatMap (·.splitOn "\t") |>.flatMap (·.splitOn "\n"))
+
+/-- Flatten newlines/tabs to spaces and clip to `n` characters for one-line output. -/
+private def searchSnippet (text : String) (n : Nat) : String :=
+  let flat := text.map (fun c => if c == '\n' || c == '\r' || c == '\t' then ' ' else c)
+  if flat.length ≤ n then flat else (flat.toList.take n).asString ++ "…"
+
+/-- Session stores walked by `search`, with the filename suffix and depth budget
+for each. Extends the resolve-time roots with the cursor-agent and hermes
+stores so search covers every locally readable harness. -/
+private def searchStoreRoots (home : String) :
+    List (String × System.FilePath × String × Nat) :=
+  [("codex", home ++ "/.codex/sessions", ".jsonl", 4),
+   ("claude", home ++ "/.claude/projects", ".jsonl", 2),
+   ("pi", home ++ "/.pi/agent/sessions", ".jsonl", 2),
+   ("cursor-agent", home ++ "/.cursor/projects", ".jsonl", 6),
+   ("hermes", home ++ "/.hermes/sessions", ".json", 1)]
+
+private structure SearchHit where
+  store : String
+  file  : String
+  role  : String
+  index : Nat
+  text  : String
+
+private def searchCwdOk (cwdFilter : Option String) (t : Transcript) : Bool :=
+  match cwdFilter with
+  | none => true
+  | some c => (t.env.cwd.map (fun cw => strHasCI cw c)).getD false
+
+/-- `loom search <query>` — match across every locally readable session store.
+Options: `--store <name>` restricts to one harness, `--role <r>` to one role,
+`--cwd <substr>` to sessions whose recorded cwd contains the substring,
+`--limit <n>` caps hits (default 200), `--json` emits one row per hit. Matching
+is a case-insensitive AND of whitespace tokens; regex is intentionally not in
+the core. Unreadable, undetectable, or malformed sessions are skipped. -/
+def runSearch (query : String) (opts : CliOptions) : IO UInt32 := do
+  let tokens := searchTokens query
+  if tokens.isEmpty then
+    IO.eprintln "search error: empty query"
+    return 1
+  let some home ← IO.getEnv "HOME"
+    | IO.eprintln "search error: HOME is not set"; return 1
+  let limit := opts.limit.getD 200
+  let mut hits : Array SearchHit := #[]
+  let mut scanned : Nat := 0
+  let mut prefiltered : Nat := 0
+  for (store, root, suffix, depth) in searchStoreRoots home do
+    if opts.store.isSome && opts.store != some store then
+      continue
+    let files ← sessionFilesEndingWith root suffix depth
+    for file in files do
+      if hits.size ≥ limit then break
+      scanned := scanned + 1
+      let readRes ← readInputText file.toString
+      match readRes with
+      | .error _ => pure ()
+      | .ok text =>
+          if matchesAllTokens (text.map Char.toLower) tokens then
+            prefiltered := prefiltered + 1
+            match detectFormat text with
+            | .error _ => pure ()
+            | .ok fmt =>
+                let impRes ← importForRead fmt file.toString false
+                match impRes with
+                | .error _ => pure ()
+                | .ok t =>
+                    if searchCwdOk opts.cwd t then
+                      for (entry, idx) in t.entries.toList.zipIdx do
+                        if hits.size < limit then
+                          let erole := Loom.searchRole entry.payload
+                          if (opts.role.isNone || opts.role == some erole) then
+                            let etext := Loom.searchText entry.payload
+                            if matchesAllTokens (etext.map Char.toLower) tokens then
+                              hits := hits.push {
+                                store := store, file := file.toString,
+                                role := erole, index := idx, text := etext }
+  if opts.json then
+    for h in hits do
+      IO.println (Lean.Json.mkObj [
+        ("store", Lean.Json.str h.store),
+        ("file", Lean.Json.str h.file),
+        ("role", Lean.Json.str h.role),
+        ("index", Lean.Json.num (Lean.JsonNumber.fromNat h.index)),
+        ("snippet", Lean.Json.str (searchSnippet h.text 400))]).compress
+  else
+    let mut lastFile := ""
+    for h in hits do
+      if h.file != lastFile then
+        IO.println ""
+        IO.println s!"── [{h.store}] {h.file}"
+        lastFile := h.file
+      IO.println s!"   [#{h.index} {h.role}] {searchSnippet h.text 160}"
+    IO.println ""
+    IO.println s!"{hits.size} match(es); scanned {scanned} sessions, imported {prefiltered}"
+  return 0
+
 def usage : String :=
   "loom — convert a coding-agent session to another harness\n\n" ++
   "  loom convert <session-id|input> <target> [output] [options]\n" ++
   "  loom text <session-id|input>...   search rows (JSON lines) for indexing\n\n" ++
+  "  loom search <query> [--store <h>] [--role <r>] [--cwd <s>] [--limit <n>]\n\n" ++
   "  target: loom | pi | claude | codex | cursor-agent | opencode\n" ++
   "  no output: install Claude sessions; write other targets to stdout\n" ++
   "  output:    write a converted file\n\n" ++
@@ -2662,6 +2792,8 @@ def main (args : List String) : IO UInt32 := do
   | "text" :: refs              =>
       if refs.isEmpty then IO.eprintln usage; pure 1
       else runText refs (resolveWithSubagents none opts.withSubagents)
+  | ["search", query]           => runSearch query opts
+  | ["search"]                  => IO.eprintln usage; pure 1
   | ["version"]                 => runVersion opts.json
   | ["self-test-sidecar-publication"] => runSidecarPublicationSelfTest
   | ["install-claude", f, inp] => runInstallClaude f inp opts
