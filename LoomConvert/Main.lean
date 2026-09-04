@@ -2649,24 +2649,35 @@ handful of sessions even across a multi-gigabyte store. This keeps the
 match semantics in the verified core rather than re-deriving them per host.
 -/
 
-/-- Case-insensitive: does `haystack` contain every token? Tokens are already
-lowercased; the haystack is lowercased by the caller. An empty token list
-matches nothing (guarded before use). -/
-private def strHasCI (haystackLower needleLower : String) : Bool :=
-  (haystackLower.splitOn needleLower).length > 1
+/-- Whitespace (space/tab/newline/carriage-return). -/
+private def isSearchSpace (c : Char) : Bool :=
+  c == ' ' || c == '\t' || c == '\n' || c == '\r'
 
+/-- Does `haystack` contain `needle` as a substring? Both are supplied at the
+same case by the caller (lowercased for token matching, raw for cwd paths). -/
+private def substrPresent (haystack needle : String) : Bool :=
+  (haystack.splitOn needle).length > 1
+
+/-- Every token present in the (already same-cased) haystack. An empty token
+list matches nothing; callers guard against it. -/
 private def matchesAllTokens (haystackLower : String) (tokens : List String) : Bool :=
-  tokens.all (fun t => strHasCI haystackLower t)
+  tokens.all (substrPresent haystackLower)
 
-/-- Split a query into lowercased, non-empty whitespace tokens. -/
+/-- Split a query into lowercased, non-empty whitespace-separated tokens. -/
 private def searchTokens (query : String) : List String :=
+  let normalized := query.map (fun c => if isSearchSpace c then ' ' else c)
   List.filterMap
     (fun t => if t.isEmpty then none else some (t.map Char.toLower))
-    (query.splitOn " " |>.flatMap (·.splitOn "\t") |>.flatMap (·.splitOn "\n"))
+    (normalized.splitOn " ")
 
-/-- Flatten newlines/tabs to spaces and clip to `n` characters for one-line output. -/
+example : searchTokens "  Cron-Server\tFoo " = ["cron-server", "foo"] := by native_decide
+example : matchesAllTokens "the cron-server logs" ["cron-server", "logs"] = true := by
+  native_decide
+example : matchesAllTokens "only cron here" ["cron", "server"] = false := by native_decide
+
+/-- Flatten whitespace to single spaces and clip to `n` characters for one-line output. -/
 private def searchSnippet (text : String) (n : Nat) : String :=
-  let flat := text.map (fun c => if c == '\n' || c == '\r' || c == '\t' then ' ' else c)
+  let flat := text.map (fun c => if isSearchSpace c then ' ' else c)
   if flat.length ≤ n then flat else (flat.toList.take n).asString ++ "…"
 
 /-- Session stores walked by `search`, with the filename suffix and depth budget
@@ -2690,7 +2701,19 @@ private structure SearchHit where
 private def searchCwdOk (cwdFilter : Option String) (t : Transcript) : Bool :=
   match cwdFilter with
   | none => true
-  | some c => (t.env.cwd.map (fun cw => strHasCI cw c)).getD false
+  | some c => (t.env.cwd.map (substrPresent · c)).getD false
+
+/-- Every entry of one imported session that matches the query and role filter. -/
+private def searchFileHits (store file : String) (roleFilter : Option String)
+    (tokens : List String) (t : Transcript) : Array SearchHit := Id.run do
+  let mut hits : Array SearchHit := #[]
+  for (entry, idx) in t.entries.toList.zipIdx do
+    let erole := Loom.searchRole entry.payload
+    if roleFilter.isNone || roleFilter == some erole then
+      let etext := Loom.searchText entry.payload
+      if matchesAllTokens (etext.map Char.toLower) tokens then
+        hits := hits.push { store, file, role := erole, index := idx, text := etext }
+  return hits
 
 /-- `loom search <query>` — match across every locally readable session store.
 Options: `--store <name>` restricts to one harness, `--role <r>` to one role,
@@ -2708,7 +2731,7 @@ def runSearch (query : String) (opts : CliOptions) : IO UInt32 := do
   let limit := opts.limit.getD 200
   let mut hits : Array SearchHit := #[]
   let mut scanned : Nat := 0
-  let mut prefiltered : Nat := 0
+  let mut imported : Nat := 0
   for (store, root, suffix, depth) in searchStoreRoots home do
     if opts.store.isSome && opts.store != some store then
       continue
@@ -2716,31 +2739,23 @@ def runSearch (query : String) (opts : CliOptions) : IO UInt32 := do
     for file in files do
       if hits.size ≥ limit then break
       scanned := scanned + 1
-      let readRes ← readInputText file.toString
-      match readRes with
+      -- Raw-byte prefilter: only import files that can contain every token.
+      match ← readInputText file.toString with
       | .error _ => pure ()
       | .ok text =>
-          if matchesAllTokens (text.map Char.toLower) tokens then
-            prefiltered := prefiltered + 1
-            match detectFormat text with
+        if matchesAllTokens (text.map Char.toLower) tokens then
+          match detectFormat text with
+          | .error _ => pure ()
+          | .ok fmt =>
+            match ← importForRead fmt file.toString false with
             | .error _ => pure ()
-            | .ok fmt =>
-                let impRes ← importForRead fmt file.toString false
-                match impRes with
-                | .error _ => pure ()
-                | .ok t =>
-                    if searchCwdOk opts.cwd t then
-                      for (entry, idx) in t.entries.toList.zipIdx do
-                        if hits.size < limit then
-                          let erole := Loom.searchRole entry.payload
-                          if (opts.role.isNone || opts.role == some erole) then
-                            let etext := Loom.searchText entry.payload
-                            if matchesAllTokens (etext.map Char.toLower) tokens then
-                              hits := hits.push {
-                                store := store, file := file.toString,
-                                role := erole, index := idx, text := etext }
+            | .ok t =>
+              imported := imported + 1
+              if searchCwdOk opts.cwd t then
+                hits := hits ++ searchFileHits store file.toString opts.role tokens t
+  let shown := hits.toList.take limit
   if opts.json then
-    for h in hits do
+    for h in shown do
       IO.println (Lean.Json.mkObj [
         ("store", Lean.Json.str h.store),
         ("file", Lean.Json.str h.file),
@@ -2749,14 +2764,14 @@ def runSearch (query : String) (opts : CliOptions) : IO UInt32 := do
         ("snippet", Lean.Json.str (searchSnippet h.text 400))]).compress
   else
     let mut lastFile := ""
-    for h in hits do
+    for h in shown do
       if h.file != lastFile then
         IO.println ""
         IO.println s!"── [{h.store}] {h.file}"
         lastFile := h.file
       IO.println s!"   [#{h.index} {h.role}] {searchSnippet h.text 160}"
     IO.println ""
-    IO.println s!"{hits.size} match(es); scanned {scanned} sessions, imported {prefiltered}"
+    IO.println s!"{shown.length} match(es); scanned {scanned} sessions, imported {imported}"
   return 0
 
 def usage : String :=
