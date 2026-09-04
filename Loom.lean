@@ -9,6 +9,7 @@ import Loom.Turns
 import Loom.Formats
 import Loom.Claims
 import Loom.BuildOptions
+import Loom.Text
 
 /-!
 # Loom — the WHAT

@@ -1,6 +1,7 @@
 import LoomConvert
 import LoomOps.Conversion
 import Loom.Render
+import Loom.Text
 import Loom.BuildOptions
 
 /-!
@@ -1996,11 +1997,12 @@ def runVersion (json : Bool) : IO UInt32 := do
   else IO.println s!"agent-convert core {coreVersion} ({coreRevision})"
   pure 0
 
-/-- Parse one transcript and print the canonical human review surface. This is
-read-only: unlike conversion it never writes a harness artifact or session
-index. -/
-def runInspect (fromFmt inp : String) (withSubagents json : Bool) : IO UInt32 := do
-  let imported ← try
+/-- Read-only import shared by `inspect` and `text`: sidecar sub-agents are
+stitched when requested, and cursor-agent is always read through its
+path-aware importer. -/
+private def importForRead (fromFmt inp : String) (withSubagents : Bool) :
+    IO (Except String Transcript) := do
+  try
     if withSubagents then
       match fromFmt with
       | "claude"       => importClaudeSessionWithSubagents inp
@@ -2018,6 +2020,9 @@ def runInspect (fromFmt inp : String) (withSubagents json : Bool) : IO UInt32 :=
         | .error error => pure (.error error)
   catch error =>
     pure (.error s!"cannot read '{inp}': {error}")
+
+def runInspect (fromFmt inp : String) (withSubagents json : Bool) : IO UInt32 := do
+  let imported ← importForRead fromFmt inp withSubagents
   match imported with
   | .error e => IO.eprintln s!"inspect error: {e}"; pure 2
   | .ok transcript =>
@@ -2592,9 +2597,43 @@ def runSmartConvert (ref toFmt : String) (outp : Option String)
       | .ok transcript => pure transcript
     runConvert fromFmt toFmt inp outp (smartTargetOptions toFmt source opts)
 
+/-- `loom text <session-id|input>...` — the search projection (`Loom.Text`).
+
+Emits JSON lines on stdout: one `session` row per input followed by one
+`entry` row per IR entry, then continues with the next input. A source that
+cannot be resolved or imported yields a single `error` row for that input;
+the other inputs are still projected, so an indexer can batch many files per
+process. Exit status is 0 when at least one input was projected and 2 when
+every input failed. Malformed-IR sources are projected anyway, with the
+violation count on the session row, because a search index would rather see
+a damaged session than lose it. -/
+def runText (refs : List String) (withSubagents : Bool) : IO UInt32 := do
+  let mut failures := 0
+  for ref in refs do
+    let errorRow := fun (error : String) =>
+      (Lean.Json.mkObj [
+        ("kind", Lean.Json.str "error"),
+        ("file", Lean.Json.str ref),
+        ("error", Lean.Json.str error)]).compress
+    match ← resolveSessionInput ref "" with
+    | .error error =>
+        IO.println (errorRow error)
+        failures := failures + 1
+    | .ok (fromFmt, path) =>
+        match ← importForRead fromFmt path withSubagents with
+        | .error error =>
+            IO.println (errorRow error)
+            failures := failures + 1
+        | .ok transcript =>
+            let rows := (searchSessionRow path fromFmt transcript).compress ::
+              (searchRows transcript).map Lean.Json.compress
+            IO.print (String.intercalate "\n" rows ++ "\n")
+  pure (if failures == refs.length then 2 else 0)
+
 def usage : String :=
   "loom — convert a coding-agent session to another harness\n\n" ++
-  "  loom convert <session-id|input> <target> [output] [options]\n\n" ++
+  "  loom convert <session-id|input> <target> [output] [options]\n" ++
+  "  loom text <session-id|input>...   search rows (JSON lines) for indexing\n\n" ++
   "  target: loom | pi | claude | codex | cursor-agent | opencode\n" ++
   "  no output: install Claude sessions; write other targets to stdout\n" ++
   "  output:    write a converted file\n\n" ++
@@ -2620,6 +2659,9 @@ def main (args : List String) : IO UInt32 := do
   | ["inspect", f, inp]         =>
       runInspect f inp (resolveWithSubagents none opts.withSubagents) opts.json
   | ["detect", inp]             => runDetect inp opts.json
+  | "text" :: refs              =>
+      if refs.isEmpty then IO.eprintln usage; pure 1
+      else runText refs (resolveWithSubagents none opts.withSubagents)
   | ["version"]                 => runVersion opts.json
   | ["self-test-sidecar-publication"] => runSidecarPublicationSelfTest
   | ["install-claude", f, inp] => runInstallClaude f inp opts
