@@ -70,6 +70,31 @@ loom convert <session-or-file> <target> [output] \
 
 Run `loom` with no arguments to see the available overrides.
 
+## Search and analytics
+
+Loom is not only a converter — it reads every local harness store as one
+searchable corpus.
+
+```sh
+loom search "flash attention"            # all stores, ranked hits
+loom search "kanban" --store hermes      # one harness
+loom search "deploy" --role user --limit 20 --json
+loom text <session-id|file>...           # JSON search rows for indexing
+```
+
+`search` matches a case-insensitive AND of whitespace tokens against the
+canonical IR, so a Claude `tool_result`, a Codex `function_call_output`, and a
+pi tool result all match the same way. `text` emits one JSON row per entry
+(`role`, `index`, `ms`, `tools`, `text`) for an external index. Scope large
+queries with `--store` / `--limit`.
+
+An MCP server exposes all of this — search, text, convert, inspect, detect,
+version — to any agent as a control plane. See [`mcp/`](./mcp/README.md):
+
+```sh
+claude mcp add loom -- node "$PWD/mcp/loom-mcp.mjs"
+```
+
 ## Formats
 
 | Format | Import | Export | Output |
