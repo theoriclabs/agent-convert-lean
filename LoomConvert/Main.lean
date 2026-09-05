@@ -2054,6 +2054,101 @@ def runInspect (fromFmt inp : String) (withSubagents json : Bool) : IO UInt32 :=
             renderTranscript transcript)
         pure 0
 
+/-- Which Codex import a conversion uses. A continuation target (`claude`, `pi`,
+`codex`, …) receives the context Codex itself would resume — the latest
+compaction's replacement history plus everything after it. A long Codex thread
+has typically been compacted many times; exporting its complete pre-compaction
+history to a harness that must load the whole file as one context is not
+fidelity, it is a session the target cannot open (Claude Code answers
+`Prompt is too long` even after its own compaction). The `loom` archive target
+keeps the complete stream for audit and search.
+
+This choice is a property of the target alone. It must not depend on whether
+subagent sidecars are being stitched: that coupling once routed every Codex →
+Claude conversion (subagents default on) through the full-history import. -/
+inductive CodexImportMode where
+  | full | active | tsParity
+  deriving DecidableEq, Repr
+
+def codexImportMode (toFmt : String) (tsParity : Bool) : CodexImportMode :=
+  if tsParity then .tsParity
+  else if toFmt == "loom" then .full
+  else .active
+
+/-- Source text → Loom IR for `convert`, applying `codexImportMode` for Codex
+sources and the plain format importer for everything else. -/
+def importSourceText (fromFmt toFmt : String) (opts : CliOptions) (text : String) :
+    Except String Transcript :=
+  if fromFmt == "codex" then
+    match codexImportMode toFmt opts.tsParity with
+    | .tsParity => importCodexCliTsParity text  -- transform 4 (compaction-latest)
+    | .active => importCodexCliActive text
+    | .full => importCodexCli text
+  else importByFormat fromFmt text
+
+/-- PIN: continuation targets use the active Codex context regardless of the
+subagent policy; only the `loom` archive imports the full stream. -/
+example : codexImportMode "claude" false = .active := by decide
+example : codexImportMode "pi" false = .active := by decide
+example : codexImportMode "codex" false = .active := by decide
+example : codexImportMode "loom" false = .full := by decide
+example : codexImportMode "claude" true = .tsParity := by decide
+
+/-- Last line of defence, independent of how the transcript was imported: a
+source that recorded compactions but whose transcript still carries the
+complete pre-compaction history is refused for every continuation target. Only
+the `loom` archive may hold it. -/
+def preCompactionHistoryBlocker? (toFmt : String) (t : Transcript) : Option String :=
+  if toFmt == "loom" then none else
+  match t.origin.extras with
+  | some extras =>
+      let events := (extras.getObjVal? "compaction_events" >>= Lean.Json.getNat?).toOption.getD 0
+      if events > 0 && !transcriptUsesActiveContext t then
+        some s!"source was compacted {events} time(s) but this transcript carries its complete pre-compaction history; a '{toFmt}' session built from it cannot be opened (Claude Code answers 'Prompt is too long'). Convert from the Codex rollout so Loom resumes the active context, or target 'loom' for an archive."
+      else none
+  | none => none
+
+private def transcriptMentions (t : Transcript) (needle : String) : Bool :=
+  t.entries.any (fun e => match e.payload with
+    | .userMsg blocks => blocks.any (fun b => match b with
+        | .text s => (s.splitOn needle).length > 1
+        | _ => false)
+    | .assistantMsg blocks => blocks.any (fun b => match b with
+        | .text s => (s.splitOn needle).length > 1
+        | _ => false)
+    | _ => false)
+
+/-- A Codex 0.153 rollout with one compaction, in the current record shape
+(`ordinal` on every record, bookkeeping fields on the checkpoint, empty
+`message`). -/
+private def codexCompactedRolloutPin : String := String.intercalate "\n" [
+  "{\"type\":\"session_meta\",\"timestamp\":\"2026-09-04T05:04:24.235Z\",\"payload\":{\"id\":\"01a06acd-52b1-7a70-ba9e-7b4b1390cee0\",\"timestamp\":\"2026-09-04T05:04:24.235Z\",\"cwd\":\"/w\",\"cli_version\":\"0.153.0\",\"originator\":\"codex_cli_rs\",\"model_provider\":\"openai\",\"instructions\":\"x\"}}",
+  "{\"type\":\"response_item\",\"timestamp\":\"2026-09-04T05:05:00.000Z\",\"ordinal\":1,\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"OLD-precompaction\"}]}}",
+  "{\"type\":\"compacted\",\"timestamp\":\"2026-09-04T05:30:07.997Z\",\"ordinal\":2,\"payload\":{\"message\":\"\",\"replacement_history\":[{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"SNAPSHOT-spliced\"}],\"internal_chat_message_metadata_passthrough\":{\"turn_id\":\"t1\",\"content_item_kinds\":[\"input_text\"],\"create_time\":\"2026-09-04T05:05:00.000Z\"}},{\"type\":\"compaction\",\"encrypted_content\":\"gAAAAA\"}],\"window_number\":1,\"first_window_id\":\"a\",\"previous_window_id\":\"b\",\"window_id\":\"c\",\"compaction_response_id\":\"resp_1\",\"guardian_history\":[],\"latest_token_usage_record\":{}}}",
+  "{\"type\":\"response_item\",\"timestamp\":\"2026-09-04T05:31:00.000Z\",\"ordinal\":3,\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"NEW-postcompaction\"}]}}"]
+
+/-- PIN (the 2026-09-04 regression): converting a compacted Codex rollout to a
+continuation target goes through `importSourceText` on every `runConvert`
+branch and resumes the active context — the replacement history and the
+post-compaction dialogue survive, the pre-compaction dialogue does not, and the
+publication guard accepts it. The full-stream import (archive) keeps the old
+dialogue and is exactly what the guard refuses for a continuation target. -/
+def codexCompactedRolloutConvertsActive : Bool :=
+  match importSourceText "codex" "claude" {} codexCompactedRolloutPin,
+      importSourceText "codex" "loom" {} codexCompactedRolloutPin with
+  | .ok active, .ok full =>
+      transcriptMentions active "SNAPSHOT-spliced" &&
+      transcriptMentions active "NEW-postcompaction" &&
+      !transcriptMentions active "OLD-precompaction" &&
+      (preCompactionHistoryBlocker? "claude" active).isNone &&
+      transcriptMentions full "OLD-precompaction" &&
+      (preCompactionHistoryBlocker? "claude" full).isSome &&
+      (preCompactionHistoryBlocker? "pi" full).isSome &&
+      (preCompactionHistoryBlocker? "loom" full).isNone
+  | _, _ => false
+
+example : codexCompactedRolloutConvertsActive = true := by native_decide
+
 /-- Import the source (optionally stitching sidecar sub-agents), optionally apply
 the codex TS-parity renderer, well-formedness-check, then export.
 Subagent sidecars default on for `loom` / Claude / Cursor Agent targets (and
@@ -2076,7 +2171,7 @@ def runConvert (fromFmt toFmt inp : String) (outp : Option String)
       | "cursor-agent" => importCursorAgentSessionWithSubagents inp
       | _ => do
           match ← readInputText inp with
-          | .ok text => pure (importByFormat fromFmt text)
+          | .ok text => pure (importSourceText fromFmt toFmt opts text)
           | .error error => pure (.error error)
     else do
       if fromFmt == "cursor-agent" then
@@ -2084,13 +2179,7 @@ def runConvert (fromFmt toFmt inp : String) (outp : Option String)
       else
         match ← readInputText inp with
         | .error error => pure (.error error)
-        | .ok text =>
-            if opts.tsParity && fromFmt == "codex" then
-              pure (importCodexCliTsParity text)  -- transform 4 (compaction-latest)
-            else if fromFmt == "codex" && toFmt != "loom" then
-              pure (importCodexCliActive text)
-            else
-              pure (importByFormat fromFmt text)
+        | .ok text => pure (importSourceText fromFmt toFmt opts text)
   catch error =>
     pure (.error s!"cannot read '{inp}': {error}")
   match imported with
@@ -2098,6 +2187,9 @@ def runConvert (fromFmt toFmt inp : String) (outp : Option String)
   | .ok t0 =>
     let t0 := if opts.tsParity && fromFmt == "codex" then codexTsParity t0 else t0
     let source := applyCliOverrides toFmt opts t0
+    if let some blocker := preCompactionHistoryBlocker? toFmt source then
+      IO.eprintln s!"export error: {blocker}"
+      return 3
     let sourceVs := violations source
     if sourceVs.length > 0 then
       IO.eprintln s!"export error: source imported to a malformed IR ({sourceVs.length} violations) — refusing to export"

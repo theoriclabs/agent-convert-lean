@@ -559,18 +559,28 @@ private def codexReservedRecordSourceFailure?
     some "exporter-owned Codex carrier envelope requires canonical JSONL bytes"
   else none
 
-/-! ### Codex 0.144.1 compacted-record domain
+/-! ### Codex 0.144.1–0.153 compacted-record domain
 
-The current rollout schema stores a compacted checkpoint as a six-field payload.
-Its `replacement_history` is replayable Responses input and ends in a server-
-issued `compaction` item whose `encrypted_content` is the opaque summary
-signature. Loom's typed compaction can project only `message`; the complete
+The rollout schema stores a compacted checkpoint as a six-field payload; Codex
+0.153 added three bookkeeping fields (`compaction_response_id`,
+`guardian_history`, `latest_token_usage_record`), an `ordinal` on every record,
+`content_item_kinds`/`create_time` in the passthrough metadata, and started
+recording an empty `message`. Codex adds such keys every few releases, and a
+key whitelist here silently demoted every real checkpoint of a long thread to
+`codex-malformed-compaction-record`. The domain is therefore OPEN-WORLD for
+unknown keys and strict only about the semantic shape: a string `message`, a
+`replacement_history` of messages ending in the encrypted `compaction`
+signature, a positive `window_number`, and the three window ids. Its `replacement_history` is replayable Responses input and ends in
+a server-issued `compaction` item whose `encrypted_content` is the opaque
+summary signature. Loom's typed compaction can project only `message`; the complete
 checkpoint therefore remains entry-scoped provenance and is reusable only when
 the typed projection still agrees with it. -/
 
-private def codexCompactionOnlyObjectKeys (j : Json) (allowed : List String) : Bool :=
+/-- Open-world: any object is in the domain; only the semantic fields below are
+checked. See the section comment for why no key whitelist may return here. -/
+private def codexCompactionIsObject (j : Json) : Bool :=
   match j with
-  | .obj fields => fields.all (fun key _ => allowed.contains key)
+  | .obj _ => true
   | _ => false
 
 private def codexCompactionOptionalNonemptyString
@@ -584,17 +594,23 @@ private def codexCompactionMetadataValid (item : Json) : Bool :=
   match oobj item "internal_chat_message_metadata_passthrough" with
   | none | some Json.null => true
   | some metadata@(.obj _) =>
-      codexCompactionOnlyObjectKeys metadata ["turn_id"] &&
-        codexCompactionOptionalNonemptyString metadata "turn_id"
+      codexCompactionIsObject metadata &&
+        codexCompactionOptionalNonemptyString metadata "turn_id" &&
+        (match oobj metadata "content_item_kinds" with
+         | none | some Json.null | some (Json.arr _) => true
+         | _ => false) &&
+        (match oobj metadata "create_time" with
+         | none | some Json.null | some (Json.str _) | some (Json.num _) => true
+         | _ => false)
   | _ => false
 
 private def codexCompactionContentItemValid (item : Json) : Bool :=
   match ostr item "type" with
   | some "input_text" | some "output_text" =>
-      codexCompactionOnlyObjectKeys item ["type", "text"] &&
+      codexCompactionIsObject item &&
         (ostr item "text").isSome
   | some "input_image" =>
-      codexCompactionOnlyObjectKeys item ["type", "image_url", "detail"] &&
+      codexCompactionIsObject item &&
         (ostr item "image_url").any (fun locator => !locator.isEmpty) &&
         (match oobj item "detail" with
          | none | some Json.null => true
@@ -605,8 +621,7 @@ private def codexCompactionContentItemValid (item : Json) : Bool :=
   | _ => false
 
 private def codexCompactionMessageItemValid (item : Json) : Bool :=
-  codexCompactionOnlyObjectKeys item ["type", "id", "role", "content", "phase",
-    "internal_chat_message_metadata_passthrough"] &&
+  codexCompactionIsObject item &&
     ostr item "type" == some "message" &&
     (ostr item "role").any (fun role => !role.isEmpty) &&
     (oarr item "content").any (fun content =>
@@ -619,8 +634,7 @@ private def codexCompactionMessageItemValid (item : Json) : Bool :=
     codexCompactionMetadataValid item
 
 private def codexCompactionSignatureItemValid (item : Json) : Bool :=
-  codexCompactionOnlyObjectKeys item ["type", "id", "encrypted_content",
-    "internal_chat_message_metadata_passthrough"] &&
+  codexCompactionIsObject item &&
     ostr item "type" == some "compaction" &&
     (ostr item "encrypted_content").any (fun signature => !signature.isEmpty) &&
     codexCompactionOptionalNonemptyString item "id" &&
@@ -634,17 +648,25 @@ private def codexReplacementHistoryValid (history : Array Json) : Bool :=
         reversedMessages.all codexCompactionMessageItemValid
 
 private def codexCompactedPayloadValid (payload : Json) : Bool :=
-  codexCompactionOnlyObjectKeys payload ["message", "replacement_history",
-    "window_number", "first_window_id", "previous_window_id", "window_id"] &&
+  codexCompactionIsObject payload &&
     (ostr payload "message").isSome &&
+    codexCompactionOptionalNonemptyString payload "compaction_response_id" &&
+    (match oobj payload "guardian_history" with
+     | none | some Json.null | some (Json.arr _) => true
+     | _ => false) &&
+    (match oobj payload "latest_token_usage_record" with
+     | none | some Json.null | some (Json.obj _) => true
+     | _ => false) &&
     (oarr payload "replacement_history").any codexReplacementHistoryValid &&
     (payload.getObjVal? "window_number" >>= Json.getNat?).toOption.any (· > 0) &&
     ["first_window_id", "previous_window_id", "window_id"].all (fun key =>
       (ostr payload key).any (fun value => !value.isEmpty))
 
 private def codexCompactedRecordValid (record : Json) : Bool :=
-  codexCompactionOnlyObjectKeys record
-      ["timestamp", "type", "payload", codexTimeProvenanceKey] &&
+  codexCompactionIsObject record &&
+    (match oobj record "ordinal" with
+     | none | some Json.null | some (Json.num _) => true
+     | _ => false) &&
     ostr record "type" == some "compacted" &&
     (ostr record "timestamp" >>= iso8601ToEpochMs?).isSome &&
     (oobj record "payload").any codexCompactedPayloadValid &&
@@ -1431,7 +1453,7 @@ private def adaptRecords (records : List Json) (carrierSessionSelfIdentified : B
       else
         archived := archived.push j
         notes := notes.push (mkNote (.other "codex-malformed-compaction-record") idx
-          "Compacted record is outside the strict Codex 0.144.1 checkpoint domain; complete record retained outside dialogue")
+          "Compacted record is outside the strict Codex 0.144.1–0.153 checkpoint domain; complete record retained outside dialogue")
     else if ty == "turn_context" then
       if codexGeneratedTargetDefaultsMarkerExact p then
         generatedControls := generatedControls.push j
@@ -8775,6 +8797,96 @@ private def codexMalformedCompactionArchived (transcript : Transcript) : Bool :=
       oarr extras "raw_compaction_records" == some #[codexMalformedCompactionRecord] &&
       (oarr extras "raw_non_dialogue_records").any (fun records =>
         records.contains codexMalformedCompactionRecord))
+
+/-- Codex 0.153 widened the checkpoint payload with `compaction_response_id`,
+`guardian_history`, and `latest_token_usage_record`, and records an empty
+`message`. Such a rollout is a well-formed checkpoint, not a malformed record.
+Rejecting it archived every real compaction of a long thread as
+`codex-malformed-compaction-record`, so nothing typed marked where the
+resumable context begins. -/
+private def codexCurrentCompactionPayload : Json :=
+  codexStrictCompactionPayload
+    |>.setObjVal! "message" (Json.str "")
+    |>.setObjVal! "replacement_history" (Json.arr #[
+      Json.mkObj [
+        ("type", Json.str "message"), ("role", Json.str "user"),
+        ("id", Json.str "msg_01a06acd-c0e5-7b22-9240-41d611b76dd9"),
+        ("content", Json.arr #[Json.mkObj [
+          ("type", Json.str "input_text"),
+          ("text", Json.str "retained checkpoint input")]]),
+        ("internal_chat_message_metadata_passthrough", Json.mkObj [
+          ("turn_id", Json.str "019b1f75-4c2a-7b11-8ea2-000000000010"),
+          ("content_item_kinds", Json.arr #[Json.str "input_text"]),
+          ("create_time", Json.str "2026-09-04T05:04:24.235Z")])],
+      Json.mkObj [
+        ("type", Json.str "compaction"),
+        ("id", Json.str
+          "cmp_019b1f754c2a7b118ea21234567890abcdef1234567890abcd"),
+        ("encrypted_content", Json.str "gAAAAA-exact-compaction-signature"),
+        ("internal_chat_message_metadata_passthrough",
+          codexStrictCompactionMetadata)]])
+    |>.setObjVal! "compaction_response_id" (Json.str "resp_09b3a020da1e1af2")
+    |>.setObjVal! "guardian_history" (Json.arr #[])
+    |>.setObjVal! "latest_token_usage_record"
+      (Json.mkObj [("thread_id", Json.str codexTargetTestId)])
+
+private def codexCurrentCompactionRecord : Json :=
+  Json.mkObj [
+    ("timestamp", Json.str codexStrictCompactionTimestamp),
+    ("ordinal", Json.num 479),
+    ("type", Json.str "compacted"),
+    ("payload", codexCurrentCompactionPayload)]
+
+private def codexCurrentCompactionImportFixture : String :=
+  String.intercalate "\n" ([
+    Json.mkObj [
+      ("timestamp", Json.str "2023-11-14T22:13:20.000Z"),
+      ("type", Json.str "session_meta"),
+      ("payload", Json.mkObj [
+        ("id", Json.str codexTargetTestId),
+        ("cli_version", Json.str codexCliTargetVersion)])],
+    Json.mkObj [
+      ("timestamp", Json.str "2023-11-14T22:13:20.050Z"),
+      ("type", Json.str "response_item"),
+      ("payload", Json.mkObj [
+        ("type", Json.str "message"), ("role", Json.str "user"),
+        ("content", Json.arr #[Json.mkObj [
+          ("type", Json.str "input_text"),
+          ("text", Json.str "OLD-precompaction")]])])],
+    codexCurrentCompactionRecord,
+    Json.mkObj [
+      ("timestamp", Json.str "2023-11-14T22:13:20.124Z"),
+      ("type", Json.str "response_item"),
+      ("payload", Json.mkObj [
+        ("type", Json.str "message"), ("role", Json.str "user"),
+        ("content", Json.arr #[Json.mkObj [
+          ("type", Json.str "input_text"),
+          ("text", Json.str "NEW-postcompaction")]])])]
+    ].map Json.compress) ++ "\n"
+
+/-- PIN: the 0.153 checkpoint is a typed compaction in the faithful import (no
+malformed-record note), and the active import resumes from its replacement
+history — the pre-compaction dialogue is gone, the retained input and the
+post-compaction dialogue remain. -/
+def codexCurrentCompactionCheckpointAccepted : Bool :=
+  (match importCodexCli codexCurrentCompactionImportFixture with
+   | .ok transcript =>
+       transcript.entries.any (fun entry => match entry.payload with
+         | .compaction "" .unknownPrefix none => true
+         | _ => false) &&
+       !transcript.importNotes.any (fun note => match note.kind with
+         | .other "codex-malformed-compaction-record" => true
+         | _ => false)
+   | .error _ => false) &&
+  (match importCodexCliActive codexCurrentCompactionImportFixture with
+   | .ok active =>
+       let rendered := normalize active
+       hasSub rendered "retained checkpoint input" &&
+         hasSub rendered "NEW-postcompaction" &&
+         !hasSub rendered "OLD-precompaction"
+   | .error _ => false)
+
+example : codexCurrentCompactionCheckpointAccepted = true := by native_decide
 
 /-- Malformed/native-unproven checkpoints are never activated or silently
 dropped by checked export. Summary drift and Loom-only extent/token facts refuse
