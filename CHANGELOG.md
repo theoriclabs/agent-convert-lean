@@ -33,6 +33,8 @@ First public prerelease of the Lean session converter.
 - Use Codex's active compaction context for every continuation target, including
   when subagent discovery is enabled. Keep full history for Loom archives.
 - Align release-builder identity checks with the current `0.2.0-preview.1` CLI.
+- Fix release builds from the flattened repository root, where Git rejects an
+  empty pathspec during the clean-worktree check.
 
 ### Known limitations
 

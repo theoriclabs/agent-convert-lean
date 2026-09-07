@@ -238,6 +238,12 @@ try {
 NODE
 }
 
+tracked_source_status() {
+  # Git tree syntax accepts HEAD: for the root, but status rejects an empty
+  # pathspec. The flattened checkout needs '.' only for this worktree query.
+  "$GIT_BIN" -C "$1" status --porcelain=v1 --untracked-files=no -- "${2:-.}"
+}
+
 verify_committed_snapshot() {
   "$NODE_BIN" - "$GIT_BIN" "$1" "$2" "$3" "$4" "$5" <<'NODE'
 const fs = require("node:fs");
@@ -2467,7 +2473,13 @@ NODE
   "$GIT_BIN" -C "$repo" -c user.name=SelfTest -c user.email=self-test@example.invalid \
     commit -q -m snapshot
   revision_from_repo="$("$GIT_BIN" -C "$repo" rev-parse --verify 'HEAD^{commit}')"
+  local root_status
+  root_status="$(tracked_source_status "$repo" "")" || die "root status query failed"
+  [[ -z "$root_status" ]] || die "clean root reported tracked changes"
   printf 'dirty worktree bytes\n' >"$repo/spec/loom/marker.txt"
+  root_status="$(tracked_source_status "$repo" "")" || die "dirty root status query failed"
+  [[ -n "$root_status" ]] || die "root status query missed a tracked change"
+  [[ -n "$(tracked_source_status "$repo" spec/loom)" ]] || die "nested status query missed a tracked change"
   mkdir -p -- "$repo/spec/loom/.lake/build"
   printf 'cached build\n' >"$repo/spec/loom/.lake/build/cached"
   snapshot_workspace="$temp/snapshot-workspace"
@@ -2557,7 +2569,7 @@ source_tree="$("$GIT_BIN" -C "$repo_root" rev-parse --verify "$revision:$git_pat
 [[ "$source_tree" =~ ^[0-9a-f]{40}$ ]] || die "could not resolve the committed Loom source tree"
 
 tracked_status=""
-if ! tracked_status="$("$GIT_BIN" -C "$repo_root" status --porcelain=v1 --untracked-files=no -- "$git_path")"; then
+if ! tracked_status="$(tracked_source_status "$repo_root" "$git_path")"; then
   die "could not inspect tracked Loom source state"
 fi
 if [[ -n "$tracked_status" ]]; then
@@ -2597,7 +2609,7 @@ verify_committed_snapshot "$repo_root" "$git_path" "$revision" "$build_root" bui
 post_build_head="$("$GIT_BIN" -C "$repo_root" rev-parse --verify 'HEAD^{commit}')"
 [[ "$post_build_head" == "$revision" ]] || \
   die "checkout HEAD changed during the private build ($revision -> $post_build_head); rerun from a stable checkout"
-if ! tracked_status="$("$GIT_BIN" -C "$repo_root" status --porcelain=v1 --untracked-files=no -- "$git_path")"; then
+if ! tracked_status="$(tracked_source_status "$repo_root" "$git_path")"; then
   die "could not recheck tracked Loom source state after the private build"
 fi
 if [[ -n "$tracked_status" ]]; then
