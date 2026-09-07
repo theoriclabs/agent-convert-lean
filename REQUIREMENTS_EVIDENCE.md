@@ -1,5 +1,11 @@
 # agent-convert/Lean Requirements Evidence
 
+Current interpretation: [INTENT.md](./INTENT.md) requires native past tool
+history and clean resumed model context. Historical carrier round trips and
+non-execution observations below remain valid within their recorded scope, but
+do not establish that requirement. The 2026-09-07 completed/pruned Cursor case
+demonstrates the gap; see [bug report](./docs/bugs/native-tool-history.md).
+
 Evidence date: 2026-07-21. Baseline commit at start of this work:
 `28288eec264911abed787f189d1fc0a383df9146`. This identifies ancestry only,
 not the uncommitted candidate under review. External evidence is not qualified

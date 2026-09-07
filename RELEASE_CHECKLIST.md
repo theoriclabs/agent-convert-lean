@@ -1,5 +1,9 @@
 # Loom release checklist
 
+Native conversation continuity is defined in [INTENT.md](./INTENT.md).
+Carrier decoding, target-parser acceptance, and absence of tool replay are
+separate from preserving native history in the target's resumed model context.
+
 Status: **experimental developer-preview candidate; not release-ready and not
 stable**.
 
@@ -510,12 +514,15 @@ evidence, so this section is presently blocking.
 - [ ] Ordered source/target tool censuses reconcile occurrence, id, name,
   complete arguments, complete result blocks, linkage, error value/provenance,
   disposition, and every synthesis/refusal.
-- [ ] Foreign calls are target-native only after a verified schema/result/error
-  round trip. Otherwise they are visibly non-executable history or the
-  conversion refuses; real targets do not execute history carriers.
-- [ ] Satisfy F-029 with separate retained real-harness evidence that historical
-  carrier calls did not execute. E-037's artifact-level matrix does not count as
-  this observation.
+- [ ] Representable source calls/results are native target history, including
+  known completed calls with pruned output. Execution status and unavailable
+  output remain distinct; no converter disclaimer or carrier JSON enters
+  assistant dialogue. Actual target limitations are reported separately.
+- [ ] Inspect the target's resumed model context and run a controlled prior-tool
+  recall probe. Parser acceptance and carrier self-round-trips are insufficient.
+- [ ] Satisfy F-029 by observing that load/resume does not rerun recorded past
+  actions, including native tool history. Check execution events rather than
+  treating the absence of native tool records as proof of success.
 - [ ] Developer/system/policy/permission/configuration/environment records stay
   outside target user/assistant dialogue and remain typed provenance or a named
   loss/refusal for every advertised role family.

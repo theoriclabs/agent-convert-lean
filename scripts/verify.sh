@@ -54,6 +54,8 @@ npm run build
 echo "== focused node regressions =="
 node "$LOOM_ROOT/scripts/audit-corpora.self-test.mjs"
 node "$LOOM_ROOT/scripts/audit-codex-claude.self-test.mjs"
+LOOM_BIN="$LOOM_BIN" node "$LOOM_ROOT/scripts/test-cursor-native-history.mjs"
+node "$LOOM_ROOT/scripts/check-conversion-matrix.mjs"
 SUBAGENT_SKIP_RUNTIME_FINGERPRINT=1 node --test \
   test/codexAdapter.d13-dedup.test.mjs \
   test/detector-agreement.test.mjs \

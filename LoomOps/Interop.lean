@@ -9,6 +9,16 @@ property this project tracks — validity, provenance, refusal policy, release
 gating — is subordinate to that purpose and is worth exactly as much as it
 contributes to it.
 
+2026-09-07 clarification: `INTENT.md` makes this a conversation-continuity
+requirement. The destination model receives source executions as its prior
+native tool history; importing that history does not rerun them. Completion
+and output availability are independent facts. A completed/pruned Cursor call
+must not become assistant disclaimer prose merely because its result body was
+not retained. The exact-result gate in `nativeCallRecordAt?` still violates this
+intent; see `docs/bugs/native-tool-history.md` and `docs/plans/native-tool-history.md`.
+The compliance observations below are dated evidence, not a claim that the
+current exporters satisfy the clarified requirement.
+
 This module states the design principles as typed data so they are queryable
 and so a violation is a value, not a footnote. It is description, not
 enforcement: `compliance` records what the shipped exporters do as of
@@ -454,7 +464,7 @@ def targetCapabilities : List TargetCapability := [
        than written `false`." },
   { target := "codex", toolCalls := some true, toolResults := some true,
     canonicalToolName := some true,
-    errorProvenance := some false, multiBlockResults := some true,
+    errorProvenance := some true, multiBlockResults := some true,
     entryTimestamps := some true, environment := some true
     notes :=
       "canonicalToolName: OUT OF BAND. `function_call` holds only \
@@ -466,17 +476,13 @@ def targetCapabilities : List TargetCapability := [
        `codexReservedRecordSourceFailure?` additionally holds such a record to \
        canonical whole-line bytes. Absent a canonical identity no member is \
        written, which is what keeps `exactImportedNativeCallEvidence?` \
-       byte-exact for codex → codex. errorProvenance: `some false` is a \
-       rounding, and it rounds the right way. `function_call_output` has no \
-       failure field at all, so `.native b` and `.inferred b` both come back \
-       `.inferred` via `codexOutputIndicatesError` — the VALUE is preserved and \
-       the normalization is reported. `.unrecorded` is the exception and does \
-       NOT normalize: re-deriving `false` from output text would replace \
-       'nobody knows' with a value nobody asserted, so it travels in a reserved \
-       `_agent_convert` member of kind `tool_result_unrecorded` \
-       (`codexUnrecordedErrorMarker`), written for that state alone. One of \
-       three states preserved is not a provenance slot, hence `false` rather \
-       than `true`; contrast pi below, which preserves all three." },
+       byte-exact for codex → codex. errorProvenance: OUT OF BAND. Native \
+       results preserve the complete ErrorSignal in the reserved payload \
+       marker (`tool_result_error`, or the legacy `tool_result_unrecorded`). \
+       This includes errors whose text disagrees with Codex's heuristic. \
+       Output text is unchanged and the lifecycle stays native. Unstamped \
+       Codex input still uses the original heuristic; metadata never asserts \
+       that the tool was rerun by the target." },
   { target := "pi", toolCalls := some true, toolResults := some true,
     canonicalToolName := some true,
     errorProvenance := some true, multiBlockResults := some true,
@@ -489,8 +495,8 @@ def targetCapabilities : List TargetCapability := [
        (`LoomConvert/Pi.lean`, `piToolCanonicalCarrier` / \
        `piToolCanonicalCarrier?`), indexed by emitted content position. Absent \
        a canonical identity no member is written, so pi → pi is unchanged. \
-       errorProvenance: OUT OF BAND, and `some true` since 2026-07-26 — pi is \
-       the only target that answers `true`, so read the claim narrowly. The \
+       errorProvenance: OUT OF BAND, and `some true` since 2026-07-26. \
+       Codex now preserves these states too. The \
        wire field is a bare `isError` bool; the PROVENANCE rides beside it in \
        the same message-level `loomPi` stamp, as its reserved `toolError` \
        member. `piErrorExport` writes `{state:inferred,value,heuristic}` for \

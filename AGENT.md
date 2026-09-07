@@ -1,5 +1,11 @@
 # Convert a coding-agent session with Loom
 
+Read [product intent](./INTENT.md): carry the conversation into the target as
+its own prior history, including native tool calls and results. Preserve known
+execution even when output was pruned. Importing history must not rerun tools.
+Visible historical-tool disclaimers and carrier JSON are conversion defects,
+not evidence of high fidelity; keep bookkeeping out of dialogue.
+
 Loom is the release-ready Lean converter in
 [`theoriclabs/agent-convert-lean`](https://github.com/theoriclabs/agent-convert-lean).
 When a human asks to continue a session in another harness, use the single
@@ -10,6 +16,8 @@ loom convert <session-id-or-file> <target> [output]
 ```
 
 Targets are `claude`, `codex`, `pi`, `cursor-agent`, `opencode`, and `loom`.
+Check the [conversion matrix](./docs/conversion-matrix.md) for route-specific
+inputs, output handling, native-history limits, and verification status.
 
 ## Do the conversion
 
@@ -71,8 +79,8 @@ opencode import ./session.opencode.json
   Pi history mode, Codex controls, and subagent policy. Add overrides only when
   the human wants a genuinely different target configuration or required
   source metadata is absent.
-- Never bypass a structural, version, sidechain, or loss refusal. Preserve the
-  diagnostic.
+- Investigate conversion failures and improve the converter when appropriate
+  within the task. Preserve source facts and explain remaining limitations.
 
 Useful verified overrides are:
 
@@ -96,7 +104,8 @@ Tell the human:
 - every warning, refusal, carrier, or main-branch-only decision;
 - the exact next command—especially the `claude --resume` line Loom prints.
 
-Command success means the result passed Loom's declared conversion policy; do
-not broaden that into an unsupported claim about a target harness. Exit codes
+Check native tool structures and resumed model context as well as readability
+and Loom round trips. Report each separately; a readable carrier does not meet
+the native-history requirement. Exit codes
 are `1` for invocation/configuration, `2` for import, and `3` for
 export/validation/publication.

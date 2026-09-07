@@ -1541,9 +1541,7 @@ def destructiveLossesBlocked : Bool :=
   semanticBlocked "cursor-agent" unsafeCursorToolCallTranscript &&
   semanticBlocked "cursor-agent" unsafeCursorUnmodeledTranscript &&
   semanticBlocked "claude" emptyEnvTranscript &&
-  semanticBlocked "codex" emptyEnvTranscript &&
   semanticBlocked "cursor-agent" emptyEnvTranscript &&
-  semanticBlocked "codex" codexEmptyUserTranscript &&
   semanticBlocked "cursor-agent" emptyToolIdTranscript &&
   (match runPipeline "loom" "cursor-agent" mediaOnlyTranscript with
    | .error _ => true
@@ -1599,6 +1597,12 @@ when the selected runtime exporter has an inert reversible representation. The
 Cursor archive-only row additionally requires a named runtime refusal and an
 exact archival round-trip. Named rows keep failures local. -/
 def reversibleRepresentationMatrix : List (String × Bool) := [
+  ("codex-empty-user", !semanticBlocked "codex" codexEmptyUserTranscript &&
+    projectionRoundTripsThroughWithDispositions "codex" codexEmptyUserTranscript
+      [.historicalUnverified]),
+  ("codex-empty-env", !semanticBlocked "codex" emptyEnvTranscript &&
+    projectionRoundTripsThroughWithDispositions "codex" emptyEnvTranscript
+      [.historicalUnverified]),
   ("claude-open-call", !semanticBlocked "claude" openCallTranscript &&
     projectionRoundTripsThroughWithDispositions "claude" openCallTranscript
       [.historicalUnverified]),
@@ -1675,7 +1679,7 @@ of relying on a later target-parser failure. -/
 def destructiveDiagnosticsAreClassified : Bool :=
   (Loom.Ops.obligations .cursorAgent unsafeCursorToolCallTranscript).contains
       .dropUnmodeled &&
-  (Loom.Ops.obligations .codexCli codexEmptyUserTranscript).contains
+  (Loom.Ops.obligations .codexCli codexUnmodeledUserTranscript).contains
       .dropUnmodeled &&
   (Loom.Ops.obligations .codexCli codexUrlMediaTranscript).contains
       .dropMedia &&
@@ -2768,8 +2772,8 @@ expectation is kept above only as the thing that must NOT reappear.
 
 Provenance is unaffected: `_agent_convert` still travels out of band, and no
 entry is upgraded past `.native` because the Claude source is native
-throughout. `codexUnrepresentableResultPairsUseCarrier` covers the residue
-that genuinely still needs a carrier. -/
+throughout. `codexErrorHeuristicDoesNotDemoteNativeHistory` covers recorded
+failures whose text does not match Codex's heuristic. -/
 def claudeToCodexNativeLifecycleWitness : Bool :=
   match importClaudeCode claudeFixture with
   | .error _ => false
@@ -2842,32 +2846,29 @@ private def lossyNativeResultTranscript : Transcript :=
       { validResultEntry with payload := .envMsg [
           .toolResult (.resolved 0 0) [.text "failed"] (.native true)] }] }
 
-/-- Renamed and split 2026-07-27, because the two fixtures stopped agreeing.
-
-`lossyNativeSchemaTranscript` carries an extra `timeout` argument. Codex's
-`function_call` takes an arbitrary `arguments` object, so that was never a real
-schema limit and the pair now emits natively.
-
-`lossyNativeResultTranscript` is the case that remains: a multi-block result has
-no faithful single-string form, and joining the blocks would make distinct
-transcripts render identically — `Interop.knownLosses` rates
-`collapseResultBlockBoundaries` `.corrupting` for exactly that reason. So this
-carrier survives as a genuine TARGET LIMIT, which is the distinction the old
-combined pin blurred: it read as though lossiness in general justified a
-carrier, when only unrepresentability does. -/
-def codexUnrepresentableResultPairsUseCarrier : Bool :=
+/-- Extra arguments and a recorded error not recognized by the text heuristic
+are both representable. Native records carry exact error provenance out of band;
+the old carrier assertion encoded the defect reported in #8. -/
+def codexErrorHeuristicDoesNotDemoteNativeHistory : Bool :=
   let schemaExported := exportCodexCli lossyNativeSchemaTranscript
   let resultExported := exportCodexCli lossyNativeResultTranscript
   -- Representable: native, no carrier prose.
   schemaExported.contains "\"type\":\"function_call\"" &&
   !(schemaExported.contains
     "[Historical tool call from source transcript; not executed by Codex]") &&
-  -- Unrepresentable multi-block result: carrier, and it says so.
-  !(resultExported.contains "\"type\":\"function_call\"") &&
-  resultExported.contains
-    "[Historical tool call from source transcript; not executed by Codex]" &&
-  resultExported.contains
-    "[Historical tool result from source transcript; not executed by Codex]"
+  resultExported.contains "\"type\":\"function_call\"" &&
+  resultExported.contains "\"type\":\"function_call_output\"" &&
+  !(resultExported.contains "[Historical tool call from source transcript") &&
+  !(resultExported.contains "[Historical tool result from source transcript") &&
+  match importCodexCli resultExported with
+  | .ok restored =>
+      restored.entries.all (·.disposition == EntryDisposition.native) &&
+      match restored.entries[1]? with
+      | some entry => match entry.payload with
+        | .envMsg [.toolResult (.resolved 0 0) [.text "failed"] (.native true)] => true
+        | _ => false
+      | none => false
+  | .error _ => false
 
 /-- The pi spoke preserves the tool call/result lifecycle, including raw id and
 error state, instead of reclassifying tool results as generic messages.
@@ -3147,7 +3148,7 @@ def historicalToolCarriersAreArtifactInert : Bool :=
   LoomConvert.claudeHistoricalDispositionSurvivesMetadataStripping &&
   claudeToCodexNativeLifecycleWitness &&
   codexNativeContinuationWitness &&
-  codexUnrepresentableResultPairsUseCarrier &&
+  codexErrorHeuristicDoesNotDemoteNativeHistory &&
   piContinuationWitness &&
   LoomConvert.piHistoricalDispositionSurvivesMetadataStripping
 
@@ -3409,7 +3410,7 @@ example : continuationProjectionDistinguishesTools = true := by native_decide
 example : targetStateRelationIsSplitOnlyAndTimeBound = true := by native_decide
 example : claudeToCodexNativeLifecycleWitness = true := by native_decide
 example : codexNativeContinuationWitness = true := by native_decide
-example : codexUnrepresentableResultPairsUseCarrier = true := by native_decide
+example : codexErrorHeuristicDoesNotDemoteNativeHistory = true := by native_decide
 example : piContinuationWitness = true := by native_decide
 example : piEmptyAssistantContinuationWitness = true := by native_decide
 example : f027LifecycleAdversaryAggregate = true := by native_decide

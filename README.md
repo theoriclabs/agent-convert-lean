@@ -2,6 +2,11 @@
 
 Convert coding-agent sessions between harnesses.
 
+The destination should continue the same conversation, including prior tool
+executions as native tool history. Conversion metadata belongs outside dialogue;
+tool-carrier prose is not equivalent fidelity. See [product intent](./INTENT.md)
+and the [Cursor native-history fix](./docs/cursor-tool-binary.md).
+
 ```sh
 loom convert <session-or-file> <target> [output]
 ```
@@ -96,6 +101,10 @@ claude mcp add loom -- node "$PWD/mcp/loom-mcp.mjs"
 ```
 
 ## Formats
+
+See the [conversion matrix](./docs/conversion-matrix.md) for source → target
+routes, native-history representations, installation steps, known limits, and
+which continuations have actually been tested.
 
 | Format | Import | Export | Output |
 |---|:---:|:---:|---|

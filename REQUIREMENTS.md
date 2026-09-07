@@ -7,6 +7,13 @@ Product name: **agent-convert/Lean**. The current Lean package and binary are
 named **Loom** and `loom`. This document treats Loom as the implementation name,
 not as a different product.
 
+The [2026-09-07 product intent](./INTENT.md) is authoritative for conversation
+continuity: represent prior executions as native target tool history, preserve
+execution state separately from output availability, and keep converter prose
+outside dialogue. Older carrier-based evidence is retained as evidence history,
+not as fulfillment of native-history fidelity. Implementation gaps are tracked
+in [the tool-history bug](./docs/bugs/native-tool-history.md).
+
 ## Method and Claim Standard
 
 The method here is Michael **Jackson** and Pamela Zave's requirements
@@ -236,7 +243,7 @@ correctness.
 | D-005 | `sqlite3` exists for explicit Cursor IDE Lean use | Conditional | Missing/incompatible binary | Actuator smoke; keep Cursor IDE outside the default Lean launcher surface |
 | D-006 | Vendor formats can drift without notice | Validated standing fact | Not applicable | Preserve/log/refuse unknowns and recensus |
 | D-007 | Representative developers understand the review vocabulary | Open | A reviewer cannot recover seeded roles/tools/threads/losses | Blinded comprehension validation |
-| D-008 | Foreign historical tools cannot be assumed native in a target registry | Conditional | A pinned target safely accepts arbitrary foreign names/schemas | Tool-rich target probe and registry recensus |
+| D-008 | Historical tool-record acceptance and the current callable registry are separate target properties | Conditional | A target rejects a structurally valid historical call because its tool is absent from the current registry | Probe native history ingestion and resumed model context independently of new execution |
 | D-009 | Supported role/envelope labels distinguish conversation turns from injected context | Conditional | A harness mislabels either class | Version-pin semantics, census real sessions, inspect both harness views |
 | D-010 | Callers honor non-zero status and do not consume stale output as this invocation's artifact | Conditional | A launcher/workflow presents old output after failure | Run every failure class with a sentinel pre-existing output |
 | D-011 | Equality of each adapter's declared common projection denotes equality of source/target meaning | Conditional | A pinned harness or representative reader interprets projection-equal artifacts differently | Maintain the concept census; validate rendering, continuation, and held-out cases |
@@ -271,8 +278,8 @@ Priorities mean:
 |---|---|---|---|
 | R-001 | Preview | **External validation pending** | Import all 8 declared sources; export all 5 declared targets or explicitly refuse. E-003 proves the pure-import fixture set; F-002 still requires candidate-bound focused release evidence for every declared target's exporter witness or refusal. |
 | R-002 | Preview | Satisfied | Never emit from structurally invalid IR. A successful `runPipeline` must imply `WellFormed`; adversarial fixtures must trigger each strengthened reference/thread invariant. |
-| R-003 | Preview | **External validation pending** | Preserve the declared continuation projection: ordered roles/text/thinking, tool names/arguments/linkage/results/error state, and media/unmodeled content where shared. Native Codex/pi lifecycles and the Claude foreign-tool carrier are pinned internally. F-006 still requires candidate-bound E-037 differential evidence for the complete 8-source by 5-target matrix. |
-| R-004 | Stable | **Partial** | Preserve, report, or refuse every actual unrepresentable/degraded concept. Every exporter needs a content-sensitive loss policy and tests for every loss class. Sidechains meet this; all content classes do not yet. |
+| R-003 | Preview | **External validation pending** | Preserve conversation meaning in the target's resumed model context: ordered roles/text/thinking, native tool activity, arguments/linkage/results/execution state, and shared media/content. A reversible prose carrier does not satisfy native-history fidelity. F-006 requires differential evidence for the complete advertised matrix plus target-context checks. |
+| R-004 | Stable | **Partial** | Use native structures for representable facts; preserve genuinely unsupported data out of band and disclose limitations. Carrier prose in dialogue cannot discharge native-history fidelity. Every exporter needs a content-sensitive loss policy and tests for actual target limitations. |
 | R-005 | Preview | Satisfied | Loom wire exactly preserves every serialized IR field, including canonical tool interpretation and all error-provenance constructors; closed-enum codecs, malformed required structure, compatible numeric encodings, and additive unknown labels are independently pinned. |
 | R-006 | Preview | **External validation pending** | Preserve valid sidechain anchors in Loom/native sidecars; mark unknowable anchors detached; refuse flat pi/Codex output rather than flattening. F-010 still requires candidate-bound focused release evidence. |
 | R-007 | Stable | **Partial** | Keep recorded, inferred, synthesized, absent, unknown, and dropped data distinguishable. Every importer judgment must be logged, preserved, or refused. Some lenient/unknown paths remain unlogged. |
@@ -285,7 +292,7 @@ Priorities mean:
 | R-014 | Preview | **External validation pending** | Historical V-012 observed continuation in Claude Code 2.1.206, Codex 0.144.1, and pi 0.74.0; V-013 disproved Cursor Agent 2026.05.28 local-history installation. F-019 through F-022 require immutable candidate-bound reruns or retained negative evidence against the current release candidate; no current external run is claimed complete. |
 | R-015 | Stable | **Partial** | Preserve every target-representable datum and show that no policy-valid alternative preserves a strict superset. Loom wire is all-constructor lossless; cross-format maximality remains open. |
 | R-016 | Preview | **Partial** | Machine-readable public version/conversion results identify engine, core version, and core revision. F-024 is candidate-validation pending for the utils default fixture; F-024B remains partial for every packaged/default path, while F-025 and F-026 are unsatisfied because immutable core-manifest enforcement and exact packed-install CI do not exist. Development builds may report `coreRevision: working-tree`; a candidate must not. |
-| R-017 | Preview | **External validation pending** | Preserve every selected-path tool call/result's order, id, source name, complete arguments, complete result content, linkage, and error state/provenance, or use a reversible carrier/refusal. E-035 and the lifecycle fixtures pin internal carrier behavior. F-028 still requires candidate-bound E-037 reconciliation for all 40 matrix cells. Refusal cells check unchanged post-exit prior-artifact path identity, opened-file identity, mode, size, digest, and exact bytes as a finite before/after observation, not continuous monitoring or an atomicity proof. F-029 separately requires real-target non-execution evidence. |
+| R-017 | Preview | **External validation pending** | Preserve every selected-path tool call/result as native target history where representable, with order, IDs or reversible mappings, source name, arguments, recorded output, linkage, execution state, output availability, and error provenance. Completed/pruned calls remain prior executions; unavailable output is explicit and never fabricated. Converter bookkeeping stays outside dialogue. F-028 requires lifecycle and target-context reconciliation; F-029 requires that loading/resuming native past history does not rerun tools. |
 | R-018 | Preview | **External validation pending** | Never turn injected developer, system, policy, permission, configuration, or runtime context into user/assistant conversation. E-036 proof-binds F-032's synthetic internal role-family census. F-030, F-031, and F-033 still require current candidate controls, real-view, and held-out context-isolation evidence; historical renders are not candidate-bound. |
 
 The catalogue structure and evidence classifications are `native_decide` pins.
@@ -391,8 +398,8 @@ The executable `S` clauses constrain only shared converter outputs:
 | S-012-OUTPUT | Route default public output through the package-pinned Lean core without host-language transcript mutation |
 | S-012-DIAGNOSTIC | Report semantic-engine identity and immutable core revision |
 | S-012-STATUS | Reject unversioned, working-tree, unavailable, or mismatched cores before conversion |
-| S-013-OUTPUT | Preserve or explicitly carry the complete ordered tool lifecycle in successful output |
-| S-013-STATUS | Refuse destructive loss when neither target representation nor a declared reversible tool carrier is valid |
+| S-013-OUTPUT | Emit native ordered tool history where representable; preserve execution and output availability independently; keep provenance and fallback data outside dialogue |
+| S-013-STATUS | Report genuine target limitations; do not count a reversible prose carrier as fulfillment of native-history fidelity |
 | S-014-OUTPUT | Classify source channels before export and retain excluded context in typed output provenance where representable |
 | S-014-DIAGNOSTIC | Report excluded context that cannot be retained in typed output provenance |
 | S-015 | Emit successful output only when the declared common projection agrees with the accepted source |

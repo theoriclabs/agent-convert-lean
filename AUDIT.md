@@ -1,5 +1,12 @@
 # Loom audit — interop fidelity
 
+> **2026-09-07 recurrence:** Cursor completed/pruned calls still become Codex
+> assistant carrier prose because native emission requires a retained result.
+> The importer keeps completion only in raw metadata. See [current intent](./INTENT.md),
+> [bug](./docs/bugs/native-tool-history.md), and [plan](./docs/plans/native-tool-history.md).
+> The dated findings below remain historical; the native-history goal is not met
+> merely by retaining a reversible carrier or passing a target-parser read.
+
 **Date:** 2026-07-24
 **Scope:** whole project, against the stated purpose: *"enable interoperability
 across harnesses… use a transcript started in codex in claude, then maybe in

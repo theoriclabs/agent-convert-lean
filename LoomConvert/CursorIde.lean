@@ -1,4 +1,5 @@
 import LoomConvert.Parity
+import LoomConvert.CursorToolBinary
 
 /-!
 # LoomConvert.CursorIde — the Cursor IDE importer (richest source of the seven)
@@ -444,7 +445,7 @@ private def bubbleEntries (startIdx sourceIdx : Nat)
           if nativeName?.isNone then
             notes := notes.push (cursorNote .toolNameMapped sourceRef
               s!"interpreted Cursor tool enum {toolEnum} as '{fallbackName}'")
-          let result? := match field? tf "result" with
+          let mut result? := match field? tf "result" with
             | none | some Json.null => none
             | some raw => some raw
           let status? ← match field? tf "status" with
@@ -454,18 +455,43 @@ private def bubbleEntries (startIdx sourceIdx : Nat)
                 notes := notes.push (cursorNote (.other "cursorIdeMalformedToolStatus") sourceRef
                   "non-string status retained only in raw provenance; error state is unrecorded")
                 pure none
+          if result?.isNone then
+            match field? tf "toolCallBinary" with
+            | some (Json.str encoded) =>
+                match CursorToolBinary.recoverResult encoded toolEnum rawName nativeCallId? with
+                | .ok (some recovered) =>
+                    let succeeded := (field? recovered "success").isSome
+                    if (status? == some "completed" && !succeeded) ||
+                        ((status? == some "error" || status? == some "cancelled") && succeeded) then
+                      notes := notes.push (cursorNote (.other "cursorIdeResultRecoveryUnresolved") sourceRef
+                        "binary result conflicts with recorded terminal status; retained raw evidence without inventing a result")
+                    else
+                      -- Cursor's inline result uses protobuf JSON too. Recover that
+                      -- representation, including full match lines and error text.
+                      result? := some (Json.str recovered.compress)
+                      notes := notes.push (cursorNote (.other "cursorIdeBinaryToolResultRecovered") sourceRef
+                        "recovered recorded output from this bubble's toolCallBinary protobuf; no tool was executed")
+                | .ok none =>
+                    notes := notes.push (cursorNote (.other "cursorIdeResultRecoveryUnresolved") sourceRef
+                      "supported binary has no result field; result recovery remains unresolved")
+                | .error reason =>
+                    notes := notes.push (cursorNote (.other "cursorIdeResultRecoveryUnresolved") sourceRef reason)
+            | none | some Json.null => pure ()
+            | some _ =>
+                notes := notes.push (cursorNote (.other "cursorIdeResultRecoveryUnresolved") sourceRef
+                  "toolCallBinary is not a base64 string; result recovery remains unresolved")
           let mut resultSpec : Option (List Loom.UserBlock × Loom.ErrorSignal) := none
           match status? with
           | some "completed" =>
               match result? with
               | some result => resultSpec := some (cursorResultContent result, .native false)
               | none => notes := notes.push (cursorNote (.other "cursorIdeTerminalWithoutResult") sourceRef
-                  "completed tool has no recorded result; retained as an open call without fabricating success output")
+                  "completed tool result was not recovered from supported source locations; acquisition remains unresolved, not evidence that Cursor lacks the result")
           | some "error" | some "cancelled" =>
               match result? with
               | some result => resultSpec := some (cursorResultContent result, .native true)
               | none => notes := notes.push (cursorNote (.other "cursorIdeTerminalWithoutResult") sourceRef
-                  "error/cancelled tool has no recorded result; retained as an open call with terminal state in raw provenance")
+                  "error/cancelled tool result was not recovered; acquisition remains unresolved, with terminal state and raw evidence retained")
           | some "loading" =>
               notes := notes.push (cursorNote (.other "cursorIdePendingTool") sourceRef
                 "tool status is loading; retained as an open call without a result")

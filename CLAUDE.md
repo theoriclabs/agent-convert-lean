@@ -1,5 +1,23 @@
 # agent-convert-lean — working directives
 
+## Continue the conversation with native tool history
+
+Follow [INTENT.md](./INTENT.md). Prior source tool executions belong in the
+destination's native conversation history. They must not become assistant
+disclaimers or carrier JSON, and importing them must not rerun them. Preserve
+execution status independently of result availability: completed/pruned is
+not an unknown or pending call. Test what the resumed model receives, not only
+what Loom can decode or the target UI can open.
+
+The 2026-09-07 Cursor-to-Codex recurrence is documented in
+[the bug report](./docs/bugs/native-tool-history.md) and
+[implementation notes](./docs/cursor-tool-binary.md). The reported path is fixed;
+existing carrier tests are historical behavior checks, not the desired product outcome.
+
+Maintain [the conversion matrix](./docs/conversion-matrix.md) when source/target
+support or fidelity changes. Run `node scripts/check-conversion-matrix.mjs`
+for routing drift; distinguish artifact checks from actual harness continuation.
+
 ## Codex → continuation targets resume the active context. This must never regress.
 
 On 2026-09-04 a Codex 0.153 session (ten compactions, 56 MB rollout) converted

@@ -1,5 +1,12 @@
 # Blinded Inspect Human Validation
 
+The current product goal is [native conversation continuity](./INTENT.md).
+This historical inspect protocol measures readability and auditing; it cannot
+establish that the target model receives native tool history. Preserve existing
+scoring evidence as recorded. Add separate native-context, completed/pruned
+state, and no-replay checks before claiming the current fidelity goal is met;
+do not treat carrier visibility as desired target conversation behavior.
+
 Status: protocol for an **experimental developer-preview candidate**. No current
 production run, external signature set, or release approval is claimed complete.
 

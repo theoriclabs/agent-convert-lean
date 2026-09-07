@@ -952,22 +952,7 @@ private def codexPayloadToolCanonical? (payload : Json) : Option CanonicalTool :
 
 private def codexUnrecordedErrorKind : String := "tool_result_unrecorded"
 
-/-- The out-of-band slot for `ErrorSignal.unrecorded` on a NATIVE Codex result.
-
-`function_call_output` has no error field of any kind, so Codex's importer
-re-derives the flag from the output text and every result comes back
-`.inferred`. For `.native b` and `.inferred b` that is a pure PROVENANCE
-normalization: the value is real and is preserved, which `LoomOps.Interop`
-rates reportable. `.unrecorded` is not that. It says the source never recorded
-whether the tool failed, and re-deriving `false` from the output text replaces
-"nobody knows" with a value nobody asserted — the same class as writing
-`is_error: false` into Claude for an unrecorded result, which this project
-already classifies `corrupting` and fixed there by omission.
-
-Codex has no omission to exploit — absence IS the wire state — so the fact
-travels in the reserved `_agent_convert` member instead and the record stays an
-executable `function_call_output`. Written only for `.unrecorded`, so results
-that carry a real value emit exactly the bytes they emitted before. -/
+/-- Legacy marker remains readable and byte-stable for existing archives. -/
 private def codexUnrecordedErrorMarker : Json :=
   Json.mkObj [
     ("protocol", Json.str codexCarrierProtocol),
@@ -975,10 +960,24 @@ private def codexUnrecordedErrorMarker : Json :=
 
 private def codexResultErrorFields : ErrorSignal → List (String × Json)
   | .unrecorded => [(codexCarrierMarkerKey, codexUnrecordedErrorMarker)]
-  | _ => []
+  | error => [(codexCarrierMarkerKey, Json.mkObj [
+      ("protocol", Json.str codexCarrierProtocol),
+      ("kind", Json.str "tool_result_error"),
+      ("error", errorSignalJson error)])]
 
 private def codexPayloadErrorIsUnrecorded (payload : Json) : Bool :=
   oobj payload codexCarrierMarkerKey == some codexUnrecordedErrorMarker
+
+/-- Error provenance belongs beside the native result, not in assistant prose.
+Only exact exporter-owned metadata is accepted; unstamped Codex histories
+continue to use the existing output-text heuristic. -/
+private def codexPayloadErrorSignal? (payload : Json) : Option ErrorSignal := do
+  if codexPayloadErrorIsUnrecorded payload then return .unrecorded
+  let marker ← oobj payload codexCarrierMarkerKey
+  let error ← oobj marker "error" >>= parseCodexErrorSignal?
+  guard (oobj payload codexCarrierMarkerKey ==
+    (codexResultErrorFields error).head?.map Prod.snd)
+  pure error
 
 private def codexHistoricalAssistantBlockJson : AssistantBlock -> Json
   | .text text => Json.mkObj [
@@ -1265,7 +1264,12 @@ private def parseCodexHistoricalCarrier? (payload : Json) (segment : Nat) :
   guard (codexCarrierMarkerExact payload kind)
   let text ← codexCarrierMessageText? payload
   guard (codexCarrierPayloadExact payload kind text)
-  if kind == "tool_call" then
+  if ["empty_user", "empty_assistant", "empty_environment"].contains kind then
+    guard (text == "")
+    let entry := if kind == "empty_user" then Payload.userMsg []
+      else if kind == "empty_assistant" then Payload.assistantMsg [] else Payload.envMsg []
+    pure (.entry entry "")
+  else if kind == "tool_call" then
     let encoded ← text.dropPrefix? (codexHistoricalToolCallCarrierHeader ++ "\n")
     let record ← (Json.parse encoded.toString).toOption
     let carrier ← ostr record "carrier"
@@ -1644,18 +1648,13 @@ private def adaptRecords (records : List Json) (carrierSessionSelfIdentified : B
               "function_call_output has an empty call_id; payload retained unmodeled")
           else
             let isErr := codexOutputIndicatesError (toolOutputText content)
-            -- An exporter-stamped session may say "the source never recorded
-            -- this", which is not something the output text can express and not
-            -- something the heuristic may overwrite. Everywhere else the
-            -- heuristic is the only available answer.
-            let unrecorded := carrierSessionSelfIdentified &&
-              codexPayloadErrorIsUnrecorded p
-            let err := if unrecorded then ErrorSignal.unrecorded
-              else ErrorSignal.inferred isErr
-                "codexOutputIndicatesError (codexAdapter.ts:75)"
-            if unrecorded then
-              notes := notes.push (mkNote .errorInferred idx
-                "function_call_output error status retained as unrecorded from the exporter-owned reserved envelope; no inference made")
+            let recorded := if carrierSessionSelfIdentified then
+                codexPayloadErrorSignal? p else none
+            let err := recorded.getD (ErrorSignal.inferred isErr
+                "codexOutputIndicatesError (codexAdapter.ts:75)")
+            if recorded.isSome then
+              notes := notes.push (mkNote (.other "errorProvenancePreserved") idx
+                "function_call_output error signal preserved from exporter-owned metadata; output text unchanged")
             else
               let d := "function_call_output error status inferred (isError=" ++
                 toString isErr ++ ") via codexOutputIndicatesError"
@@ -1792,11 +1791,13 @@ private def adaptRecords (records : List Json) (carrierSessionSelfIdentified : B
               "custom_tool_call_output has an empty call_id; payload retained unmodeled")
           else
             let isErr := codexOutputIndicatesError (toolOutputText content)
-            let err := ErrorSignal.inferred isErr
-              "codexOutputIndicatesError (codexAdapter.ts:75)"
-            let d := "custom_tool_call_output error status inferred (isError=" ++
-              toString isErr ++ ") via codexOutputIndicatesError"
-            notes := notes.push (mkNote .errorInferred idx d)
+            let recorded := if carrierSessionSelfIdentified then
+                codexPayloadErrorSignal? p else none
+            let err := recorded.getD (ErrorSignal.inferred isErr
+              "codexOutputIndicatesError (codexAdapter.ts:75)")
+            notes := notes.push (mkNote (if recorded.isSome then
+                .other "errorProvenancePreserved" else .errorInferred) idx
+              "custom_tool_call_output error signal read from metadata when present, otherwise inferred from output")
             kept := kept.push { (mkKept (.ktool (.byId segment callId) content err
               (some ("codex.unresolved.custom_tool_call_output", p)))
               ts .environment "" none) with nativeToolRaw := some j }
@@ -3384,15 +3385,11 @@ private def exactImportedNativeResultEvidence? (t : Transcript)
   guard (!callId.isEmpty)
   let parsedContent ← oobj payload "output" >>= codexToolOutputBlocks?
   guard (codexResultContentJson parsedContent == codexResultContentJson content)
-  -- A retained record that carries the reserved unrecorded stamp re-imports as
-  -- `.unrecorded`; one that does not re-imports as the re-derived `.inferred`.
-  -- Either way the expectation is what THIS record will actually produce, so
-  -- replaying its bytes cannot disagree with the typed signal.
-  let expectedError := if codexPayloadErrorIsUnrecorded payload then
-      ErrorSignal.unrecorded
-    else ErrorSignal.inferred
+  -- Exact source metadata takes precedence over text heuristics. Reusing a
+  -- retained record must agree with the complete typed error signal.
+  let expectedError := (codexPayloadErrorSignal? payload).getD (ErrorSignal.inferred
       (codexOutputIndicatesError (toolOutputText parsedContent))
-      "codexOutputIndicatesError (codexAdapter.ts:75)"
+      "codexOutputIndicatesError (codexAdapter.ts:75)")
   guard (errorSignalJson error == errorSignalJson expectedError)
   match ostr payload "type" with
   | some "function_call_output" =>
@@ -3400,20 +3397,6 @@ private def exactImportedNativeResultEvidence? (t : Transcript)
   | some "custom_tool_call_output" =>
       pure { record, kind := .customToolCall, callId }
   | _ => none
-
-/-- Error VALUE, discarding provenance.
-
-Codex carries error state only in the output text, from which the importer
-re-infers it; `recorded` vs `inferred` vs `unrecorded` has no wire slot.
-Demanding provenance equality made native emission impossible for any source
-whose provenance was not already Codex-shaped — a Claude result arrives as
-`.native b` — which is exactly what forced the return leg of
-`codex → claude → codex` to prose. The value is preserved exactly; the
-provenance normalization is reported, not hidden (`LoomOps.Interop`, P2/P4). -/
-private def codexErrorValue : ErrorSignal → Bool
-  | .native value => value
-  | .inferred value _ => value
-  | .unrecorded => false
 
 private def callIdOfRefRaw (t : Transcript) : CallRef → Option String
   | .resolved e b => do
@@ -3453,25 +3436,9 @@ private def synthesizedNativeResultEvidence? (t : Transcript)
     | .text text => some text
     | _ => none)
   guard (!texts.isEmpty)
-  -- Native emission must never CHANGE an error flag. Codex stores error state
-  -- only in the output text, and re-import re-derives it with
-  -- `codexOutputIndicatesError`. If the source's error value disagrees with what
-  -- that heuristic will produce, emitting natively silently flips the flag — a
-  -- result the source marked failed comes back clean. `LoomOps.Interop` rates
-  -- that `corrupting` ("an error flag the source never set"), not merely lossy,
-  -- so declining native emission and keeping the reversible carrier is correct.
-  -- Only the PROVENANCE may normalize here (P2/P4); the value may not.
-  -- `exactImportedNativeResultEvidence?` enforces the stricter form — full
-  -- signal equality — because a retained Codex record must replay byte for byte;
-  -- synthesis only has to preserve the fact.
-  --
-  -- `.unrecorded` is the one signal with no value to preserve, so it does not
-  -- normalize: `codexResultErrorFields` stamps it into the reserved envelope
-  -- below rather than letting re-import manufacture `.inferred false` out of
-  -- the output text. The value guard still applies to it via `codexErrorValue`,
-  -- which keeps an unrecorded result whose text READS as a failure on the
-  -- carrier instead of quietly disagreeing with the stamp.
-  guard (codexErrorValue error == codexOutputIndicatesError (toolOutputText content))
+  -- A text heuristic is not an eligibility test for native history. Preserve
+  -- the exact source error signal out of band, including when the heuristic
+  -- disagrees, without rewriting output or converting execution into dialogue.
   let callId ← callIdOfRefRaw t cref
   guard (!callId.isEmpty)
   pure {
@@ -3713,6 +3680,7 @@ shape for same-format E-I-E. Every other historical payload uses one generic
 typed-payload carrier, preventing messages, reasoning, events, and compactions
 from entering Codex's native semantic channel or disappearing. -/
 private def historicalPayloadUsesSpecializedCarrier : Payload -> Bool
+  | .userMsg [] | .assistantMsg [] | .envMsg [] => true
   | .assistantMsg [.toolCall _ _ _] => true
   | .assistantMsg [.unmodeled label _] =>
       label != codexMessageContentLabel && label != "codex.reasoning"
@@ -3771,6 +3739,11 @@ private def entryToRecords (t : Transcript) (entryIdx : Nat) (e : Entry) : List 
       !historicalPayloadUsesSpecializedCarrier e.payload then
     [historicalEntryRecord e.payload]
   else match e.payload with
+  -- Empty payloads have no dialogue to display. Preserve role/position in
+  -- envelope metadata instead of manufacturing converter-authored prose.
+  | Payload.userMsg [] => [codexAssistantCarrier "empty_user" ""]
+  | Payload.assistantMsg [] => [codexAssistantCarrier "empty_assistant" ""]
+  | Payload.envMsg [] => [codexAssistantCarrier "empty_environment" ""]
   | Payload.userMsg blocks =>
       match blocks with
       | [.unmodeled label raw] =>
@@ -4376,7 +4349,7 @@ private def codexSourceTerminalEnvBlockMatchesMaterialized
           sourceCall targetCall &&
         Json.arr (sourceContent.map historicalResultBlockJson).toArray ==
           Json.arr (targetContent.map historicalResultBlockJson).toArray &&
-        codexErrorValue sourceError == codexErrorValue targetError
+        errorSignalJson sourceError == errorSignalJson targetError
   | .unmodeled sourceLabel sourceRaw, .unmodeled targetLabel targetRaw =>
       sourceLabel == targetLabel && sourceRaw == targetRaw
   | _, _ => false
@@ -6165,12 +6138,8 @@ private def codexMarkupControlArchiveFixture : Transcript :=
       format := .claudeCode, sourceRef := "claude-markup-tool-fixture",
       extras := some extras } }
 
-/-- `error` is a parameter, not a literal, because Codex has no structured
-failure field. The source asserts `.native false`; a real
-`function_call_output` returns `.inferred false` via `codexOutputIndicatesError`.
-The error VALUE is identical either way — only its provenance normalizes, which
-`LoomOps.Interop` rates reportable rather than corrupting. Everything the shape
-actually pins about the call, `name.canonical` included, is exact. -/
+/-- Native tool history preserves both canonical identity and the complete
+error signal in metadata, without adding dialogue or changing tool output. -/
 private def codexMarkupToolLifecycleShape
     (transcript : Transcript) (error : ErrorSignal) : Bool :=
   transcript.entries.size == 4 &&
@@ -6225,21 +6194,9 @@ def codexArchivedControlMarkupIsTransportEscapedLosslessly : Bool :=
 example : codexArchivedControlMarkupIsTransportEscapedLosslessly = true := by
   native_decide
 
-/-- At the Codex-visible decoded JSON layer, no Claude control or tool-wrapper
-tag survives. The typed call/result lifecycle remains inspectable, while the
-two exact originals are recoverable only from inert source provenance.
-
-The restored lifecycle is asked for `.inferred false` where the source asserted
-`.native false`. Until canonical tool identity could travel out of band, this
-`Bash`/`.bash` call was forced to the prose carrier, and the carrier replayed
-the exact `ErrorSignal` with it; the pin recorded that as `.native false` on
-both sides. The call is now a real `function_call`, so its result is a real
-`function_call_output` — a record with no error field, from which Codex's own
-importer re-infers the value. Trading the target's native lifecycle for one
-scalar's provenance was the defect, not the fix: the value is unchanged and the
-normalization is reported (`LoomOps.Interop`, `errorProvenance := some false`
-for codex). What the pin is actually about — that no Claude markup reaches the
-decoded target surface — is unchanged and still checked on both sides. -/
+/-- No Claude control or tool-wrapper tag reaches the decoded target surface.
+The native lifecycle and exact error signal survive; source controls remain
+recoverable only from inert provenance. -/
 def codexClaudeMarkupAbsentFromDecodedTargetText : Bool :=
   codexMarkupToolLifecycleShape codexMarkupControlArchiveFixture (.native false) &&
   match exportCodexCliChecked codexMarkupControlArchiveFixture with
@@ -6253,7 +6210,7 @@ def codexClaudeMarkupAbsentFromDecodedTargetText : Bool :=
           !hasSub targetSurface codexClaudeControlMarkup &&
           !hasSub targetSurface codexClaudeToolWrapperMarkup &&
           codexMarkupToolLifecycleShape restored
-            (.inferred false "codexOutputIndicatesError (codexAdapter.ts:75)") &&
+            (.native false) &&
           (parseCodexSourceArchive? header).any (fun archive =>
             archive.sourceControls == codexMarkupSourceControls &&
             archive.sourceControls[0]?.bind (fun raw => ostr raw "raw") ==
@@ -6437,6 +6394,50 @@ private def codexEmptyEnvironmentTarget : Transcript :=
     payload := .envMsg []
     origin := codexDirectPreflightOrigin }] (some 0)
 
+/-- Empty records remain distinct, including a final empty turn and empty
+records around a tool exchange. No text or successful tool output is invented. -/
+private def codexEmptyMessagesAroundToolTarget : Transcript :=
+  codexDirectPreflightTarget #[
+    { payload := .userMsg [.text "before empty records"]
+      origin := codexDirectPreflightOrigin },
+    { parent := some 0, payload := .assistantMsg []
+      origin := codexDirectPreflightOrigin },
+    { parent := some 1, payload := .assistantMsg []
+      origin := codexDirectPreflightOrigin },
+    { parent := some 2, payload := .assistantMsg [
+        .toolCall { raw := "foreign_tool" } (Json.mkObj []) (some "empty-neighbor")]
+      origin := codexDirectPreflightOrigin },
+    { parent := some 3, payload := .envMsg []
+      origin := codexDirectPreflightOrigin },
+    { parent := some 4, payload := .envMsg [
+        .toolResult (.resolved 3 0) [.text "recorded result"] .unrecorded]
+      origin := codexDirectPreflightOrigin },
+    { parent := some 5, payload := .userMsg []
+      origin := codexDirectPreflightOrigin }
+  ] (some 6)
+
+private def codexEmptyMessagesRoundTrip (source : Transcript) : Bool :=
+  match exportCodexCliChecked source with
+  | .error _ => false
+  | .ok first =>
+      match importCodexCli first with
+      | .error _ => false
+      | .ok restored =>
+          restored.entries.size == source.entries.size &&
+          restored.activeLeaf == source.activeLeaf &&
+          Loom.violations restored == [] &&
+          (source.entries.toList.zip restored.entries.toList).all (fun (before, after) =>
+            codexHistoricalPayloadJson before.payload ==
+              codexHistoricalPayloadJson after.payload &&
+            before.parent == after.parent && before.time == after.time) &&
+          match exportCodexCliChecked restored with
+          | .ok second => second == first
+          | .error _ => false
+
+example : [codexEmptyUserTarget, codexEmptyAssistantTarget,
+    codexEmptyEnvironmentTarget, codexEmptyMessagesAroundToolTarget].all
+      codexEmptyMessagesRoundTrip = true := by native_decide
+
 private def codexNativeOtherRoleTarget : Transcript :=
   codexDirectPreflightTarget #[{
     payload := .otherMsg "system" [.text "native unsupported role"]
@@ -6462,9 +6463,6 @@ private def codexBranchedTarget : Transcript :=
 private def codexDestructiveDirectCases :
     List (Transcript × Loom.Ops.Obligation) := [
   (codexLossyNonterminalUnknownUserTarget, .dropUnmodeled),
-  (codexEmptyUserTarget, .dropUnmodeled),
-  (codexEmptyAssistantTarget, .dropUnmodeled),
-  (codexEmptyEnvironmentTarget, .dropToolResults),
   (codexNativeOtherRoleTarget, .dropOtherRoles),
   (codexNativeStructuredEventTarget, .dropEvents),
   (codexBranchedTarget, .linearizeBranches)]
@@ -7414,7 +7412,7 @@ private def codexMixedAssistantSelectionShape (transcript : Transcript) : Bool :
       result.disposition == EntryDisposition.native &&
       (match result.payload with
        | .envMsg [.toolResult (.resolved 2 0) [.text "fixture contents"]
-           (.inferred false "codexOutputIndicatesError (codexAdapter.ts:75)")] =>
+           (.native false)] =>
            true
        | _ => false) &&
       (match terminal.payload with
@@ -7650,8 +7648,7 @@ Same inversion as the Hermes sibling, and for the same single cause: the
 `search_replace`/`.edit` call is now a real `function_call` because the reserved
 envelope member can carry `ToolName.canonical` beside it, so nothing is dropped
 by emitting natively and the prose carrier is pure loss. The result's error
-value stays `false`; its provenance moves `.native → .inferred` because a Codex
-`function_call_output` has no error field to hold the distinction. -/
+value stays `false`; metadata preserves its `.native` provenance too. -/
 def codexCheckedCursorIdeTerminalResultExpansionPasses : Bool :=
   let source := codexCursorIdeTerminalResultExpansionFixture
   match exportCodexCliChecked source with
@@ -7680,8 +7677,7 @@ def codexCheckedCursorIdeTerminalResultExpansionPasses : Bool :=
               match terminal.payload with
               | .envMsg [.toolResult (.resolved 3 0)
                   [.text "edit applied"]
-                  (.inferred false
-                    "codexOutputIndicatesError (codexAdapter.ts:75)")] => true
+                  (.native false)] => true
               | _ => false
           | none => false
 
@@ -7911,10 +7907,8 @@ Same inversion as the Hermes sibling and the same single cause: the fixture's
 `search_replace` call asserts `canonical := .edit`, which used to force the
 whole lifecycle to prose because Codex's `function_call` cannot hold that field.
 It travels in the reserved envelope member now, so the call and result are
-native and `.edit` still returns. The error value stays `false` while its
-provenance normalizes `.native → .inferred` — a Codex `function_call_output`
-carries no error field, so that is the format's limit, reported and not
-corrupting. -/
+native and `.edit` still returns. The complete `.native false` error signal
+survives beside the native result in metadata. -/
 def codexCheckedGenuineCursorIdeTerminalExpansionPasses : Bool :=
   match codexCheckedGenuineFixturePair? (importCursorIde cursorIdeFixture) with
   | none => false
@@ -7944,37 +7938,30 @@ def codexCheckedGenuineCursorIdeTerminalExpansionPasses : Bool :=
           (match terminal.payload with
            | .envMsg [.toolResult (.resolved 3 0)
                [.text "edit applied"]
-               (.inferred false
-                 "codexOutputIndicatesError (codexAdapter.ts:75)")] => true
+               (.native false)] => true
            | _ => false)
       | _, _, _ => false
 
 example : codexCheckedGenuineCursorIdeTerminalExpansionPasses = true := by
   native_decide
-/-- Cursor result content, error VALUE, linkage, recorded time, and entry
-disposition each remain rejection-sensitive after index expansion.
-
-Two adjustments, both downstream of the call now being native. The baseline
-error signal is the `.inferred false` Codex re-derives rather than the source's
-`.native false`, so the mutations are stated against it — `changedError` still
-flips the VALUE, which is the thing that must never pass silently. And the
-disposition mutation deactivates a native terminal instead of activating a
-carrier, because the terminal is native now; the property, that a disposition
-change on the selected terminal is rejected, is the same. -/
+/-- Content, full error signal, linkage, time, and disposition remain
+rejection-sensitive after expansion into native records. -/
 def codexCheckedGenuineCursorIdeTerminalMutationsRejected : Bool :=
   match codexCheckedGenuineFixturePair? (importCursorIde cursorIdeFixture) with
   | none => false
   | some (source, restored) =>
-      let inferredFalse : ErrorSignal :=
-        .inferred false "codexOutputIndicatesError (codexAdapter.ts:75)"
+      let nativeFalse : ErrorSignal := .native false
       let changedContent := codexMutateEntry restored 4 (fun entry =>
         { entry with payload := .envMsg [
-            .toolResult (.resolved 3 0) [.text "changed"] inferredFalse] })
+            .toolResult (.resolved 3 0) [.text "changed"] nativeFalse] })
       let changedError := codexMutateEntry restored 4 (fun entry =>
         { entry with payload := .envMsg [
             .toolResult (.resolved 3 0) [.text "edit applied"]
-              (.inferred true
-                "codexOutputIndicatesError (codexAdapter.ts:75)")] })
+              (.native true)] })
+      let changedProvenance := codexMutateEntry restored 4 (fun entry =>
+        { entry with payload := .envMsg [
+            .toolResult (.resolved 3 0) [.text "edit applied"]
+              (.inferred false "invented provenance")] })
       let changedLink := codexMutateEntry restored 3 (fun entry =>
         { entry with payload := .assistantMsg [
             .toolCall { raw := "different-edit", canonical := some .edit }
@@ -7987,6 +7974,8 @@ def codexCheckedGenuineCursorIdeTerminalMutationsRejected : Bool :=
       codexCheckedTerminalMutationRejected source changedContent
           codexTerminalExpansionChangedError &&
         codexCheckedTerminalMutationRejected source changedError
+          codexTerminalExpansionChangedError &&
+        codexCheckedTerminalMutationRejected source changedProvenance
           codexTerminalExpansionChangedError &&
         codexCheckedTerminalMutationRejected source changedLink
           codexTerminalExpansionChangedError &&
@@ -8109,7 +8098,7 @@ private def codexCanonicalToolCarrierShape (transcript : Transcript) : Bool :=
       rawResult.disposition == EntryDisposition.native &&
       (match rawResult.payload with
        | .envMsg [.toolResult (.resolved 2 0) [.text "future result"]
-           (.inferred false "codexOutputIndicatesError (codexAdapter.ts:75)")] => true
+           (.native false)] => true
        | _ => false)
   | _, _, _, _ => false
 

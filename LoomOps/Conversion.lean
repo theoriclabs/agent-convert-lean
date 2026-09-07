@@ -326,12 +326,6 @@ def hasCodexUnexportableUnmodeled (t : Transcript) : Bool :=
         | _ => false)
     | _ => false
 
-def hasCodexEmptyMessages (t : Transcript) : Bool :=
-  t.entries.toList.any fun entry =>
-    match entry.payload with
-    | .userMsg [] | .assistantMsg [] => true
-    | _ => false
-
 private def codexCustomEventRoundTrips (label : String) (raw : Lean.Json) : Bool :=
   if !isJsonObject raw then false
   else
@@ -1247,12 +1241,10 @@ def obligations (tgt : Format) (t : Transcript) : List Obligation := Id.run do
         | _ => false) then out := out.push .dropToolResults
   if tgt = Format.codexCli then
     if hasCodexUnexportableMedia nativeSurface then out := out.push .dropMedia
-    if hasCodexUnexportableUnmodeled nativeSurface ||
-        hasCodexEmptyMessages nativeSurface then
+    -- Empty messages use Codex's typed historical-entry carrier, including
+    -- environment messages with no result blocks.
+    if hasCodexUnexportableUnmodeled nativeSurface then
       out := out.push .dropUnmodeled
-    if nativeSurface.entries.toList.any (fun entry => match entry.payload with
-        | .envMsg [] => true
-        | _ => false) then out := out.push .dropToolResults
     if hasOtherRoles nativeSurface then out := out.push .dropOtherRoles
   for loss in metadataLosses tgt t do
     match loss with
