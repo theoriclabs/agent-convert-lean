@@ -32,7 +32,7 @@ const source = { composer: { composerId: sessionId, name: 'Loom synthetic native
 const input = join(scratch, 'source.json');
 const output = join(scratch, 'converted.jsonl');
 writeFileSync(input, JSON.stringify(source));
-const conversion = spawnSync(resolve('.lake/build/bin/loom'), ['convert', input, 'codex', output], { encoding: 'utf8' });
+const conversion = spawnSync(resolve(process.env.LOOM_BIN || '.lake/build/bin/loom'), ['convert', input, 'codex', output], { encoding: 'utf8' });
 assert.equal(conversion.status, 0, conversion.stderr);
 const directory = join(homedir(), '.codex', 'sessions', ...now.slice(0, 10).split('-'));
 mkdirSync(directory, { recursive: true });

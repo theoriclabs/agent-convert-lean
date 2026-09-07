@@ -1,5 +1,12 @@
 # agent-convert-lean — working directives
 
+## Changelog and releases
+
+Record user-visible changes under `Unreleased` in [CHANGELOG.md](./CHANGELOG.md)
+as they land. Follow [the prerelease workflow](./docs/releasing.md) when
+publishing, and generate GitHub notes from the dated changelog entry. Run
+`node scripts/release-notes.mjs --check` to detect version drift.
+
 ## Continue the conversation with native tool history
 
 Follow [INTENT.md](./INTENT.md). Prior source tool executions belong in the

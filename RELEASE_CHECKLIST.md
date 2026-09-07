@@ -1,5 +1,10 @@
 # Loom release checklist
 
+For the current source/binary prerelease workflow, see
+[docs/releasing.md](./docs/releasing.md) and [CHANGELOG.md](./CHANGELOG.md).
+The historical qualification checklist below remains separate; publishing an
+experimental prerelease does not mark its unmet requirements complete.
+
 Native conversation continuity is defined in [INTENT.md](./INTENT.md).
 Carrier decoding, target-parser acceptance, and absence of tool replay are
 separate from preserving native history in the target's resumed model context.

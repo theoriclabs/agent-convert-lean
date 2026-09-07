@@ -6,7 +6,7 @@ execution even when output was pruned. Importing history must not rerun tools.
 Visible historical-tool disclaimers and carrier JSON are conversion defects,
 not evidence of high fidelity; keep bookkeeping out of dialogue.
 
-Loom is the release-ready Lean converter in
+Loom is the Lean session converter in
 [`theoriclabs/agent-convert-lean`](https://github.com/theoriclabs/agent-convert-lean).
 When a human asks to continue a session in another harness, use the single
 public command:

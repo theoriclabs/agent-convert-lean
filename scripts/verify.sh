@@ -32,7 +32,7 @@ node -e '
 const version = JSON.parse(process.argv[1]);
 const revisionOk = version.coreRevision === "working-tree" ||
   /^[0-9a-f]{40}$/.test(version.coreRevision);
-if (version.engine !== "lean" || version.engineVersion !== "0.2.0-preview.0" ||
+if (version.engine !== "lean" || version.engineVersion !== "0.2.0-preview.1" ||
     version.protocolVersion !== "loom.cli.v1" || !revisionOk ||
     version.sourceRepository !== "https://github.com/theoriclabs/agent-convert-lean" ||
     version.sourcePath !== "." || !version.targetTriple ||
@@ -56,6 +56,7 @@ node "$LOOM_ROOT/scripts/audit-corpora.self-test.mjs"
 node "$LOOM_ROOT/scripts/audit-codex-claude.self-test.mjs"
 LOOM_BIN="$LOOM_BIN" node "$LOOM_ROOT/scripts/test-cursor-native-history.mjs"
 node "$LOOM_ROOT/scripts/check-conversion-matrix.mjs"
+node "$LOOM_ROOT/scripts/release-notes.mjs" --check
 SUBAGENT_SKIP_RUNTIME_FINGERPRINT=1 node --test \
   test/codexAdapter.d13-dedup.test.mjs \
   test/detector-agreement.test.mjs \

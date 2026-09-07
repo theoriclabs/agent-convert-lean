@@ -2,6 +2,11 @@
 
 Convert coding-agent sessions between harnesses.
 
+See the [changelog](./CHANGELOG.md) and
+[GitHub releases](https://github.com/theoriclabs/agent-convert-lean/releases)
+for versioned changes and downloads. The current release is an experimental
+prerelease; its notes list known limitations.
+
 The destination should continue the same conversation, including prior tool
 executions as native tool history. Conversion metadata belongs outside dialogue;
 tool-carrier prose is not equivalent fidelity. See [product intent](./INTENT.md)
@@ -13,7 +18,7 @@ loom convert <session-or-file> <target> [output]
 
 That is the API. Loom finds the session, detects its format, chooses safe
 defaults, validates the conversion, and produces a session you can continue.
-The Lean core and one-command interface are release-ready.
+The Lean core and one-command interface are available in the prerelease.
 
 ## Give this to your agent
 
