@@ -5,6 +5,25 @@ lands; move them into a dated version section when publishing a release.
 
 ## [Unreleased]
 
+## [0.2.0-preview.3] - 2026-09-08
+
+### Fixed
+
+- Map overlong imported Codex tool-call IDs to unique API-compatible IDs of
+  at most 64 characters. Preserve original IDs in metadata and remap matching
+  results together, including when repairing an already-converted rollout.
+- Exercise long source IDs in the live Codex continuation regression; a local
+  rollout-reader check alone did not catch the API and remote-compaction limit.
+
+### Validation and limits
+
+- Boundary-length, collision, metadata-restoration, and old-rollout repair
+  regressions cover the fix. Synthetic Codex CLI 0.153.4 continuation and remote
+  compaction preserve prior-result recall with zero new tool calls.
+- Includes the native Claude `exec` history fix from `0.2.0-preview.2`.
+- The three pre-existing requirements failures documented in `CLAUDE.md`
+  remain. Binary downloads are macOS ARM64 only and are not notarized.
+
 ## [0.2.0-preview.2] - 2026-09-08
 
 ### Fixed
@@ -72,6 +91,7 @@ First public prerelease of the Lean session converter.
   must build from source with the pinned Lean toolchain. Cursor IDE extraction
   requires `sqlite3`; the optional MCP server requires Node.js.
 
-[Unreleased]: https://github.com/theoriclabs/agent-convert-lean/compare/v0.2.0-preview.2...HEAD
+[Unreleased]: https://github.com/theoriclabs/agent-convert-lean/compare/v0.2.0-preview.3...HEAD
+[0.2.0-preview.3]: https://github.com/theoriclabs/agent-convert-lean/releases/tag/v0.2.0-preview.3
 [0.2.0-preview.2]: https://github.com/theoriclabs/agent-convert-lean/compare/v0.2.0-preview.1...v0.2.0-preview.2
 [0.2.0-preview.1]: https://github.com/theoriclabs/agent-convert-lean/releases/tag/v0.2.0-preview.1

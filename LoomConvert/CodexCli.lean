@@ -411,6 +411,36 @@ private def codexCompactionRawRecordKey : String := "raw_compaction_record"
 
 private def codexNativeToolRawRecordKey : String := "raw_native_tool_record"
 
+private def codexCallIdMapKey : String := "_agent_convert_call_id"
+
+/-- Responses (including remote compaction) limits call_id to 64 characters.
+The local rollout reader accepting an ID does not establish API compatibility. -/
+def codexWireCallIdValid (id : String) : Bool :=
+  !id.isEmpty && decide (id.length ≤ 64)
+
+private def codexCallIdMapJson (source target : String) : Json := Json.mkObj [
+  ("protocol", Json.str "agent-convert.codex-call-id.v1"),
+  ("source", Json.str source), ("target", Json.str target)]
+
+private def codexMappedSourceCallId? (record : Json) : Option String := do
+  guard (ostr record "type" == some "response_item")
+  let payload ← oobj record "payload"
+  guard (["function_call", "function_call_output", "custom_tool_call",
+    "custom_tool_call_output"].contains ((ostr payload "type").getD ""))
+  let mapping ← oobj record codexCallIdMapKey
+  let source ← ostr mapping "source"
+  let target ← ostr mapping "target"
+  guard (!source.isEmpty && !codexWireCallIdValid source && codexWireCallIdValid target)
+  guard (mapping == codexCallIdMapJson source target)
+  guard (ostr payload "call_id" == some target)
+  pure source
+
+private def codexRestoreMappedCallId (record : Json) : Json :=
+  match codexMappedSourceCallId? record, oobj record "payload" with
+  | some source, some payload =>
+      record.setObjVal! "payload" (payload.setObjVal! "call_id" (Json.str source))
+  | _, _ => record
+
 private def codexSourceArchiveKind : String := "historical_source_provenance"
 
 private def codexGeneratedTargetDefaultsKind : String :=
@@ -549,7 +579,11 @@ the JSON object representation can erase their lexical ambiguity. -/
 private def codexReservedRecordSourceFailure?
     (carrierSessionSelfIdentified : Bool) (sourceLine : String)
     (record : Json) : Option String :=
-  if (oobj record codexTimeProvenanceKey).isSome then
+  if (oobj record codexCallIdMapKey).isSome &&
+      (!carrierSessionSelfIdentified || (codexMappedSourceCallId? record).isNone ||
+       sourceLine != codexCanonicalJsonLine record) then
+    some s!"reserved {codexCallIdMapKey} requires a valid exporter-owned call ID mapping"
+  else if (oobj record codexTimeProvenanceKey).isSome then
     if !carrierSessionSelfIdentified then
       some s!"reserved {codexTimeProvenanceKey} requires an exact exporter-owned session stamp"
     else codexTimeProvenanceSourceFailure? sourceLine record
@@ -1434,6 +1468,7 @@ private def adaptRecords (records : List Json) (carrierSessionSelfIdentified : B
   let mut idx : Nat := 0                         -- record index (post-header), for note locs
   let recordArray := records.toArray
   for j in records do
+    let j := if carrierSessionSelfIdentified then codexRestoreMappedCallId j else j
     let ty := (ostr j "type").getD ""
     let p := (oobj j "payload").getD Json.null
     let ts := ostr j "timestamp"
@@ -3470,6 +3505,32 @@ private def codexRawCallIdCount (t : Transcript) (rawId : String) : Nat :=
           | _ => false)
       | _ => 0) 0
 
+/-- Allocate short, collision-free aliases without truncation or hash collisions.
+Reserve every source call ID (including already-valid alias-looking IDs), then
+assign distinct free names in first-occurrence order. Original identities stay
+in metadata and are restored before IR linkage on re-import. -/
+private def codexTargetCallId? (t : Transcript) (source : String) : Option String := do
+  if codexWireCallIdValid source then return source
+  let ids := (t.entries.toList.flatMap (fun entry => match entry.payload with
+    | .assistantMsg blocks => blocks.filterMap (fun
+        | .toolCall _ _ rawId => rawId
+        | _ => none)
+    | _ => [])).eraseDups
+  let longIds := ids.filter (fun id => !codexWireCallIdValid id)
+  let available := ((List.range (ids.length + longIds.length)).map
+    (fun n => s!"loom_call_{n}")).filter (fun id =>
+      codexWireCallIdValid id && !ids.contains id)
+  let position ← (longIds.zipIdx.find? (fun pair => pair.1 == source)).map Prod.snd
+  available[position]?
+
+private def codexNativeWireRecord? (t : Transcript) (source : String)
+    (record : Json) : Option Json := do
+  let target ← codexTargetCallId? t source
+  if target == source then return record
+  let payload ← oobj record "payload"
+  let rewritten := record.setObjVal! "payload" (payload.setObjVal! "call_id" (Json.str target))
+  pure (rewritten.setObjVal! codexCallIdMapKey (codexCallIdMapJson source target))
+
 private def nativeCallHasExactResult (t : Transcript) (entryIdx blockIdx : Nat)
     (call : CodexNativeCallEvidence) : Bool :=
   let resultMatches := t.entries.toList.zipIdx.flatMap (fun (entry, resultEntryIdx) =>
@@ -3492,7 +3553,7 @@ private def nativeCallRecordAt? (t : Transcript) (entryIdx blockIdx : Nat)
   let evidence ← nativeCallEvidence? t entryIdx blockIdx name args rawId
   guard (codexRawCallIdCount t evidence.callId == 1)
   guard (nativeCallHasExactResult t entryIdx blockIdx evidence)
-  pure evidence.record
+  codexNativeWireRecord? t evidence.callId evidence.record
 
 private def nativeCallAt (t : Transcript) (entryIdx blockIdx : Nat)
     (name : ToolName) (args : Json) (rawId : Option String) : Bool :=
@@ -3525,7 +3586,7 @@ private def nativeResultRecordAt? (t : Transcript) (entryIdx blockIdx : Nat)
   let call ← nativeCallEvidence? t callEntryIdx callBlockIdx name args rawId
   guard (call.callId == result.callId && call.kind == result.kind)
   guard (nativeCallAt t callEntryIdx callBlockIdx name args rawId)
-  pure result.record
+  codexNativeWireRecord? t result.callId result.record
 
 /-- Target-policy census used by the CLI summary. These counts deliberately
 reuse the exact predicates that choose native records versus historical text;
@@ -4163,7 +4224,8 @@ private def codexSemanticRecords (t : Transcript) : List Json :=
 private def codexRecordsUseCarrierProtocol (records : List Json) : Bool :=
   records.any (fun record =>
     (oobj record "payload").any codexCarrierMarkerPresent ||
-      (oobj record codexTimeProvenanceKey).isSome)
+      (oobj record codexTimeProvenanceKey).isSome ||
+      (oobj record codexCallIdMapKey).isSome)
 
 private def codexTargetRecordsFromSemantic
     (t : Transcript) (semanticRecords : List Json) : List Json :=
@@ -4565,6 +4627,15 @@ def exportCodexCliChecked (t : Transcript) : Except String String :=
   | failure :: failures => .error (String.intercalate "; " (failure :: failures))
   | [] =>
       let output := exportCodexCli t
+      let badId := (output.splitOn "\n").any (fun line =>
+        match (Json.parse line).toOption with
+        | some record => ostr record "type" == some "response_item" &&
+            ((oobj record "payload").bind (fun p => ostr p "call_id")).any
+              (fun id => !codexWireCallIdValid id)
+        | none => false)
+      if badId then
+        .error "Codex target call_id must contain 1–64 characters"
+      else
       match importCodexCli output with
       | .error error => .error s!"Codex target failed self-validation: {error}"
       | .ok restored =>

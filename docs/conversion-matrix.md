@@ -69,6 +69,11 @@ input in native history when the call/result pair is eligible. This preserves
 the recorded outer operation, not a reconstruction of its inner tool calls;
 it does not install a callable JavaScript tool in Claude.
 
+For Codex targets, source call IDs longer than the API's 64-character limit
+receive collision-free short aliases on both native calls and results. Original
+IDs remain in metadata and are restored on import. Existing converted rollouts
+can be repaired into a new file. See [the API-limit regression](./bugs/codex-call-id-length.md).
+
 ## Workflows
 
 ```sh
@@ -100,6 +105,11 @@ round-trips is not native-history fidelity. See [product intent](../INTENT.md).
   prior-result recall, failure recognition, and zero new calls. See
   [scope and reproduction](./cursor-tool-binary.md). Do not extrapolate this
   result to every matrix cell or every Cursor binary schema.
+- **Codex call-ID limits:** `node scripts/test-codex-call-ids.mjs` checks
+  boundary lengths, alias collisions, source-ID restoration, and repair of old
+  rollouts. The long-ID synthetic continuation and `--run --compact` probe
+  passed on Codex CLI 0.153.4 on 2026-09-08, with prior-result recall and no new
+  tool calls. See [the regression report](./bugs/codex-call-id-length.md).
 - **Codex JavaScript → Claude:** `node scripts/test-claude-exec-history.mjs`
   checks native composite/dynamic/privileged wrapper pairs, exact outputs,
   recorded failure, compaction selection, and stable re-export. Add `--live`
