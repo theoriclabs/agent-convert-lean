@@ -5,6 +5,28 @@ lands; move them into a dated version section when publishing a release.
 
 ## [Unreleased]
 
+## [0.2.0-preview.2] - 2026-09-08
+
+### Fixed
+
+- Preserve completed Codex JavaScript `exec` calls as native Claude tool
+  history when the wrapper cannot be translated to a single Bash operation.
+  Keep original inputs and recorded results without rerunning tools or adding
+  historical-tool disclaimers.
+
+### Added
+
+- Regression coverage for composite, dynamic, and privileged Codex wrappers,
+  exact outputs, failure status, compaction selection, and stable re-export.
+- An opt-in Claude continuation test that checks prior-result recall with
+  tools disabled and session persistence off; documented in the conversion matrix.
+
+### Known limitations
+
+- The three pre-existing requirements failures documented in `CLAUDE.md`
+  remain. This fix does not extend support to every tool schema or unresolved
+  lifecycle.
+
 ## [0.2.0-preview.1] - 2026-09-07
 
 First public prerelease of the Lean session converter.
@@ -50,5 +72,6 @@ First public prerelease of the Lean session converter.
   must build from source with the pinned Lean toolchain. Cursor IDE extraction
   requires `sqlite3`; the optional MCP server requires Node.js.
 
-[Unreleased]: https://github.com/theoriclabs/agent-convert-lean/compare/v0.2.0-preview.1...HEAD
+[Unreleased]: https://github.com/theoriclabs/agent-convert-lean/compare/v0.2.0-preview.2...HEAD
+[0.2.0-preview.2]: https://github.com/theoriclabs/agent-convert-lean/compare/v0.2.0-preview.1...v0.2.0-preview.2
 [0.2.0-preview.1]: https://github.com/theoriclabs/agent-convert-lean/releases/tag/v0.2.0-preview.1

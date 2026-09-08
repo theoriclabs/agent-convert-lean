@@ -63,6 +63,12 @@ non-main threads in a flat target is refused. Supported Claude/Cursor Agent
 sidecars and Loom archives can preserve thread structure; they do not make
 unsupported source branches or missing sidecars appear.
 
+For Codex → Claude, reviewed single-command JavaScript `exec` wrappers translate
+to `Bash`. Other string-valued wrappers retain their original `exec` name and
+input in native history when the call/result pair is eligible. This preserves
+the recorded outer operation, not a reconstruction of its inner tool calls;
+it does not install a callable JavaScript tool in Claude.
+
 ## Workflows
 
 ```sh
@@ -94,6 +100,15 @@ round-trips is not native-history fidelity. See [product intent](../INTENT.md).
   prior-result recall, failure recognition, and zero new calls. See
   [scope and reproduction](./cursor-tool-binary.md). Do not extrapolate this
   result to every matrix cell or every Cursor binary schema.
+- **Codex JavaScript → Claude:** `node scripts/test-claude-exec-history.mjs`
+  checks native composite/dynamic/privileged wrapper pairs, exact outputs,
+  recorded failure, compaction selection, and stable re-export. Add `--live`
+  for an authenticated Claude continuation with tools/customizations disabled
+  and session persistence off; it checks prior-result recall and failure
+  recognition, then removes only its synthetic installed transcript.
+  The synthetic live probe passed on Claude Code 2.1.263 on 2026-09-07,
+  including exact empty-output recall. This is not a claim about every tool
+  schema or unresolved lifecycle.
 - **Remaining suite failures:** the full requirements build retains the three
   pre-existing failures recorded in [CLAUDE.md](../CLAUDE.md). Keep known failures
   and vendor versions visible when adding new test results.

@@ -1579,7 +1579,7 @@ elab "loomCoreRevision%" : term => do
   let revision := loom.coreRevision.get (← getOptions)
   elabTerm (Syntax.mkStrLit revision) (some (mkConst ``String))
 
-def coreVersion : String := "0.2.0-preview.1"
+def coreVersion : String := "0.2.0-preview.2"
 def coreProtocol : String := "loom.cli.v1"
 def coreRevision : String := loomCoreRevision%
 def coreSourceRepository : String := "https://github.com/theoriclabs/agent-convert-lean"

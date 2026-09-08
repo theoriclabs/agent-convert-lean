@@ -3845,19 +3845,19 @@ private def cJsonIsObject : Json → Bool
 
 /-! ### Target-native tool translation
 
-`tool_use.name` is executable model context, not an arbitrary display label.
-Foreign raw names therefore cannot be copied merely because they satisfy
-Claude's identifier regex. We select a Claude built-in from the reviewed
-canonical meaning and translate its arguments. A genuine Claude source keeps
-its physical name/input unchanged.
+Native history records past execution; it does not register a callable tool or
+execute its input. Where reviewed semantics permit, select a Claude built-in
+and translate its arguments. A genuine Claude source keeps its physical
+name/input unchanged.
 
 Current Codex also records many calls through a custom outer tool named `exec`.
 Its input is generated JavaScript over `tools.*`; `exec` itself is not the
 semantic operation and Claude Code does not expose it. The restricted parser
 below recognizes only one literal `await tools.exec_command({...})` invocation
 whose command and optional workdir are literal strings. It never evaluates
-JavaScript. Composite, dynamic, or malformed wrappers fall back to the existing
-historical carrier. -/
+JavaScript. Other string-valued wrappers retain the complete `exec` operation
+as native history, without pretending its JavaScript is a Bash command. The
+normal lifecycle, identifier, and result-content checks still apply. -/
 
 private structure ClaudeTargetTool where
   name      : String
@@ -4114,9 +4114,12 @@ private def cClaudeTargetToolAt?
     pure { name := name.raw, input := args, canonical := name.canonical }
   else if entry.origin.format == Format.codexCli && name.raw == "exec" then
     let source ← cstr args "input"
-    let wrapped ← cCodexWrappedExec? source
-    let input := cClaudeBashInput wrapped.command wrapped.cwd
-    pure { name := "Bash", input, canonical := some .bash }
+    match cCodexWrappedExec? source with
+    | some wrapped =>
+        let input := cClaudeBashInput wrapped.command wrapped.cwd
+        pure { name := "Bash", input, canonical := some .bash }
+    | none =>
+        pure { name := name.raw, input := args, canonical := name.canonical }
   else
     let canonical ← name.canonical.orElse (fun _ =>
       if entry.origin.format == Format.codexCli then
@@ -5673,11 +5676,11 @@ private def cTranslatedBashRestored (expected : String) (text : String) : Bool :
 * a direct reviewed `exec_command` becomes target-native Claude `Bash`;
 * the common one-operation JavaScript `exec` envelope is structurally
   decomposed into the same native operation;
-* composite, dynamic, privileged, or otherwise unreviewed envelopes remain
-  reversible historical carriers rather than executable approximations.
+* composite, dynamic, privileged, or otherwise unreviewed string envelopes
+  retain the original JavaScript orchestrator call and its recorded result in
+  native history. No JavaScript is evaluated and no inner result is invented.
 
-In particular, no converted artifact emits a native tool named `exec`; that
-raw name identifies Codex's JavaScript orchestrator, not the operation. -/
+An imported past `exec` does not make that tool callable in Claude. -/
 def claudeCodexSemanticToolTranslationChecked : Bool :=
   let directCommand := "cd -- '/tmp/a b' && printf ok"
   let direct := cExportClaudeFixture (cCodexClosedToolFixture
@@ -5707,12 +5710,17 @@ def claudeCodexSemanticToolTranslationChecked : Bool :=
   cContains wrapped "\"sourceFormat\":\"codex\"" &&
   cContains wrapped "\"sourceName\":\"exec\"" &&
   cTranslatedBashRestored wrappedCommand wrapped &&
-  [direct, wrapped, composite, dynamic, privileged].all (fun exported =>
+  [direct, wrapped].all (fun exported =>
     !cContains exported "\"name\":\"exec\"") &&
   [composite, dynamic, privileged].all (fun exported =>
-    !cContains exported "\"type\":\"tool_use\"" &&
-      !cContains exported "\"type\":\"tool_result\"" &&
-      cContains exported ("\"" ++ claudeCarrierMarkerKey ++ "\""))
+    cContains exported "\"name\":\"exec\"" &&
+      cContains exported "\"type\":\"tool_use\"" &&
+      cContains exported "\"type\":\"tool_result\"" &&
+      !cContains exported claudeHistoricalToolCallCarrierHeader &&
+      !cContains exported claudeHistoricalToolResultCarrierHeader &&
+      match importClaudeCode exported with
+      | .ok restored => exportClaudeCode restored == exported
+      | .error _ => false)
 
 example : claudeCodexSemanticToolTranslationChecked = true := by native_decide
 

@@ -981,7 +981,7 @@ const validateIdentity = (raw, label, requiredRevision) => {
   }
   const mismatches = [];
   if (value.engine !== "lean") mismatches.push(`engine=${JSON.stringify(value.engine)}`);
-  if (value.engineVersion !== "0.2.0-preview.1") mismatches.push(`engineVersion=${JSON.stringify(value.engineVersion)}`);
+  if (value.engineVersion !== "0.2.0-preview.2") mismatches.push(`engineVersion=${JSON.stringify(value.engineVersion)}`);
   if (value.protocolVersion !== "loom.cli.v1") mismatches.push(`protocolVersion=${JSON.stringify(value.protocolVersion)}`);
   if (requiredRevision === null) {
     if (typeof value.coreRevision !== "string" || !/^[0-9a-f]{40}$/.test(value.coreRevision)) {
@@ -1890,9 +1890,9 @@ make_fake_binary() {
   local continue_file="${7:-}"
   local identity_json
   if [[ "$duplicate" == "yes" ]]; then
-    identity_json="{\"engine\":\"not-lean\",\"engine\":\"$engine\",\"engineVersion\":\"0.2.0-preview.1\",\"protocolVersion\":\"loom.cli.v1\",\"coreRevision\":\"$revision\",\"sourceRepository\":\"https://github.com/theoriclabs/agent-convert-lean\",\"sourcePath\":\".\",\"targetTriple\":\"self-test-target\",\"wireSchemas\":[\"loom.transcript.v0\"]}"
+    identity_json="{\"engine\":\"not-lean\",\"engine\":\"$engine\",\"engineVersion\":\"0.2.0-preview.2\",\"protocolVersion\":\"loom.cli.v1\",\"coreRevision\":\"$revision\",\"sourceRepository\":\"https://github.com/theoriclabs/agent-convert-lean\",\"sourcePath\":\".\",\"targetTriple\":\"self-test-target\",\"wireSchemas\":[\"loom.transcript.v0\"]}"
   else
-    identity_json="{\"engine\":\"$engine\",\"engineVersion\":\"0.2.0-preview.1\",\"protocolVersion\":\"loom.cli.v1\",\"coreRevision\":\"$revision\",\"sourceRepository\":\"https://github.com/theoriclabs/agent-convert-lean\",\"sourcePath\":\".\",\"targetTriple\":\"self-test-target\",\"wireSchemas\":[\"loom.transcript.v0\"]}"
+    identity_json="{\"engine\":\"$engine\",\"engineVersion\":\"0.2.0-preview.2\",\"protocolVersion\":\"loom.cli.v1\",\"coreRevision\":\"$revision\",\"sourceRepository\":\"https://github.com/theoriclabs/agent-convert-lean\",\"sourcePath\":\".\",\"targetTriple\":\"self-test-target\",\"wireSchemas\":[\"loom.transcript.v0\"]}"
   fi
   mkdir -p -- "$(dirname -- "$output")"
   {
