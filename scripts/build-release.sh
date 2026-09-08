@@ -981,7 +981,14 @@ const validateIdentity = (raw, label, requiredRevision) => {
   }
   const mismatches = [];
   if (value.engine !== "lean") mismatches.push(`engine=${JSON.stringify(value.engine)}`);
-  if (value.engineVersion !== "0.2.0-preview.3") mismatches.push(`engineVersion=${JSON.stringify(value.engineVersion)}`);
+  // The candidate must match this release; a pinned prior generation may be
+  // older. Its exact identity and bytes are checked again during rollback.
+  if (requiredRevision !== null && value.engineVersion !== "0.2.0-preview.3") {
+    mismatches.push(`engineVersion=${JSON.stringify(value.engineVersion)}`);
+  } else if (typeof value.engineVersion !== "string" ||
+      !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(value.engineVersion)) {
+    mismatches.push(`engineVersion=${JSON.stringify(value.engineVersion)}`);
+  }
   if (value.protocolVersion !== "loom.cli.v1") mismatches.push(`protocolVersion=${JSON.stringify(value.protocolVersion)}`);
   if (requiredRevision === null) {
     if (typeof value.coreRevision !== "string" || !/^[0-9a-f]{40}$/.test(value.coreRevision)) {
@@ -1888,11 +1895,12 @@ make_fake_binary() {
   local behavior="${5:-normal}"
   local started_file="${6:-}"
   local continue_file="${7:-}"
+  local engine_version="${8:-0.2.0-preview.3}"
   local identity_json
   if [[ "$duplicate" == "yes" ]]; then
-    identity_json="{\"engine\":\"not-lean\",\"engine\":\"$engine\",\"engineVersion\":\"0.2.0-preview.3\",\"protocolVersion\":\"loom.cli.v1\",\"coreRevision\":\"$revision\",\"sourceRepository\":\"https://github.com/theoriclabs/agent-convert-lean\",\"sourcePath\":\".\",\"targetTriple\":\"self-test-target\",\"wireSchemas\":[\"loom.transcript.v0\"]}"
+    identity_json="{\"engine\":\"not-lean\",\"engine\":\"$engine\",\"engineVersion\":\"$engine_version\",\"protocolVersion\":\"loom.cli.v1\",\"coreRevision\":\"$revision\",\"sourceRepository\":\"https://github.com/theoriclabs/agent-convert-lean\",\"sourcePath\":\".\",\"targetTriple\":\"self-test-target\",\"wireSchemas\":[\"loom.transcript.v0\"]}"
   else
-    identity_json="{\"engine\":\"$engine\",\"engineVersion\":\"0.2.0-preview.3\",\"protocolVersion\":\"loom.cli.v1\",\"coreRevision\":\"$revision\",\"sourceRepository\":\"https://github.com/theoriclabs/agent-convert-lean\",\"sourcePath\":\".\",\"targetTriple\":\"self-test-target\",\"wireSchemas\":[\"loom.transcript.v0\"]}"
+    identity_json="{\"engine\":\"$engine\",\"engineVersion\":\"$engine_version\",\"protocolVersion\":\"loom.cli.v1\",\"coreRevision\":\"$revision\",\"sourceRepository\":\"https://github.com/theoriclabs/agent-convert-lean\",\"sourcePath\":\".\",\"targetTriple\":\"self-test-target\",\"wireSchemas\":[\"loom.transcript.v0\"]}"
   fi
   mkdir -p -- "$(dirname -- "$output")"
   {
@@ -2052,11 +2060,19 @@ self_test() {
   trap 'exit 130' INT
   trap 'exit 143' TERM
 
+  source_root="$temp/stale-version-source"
+  release_root="$temp/stale-version-release"
+  mkdir -p -- "$release_root"
+  make_fake_binary "$source_root/.lake/build/bin/loom" "$revision" lean no normal "" "" "0.2.0-preview.1"
+  token="$(new_token)"
+  expect_rejected "$temp" "stale candidate version" "engineVersion" \
+    publish_release "$source_root" "$release_root" "$revision" "$token" none -
+
   source_root="$temp/success-source"
   release_root="$temp/success-release"
   make_publish_fixture "$source_root" "$revision"
   mkdir -p -- "$release_root/.lake/release"
-  make_fake_binary "$release_root/.lake/release/loom" "$old_revision"
+  make_fake_binary "$release_root/.lake/release/loom" "$old_revision" lean no normal "" "" "0.2.0-preview.1"
   make_fake_binary "$release_root/.lake/release/.loom.previous" "$older_revision"
   prior_copy="$temp/prior-copy"
   older_copy="$temp/older-copy"
@@ -2170,7 +2186,7 @@ NODE
   release_root="$temp/rotation-rollback-release"
   make_publish_fixture "$source_root" "$revision"
   mkdir -p -- "$release_root/.lake/release"
-  make_fake_binary "$release_root/.lake/release/loom" "$old_revision"
+  make_fake_binary "$release_root/.lake/release/loom" "$old_revision" lean no normal "" "" "0.2.0-preview.1"
   make_fake_binary "$release_root/.lake/release/.loom.previous" "$older_revision"
   cp "$release_root/.lake/release/loom" "$temp/rotation-current"
   cp "$release_root/.lake/release/.loom.previous" "$temp/rotation-previous"

@@ -21,7 +21,8 @@ const end = sections[index + 1]?.index ?? changelog.length;
 const notes = changelog.slice(start, end).replace(/^\[[^\]]+\]: .*$/gm, '').trim();
 assert.ok(notes.length > 0, 'Release notes are empty');
 for (const path of ['scripts/build-release.sh', 'scripts/verify.sh']) {
-  const pins = [...read(path).matchAll(/engineVersion !== "([^"]+)"/g)].map(m => m[1]);
+  // Only version literals, not an adjacent `typeof engineVersion !== "string"` check.
+  const pins = [...read(path).matchAll(/engineVersion !== "([0-9][^"]*)"/g)].map(m => m[1]);
   assert.deepEqual(pins, [version], `Stale release-version check in ${path}`);
 }
 console.log(requested === '--check' ? `Release metadata aligned: v${version}` : notes);

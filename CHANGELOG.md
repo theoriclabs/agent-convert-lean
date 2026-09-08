@@ -14,6 +14,8 @@ lands; move them into a dated version section when publishing a release.
   results together, including when repairing an already-converted rollout.
 - Exercise long source IDs in the live Codex continuation regression; a local
   rollout-reader check alone did not catch the API and remote-compaction limit.
+- Allow release upgrades to retain and verify an older installed binary for
+  rollback, while still requiring the candidate to match the new version.
 
 ### Validation and limits
 
