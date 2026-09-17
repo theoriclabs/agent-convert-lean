@@ -5,6 +5,20 @@ lands; move them into a dated version section when publishing a release.
 
 ## [Unreleased]
 
+### Fixed
+
+- Accept Claude Code 2.1.274's decoupled compaction shape: `isCompactSummary`'s
+  `parentUuid` now names the ordinary record that preceded it in real time,
+  not the `compact_boundary` itself, and a session's sole boundary can sit off
+  the summary's selected path entirely. The importer previously refused such
+  transcripts outright ("compact_boundary must have exactly one
+  isCompactSummary child, found 0"), discarding an intact multi-megabyte
+  session over a bookkeeping assumption two Claude Code versions had already
+  moved past. The compaction summary text still becomes the resumable entry;
+  when the boundary is off the selected path its own `compactMetadata` is
+  preserved as an archived raw record rather than cross-linked, which is an
+  honest degradation, not silent loss.
+
 ## [0.2.0-preview.3] - 2026-09-08
 
 ### Fixed

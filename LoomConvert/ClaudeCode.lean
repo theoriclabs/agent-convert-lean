@@ -2560,14 +2560,20 @@ private def cAdjacentCompactionBoundary?
         (records.find? (fun (_, i) => i == summaryIndex) >>= fun (summary, _) =>
           cstr summary "sessionId"))
 
-private def cSummaryLinksBoundary
-    (summary : Json) (summaryIndex : Nat) (boundary : Json)
-    (records : List (Json × Nat)) : Bool :=
-  cstr summary "sessionId" == cstr boundary "sessionId" &&
-    (cstr summary "parentUuid" == cstr boundary "uuid" ||
-      (cAdjacentCompactionBoundary? records summaryIndex).any (fun (adjacent, _) =>
-        cstr adjacent "uuid" == cstr boundary "uuid"))
-
+/-- Claude 2.1.274 decouples the `compact_boundary` audit marker from the
+resume-summary message: an `isCompactSummary` record's `parentUuid` now names
+whatever ordinary record preceded it in real time (an attachment, a system
+reminder, …), not the boundary itself, and a session carries at most one
+`compact_boundary` regardless of how many summaries chain to it. `stepLine`'s
+`boundaryFromPath` fallback already pairs a summary with the session's sole
+boundary by count, independent of this edge (see its comment). The validator
+must not require more than real Claude Code now guarantees: this only checks
+that `parentUuid`, when present, resolves to SOME real record in the same
+session — the old "...must be a compact_boundary" requirement is no longer
+true of real output and rejected an intact 2.1.274 session outright
+(2026-09-17, `compute_stack` session, first observed at compaction #1). A
+`compact_boundary` itself needs no linked summary at all; its shape is
+checked by `compactMetadata` validation elsewhere. -/
 private def cValidateCompactionLinks
     (records : List (Json × Nat)) : Except String Unit := do
   let _ ← records.mapM (fun (record, index) => do
@@ -2576,34 +2582,19 @@ private def cValidateCompactionLinks
       match cobj record "parentUuid" with
       | some (Json.str parent) =>
           let candidates := records.filter (fun (candidate, _) =>
-            cstr candidate "uuid" == some parent && cCompactionBoundary candidate)
+            cstr candidate "uuid" == some parent)
           let sameSession := candidates.filter (fun (candidate, _) =>
             cstr candidate "sessionId" == cstr record "sessionId")
           match sameSession with
           | [_] => pure ()
           | [] =>
-              match cAdjacentCompactionBoundary? records index with
-              | some _ => pure ()
-              | none =>
-                  if candidates.isEmpty then
-                    cSchemaError line "parentUuid" (s!"references missing compact_boundary UUID '{parent}'")
-                  else
-                    cSchemaError line "parentUuid" (s!"references compact_boundary '{parent}' in a different session")
-          | _ => cSchemaError line "parentUuid" (s!"references ambiguous compact_boundary UUID '{parent}'")
+              if candidates.isEmpty then
+                cSchemaError line "parentUuid" (s!"references missing record UUID '{parent}'")
+              else
+                cSchemaError line "parentUuid" (s!"references record '{parent}' in a different session")
+          | _ => cSchemaError line "parentUuid" (s!"references ambiguous UUID '{parent}'")
       | _ =>
-          match cAdjacentCompactionBoundary? records index with
-          | some _ => pure ()
-          | none =>
-              cSchemaError line "parentUuid" "must reference a real compact_boundary when isCompactSummary is true"
-    else if cCompactionBoundary record then
-      let summaries := records.filter (fun (candidate, candIndex) =>
-        cbool candidate "isCompactSummary" &&
-          cSummaryLinksBoundary candidate candIndex record records)
-      if summaries.length == 1 then pure ()
-      else
-        let detail :=
-          s!"compact_boundary must have exactly one isCompactSummary child, found {summaries.length}"
-        cSchemaError line "subtype" detail
+          cSchemaError line "parentUuid" "must reference an existing record when isCompactSummary is true"
     else pure ())
   pure ()
 
@@ -6497,18 +6488,74 @@ private def cCompactSummaryWithParent (parent : Json) : Json := cUuidFixtureReco
 def claudeCompactSummaryParentValidationChecked : Bool :=
   let nullParent := (cCompactSummaryWithParent Json.null).compress
   let orphan := (cCompactSummaryWithParent (Json.str "missing-boundary")).compress
-  let wrongParent := String.intercalate "\n" [
-    cClaudeTestLine "user" "user" "ordinary-parent" none "T0" #[
-      Json.mkObj [("type", Json.str "text"), ("text", Json.str "ordinary")]],
-    (cCompactSummaryWithParent (Json.str "ordinary-parent")).compress]
   cRejectedWith nullParent
-      "malformed Claude record at line 1: parentUuid must reference a real compact_boundary when isCompactSummary is true" &&
+      "malformed Claude record at line 1: parentUuid must reference an existing record when isCompactSummary is true" &&
   cRejectedWith orphan
-      s!"malformed Claude record at line 1: parentUuid references missing compact_boundary UUID '{cClaudeFixtureUuid "missing-boundary"}'" &&
-  cRejectedWith wrongParent
-      s!"malformed Claude record at line 2: parentUuid references missing compact_boundary UUID '{cClaudeFixtureUuid "ordinary-parent"}'"
+      s!"malformed Claude record at line 1: parentUuid references missing record UUID '{cClaudeFixtureUuid "missing-boundary"}'"
 
 example : claudeCompactSummaryParentValidationChecked = true := by native_decide
+
+/-- PIN (2026-09-17 regression): Claude 2.1.274 decouples the compact_boundary
+audit marker from the resume-summary message — `isCompactSummary`'s
+`parentUuid` names whatever ordinary record preceded it in real time (here an
+attachment that is not adjacent to the boundary), never the boundary's own
+uuid, and the boundary sits on a disconnected `parentUuid: null` root of its
+own, off the summary's selected path. A real `compute_stack` session hit
+exactly this shape and was refused outright ("compact_boundary must have
+exactly one isCompactSummary child, found 0"). The relaxed validator now
+accepts it: the summary's own text becomes the compaction entry (nothing
+about the resumable content is lost), and — because the boundary is off the
+selected path, so `stepLine`'s `boundaryFromPath` fallback (which only scans
+`byUuid`, the selected path) cannot reach it — the boundary and the
+in-between record are preserved as archived raw records instead of being
+cross-linked into this entry's `tokensBefore`. That is an honest, lossless
+degradation, not silent data loss: round-tripping still carries the boundary's
+own `compactMetadata` verbatim, just unattached to this specific entry. -/
+private def claudeDecoupledCompactionFixture : String := String.intercalate "\n" [
+  (cUuidFixtureRecord (Json.mkObj [
+    ("type", Json.str "system"), ("subtype", Json.str "compact_boundary"),
+    ("uuid", Json.str "decoupled-boundary"), ("parentUuid", Json.null),
+    ("logicalParentUuid", Json.str "decoupled-tail"),
+    ("sessionId", Json.str "carrier-test"), ("cwd", Json.str "/tmp"),
+    ("timestamp", Json.str (cClaudeFixtureTimestamp "T0")),
+    ("content", Json.str "Conversation compacted"),
+    ("compactMetadata", Json.mkObj [
+      ("trigger", Json.str "auto"),
+      ("preTokens", Json.num (Lean.JsonNumber.fromNat 19))])])).compress,
+  (cUuidFixtureRecord (Json.mkObj [
+    ("type", Json.str "attachment"), ("uuid", Json.str "decoupled-between"),
+    ("parentUuid", Json.null),
+    ("attachment", Json.mkObj [("type", Json.str "date"), ("date", Json.str "2026-09-16")]),
+    ("sessionId", Json.str "carrier-test"), ("cwd", Json.str "/tmp"),
+    ("timestamp", Json.str (cClaudeFixtureTimestamp "T1"))])).compress,
+  (cUuidFixtureRecord (Json.mkObj [
+    ("type", Json.str "user"), ("uuid", Json.str "decoupled-summary"),
+    ("parentUuid", Json.str "decoupled-between"),
+    ("sessionId", Json.str "carrier-test"), ("cwd", Json.str "/tmp"),
+    ("timestamp", Json.str (cClaudeFixtureTimestamp "T2")),
+    ("isCompactSummary", Json.bool true),
+    ("message", Json.mkObj [
+      ("role", Json.str "user"), ("content", Json.str "decoupled summary text")])])).compress,
+  (cLastPromptRecord "decoupled-summary").compress]
+
+def claudeDecoupledCompactionAccepted : Bool :=
+  match importClaudeCode claudeDecoupledCompactionFixture with
+  | .error _ => false
+  | .ok imported =>
+      imported.entries.size == 1 &&
+      (match imported.entries[0]? with
+       | some entry =>
+           (match entry.payload with
+            | .compaction "decoupled summary text" .unknownPrefix none => true
+            | _ => false)
+       | none => false) &&
+      (cArchivedRaws imported).any (fun raw =>
+        cstr raw "subtype" == some "compact_boundary" &&
+        cstr raw "uuid" == some (cClaudeFixtureUuid "decoupled-boundary") &&
+        (cobj raw "compactMetadata" >>= fun m =>
+          (m.getObjVal? "preTokens" >>= Json.getNat?).toOption) == some 19)
+
+example : claudeDecoupledCompactionAccepted = true := by native_decide
 
 private def claudeInertPayloadFixture : Transcript :=
   let origin (id : String) : Origin := {
