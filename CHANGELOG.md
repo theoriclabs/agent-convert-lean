@@ -5,6 +5,11 @@ lands; move them into a dated version section when publishing a release.
 
 ## [Unreleased]
 
+### Added
+
+- Add a repository `SKILL.md` for session conversion and handoff, simplify the
+  README quick start, and point the existing agent runbook to the skill.
+
 ### Fixed
 
 - Accept Claude Code 2.1.274's decoupled compaction shape: `isCompactSummary`'s
