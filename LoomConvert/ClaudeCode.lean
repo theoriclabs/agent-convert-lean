@@ -1820,6 +1820,31 @@ private def cStampNewProtoProvenance
           timeOverride := timeOverride.orElse (fun _ => proto.timeOverride) })
     { acc with protos := protos.toArray }
 
+/-- A peer message: Claude Code 2.1 relays another agent's message (a subagent's hand-back, a
+teammate's note) as a `user` line with `promptSource: "system"`, `turnOrigin: "peer"` and an
+`origin` object naming the sender and carrying the exact body. The text block repeats that body
+inside an `<agent-message>` envelope followed by harness notes; the metadata is authoritative. -/
+private structure ClaudePeerMessage where
+  sender   : String
+  name     : Option String
+  body     : String
+  handback : Bool
+
+private def cPeerMessage? (j : Json) : Option ClaudePeerMessage := do
+  guard (cstr j "promptSource" == some "system" && cstr j "turnOrigin" == some "peer")
+  let origin ← cobj j "origin"
+  guard (cstr origin "kind" == some "peer")
+  let sender ← cstr origin "from"
+  let body ← cstr origin "body"
+  pure { sender, name := cstr origin "name", body, handback := cbool origin "handback" }
+
+/-- The peer message as conversation: who sent it, then its body verbatim. -/
+private def cPeerMessageText (peer : ClaudePeerMessage) : String :=
+  let who := match peer.name with
+    | some name => s!"{name} {peer.sender}"
+    | none => peer.sender
+  s!"Peer {if peer.handback then "final report" else "message"} from {who}:\n{peer.body}"
+
 /-- Process one `user`/`assistant` line into zero or more protos. Tool-result
 `CallRef`s resolve against `tmap`, which is populated by the assistant lines
 that precede them (a well-formed source calls before it results). -/
@@ -1882,6 +1907,11 @@ private def stepLine (byUuid : List (String × Json)) (acc : Acc) (j : Json) : A
         tmap := acc.tmap ++ additions,
         omap := acc.omap ++ occurrenceAdditions }
   | none, none, some "user" =>
+      if let some peer := cPeerMessage? j then
+        { acc with protos := acc.protos.push (mkProto uuid parentUuid ts
+            (Payload.otherMsg "peer" [UserBlock.text (cPeerMessageText peer)])
+            (rawEnvelope := some raw)) }
+      else
       if cbool j "isCompactSummary" then
         let summary := (cstr mj "content").getD ""
         let boundaryFromParent := parentUuid.bind (fun parent =>
@@ -2987,6 +3017,10 @@ def importClaudeCode (text : String) : Except String Transcript := do
           [({ kind := AssumptionKind.roleCoerced, loc := p.uuid,
               detail := "tool_result serialized inside a user-role line; \
                          authorship re-attributed to environment" } : ImportNote)]
+      | Payload.otherMsg "peer" _ =>
+          [({ kind := AssumptionKind.roleCoerced, loc := p.uuid,
+              detail := "another agent's message relayed by the harness as a user-role line; \
+                         authorship re-attributed to peer" } : ImportNote)]
       | _ => [])
     let carrierNotes : List ImportNote := protos.filterMap (fun p =>
       if p.unverifiedCarrier || !p.carrierBlocks.isEmpty then some ({
@@ -3440,6 +3474,49 @@ private def cControlFixtureUserLine
     ("isMeta", Json.bool isMeta),
     ("message", Json.mkObj [("role", Json.str "user"), ("content", content)])
   ]).compress
+
+/-- A Claude 2.1 peer line: a subagent's hand-back relayed as a `user` row with system origin
+and the sender in `origin`. The text block is the envelope the model saw. -/
+def claudePeerHandbackLine : String :=
+  (Json.mkObj [
+    ("type", Json.str "user"), ("uuid", Json.str (cClaudeFixtureUuid "pe2")),
+    ("parentUuid", Json.str (cClaudeFixtureUuid "pe1")),
+    ("sessionId", Json.str (cClaudeFixtureUuid "CE0")), ("cwd", Json.str "/w"),
+    ("timestamp", Json.str (cClaudeFixtureTimestamp "T2")),
+    ("isSidechain", Json.bool false), ("isMeta", Json.bool true),
+    ("userType", Json.str "external"), ("promptSource", Json.str "system"),
+    ("turnOrigin", Json.str "peer"),
+    ("origin", Json.mkObj [("kind", Json.str "peer"), ("from", Json.str "a0618"),
+      ("senderTaskId", Json.str "a0618"), ("name", Json.str "general-purpose"),
+      ("body", Json.str "[Subagent hand-back] Report follows:\n  ## Done"),
+      ("handback", Json.bool true)]),
+    ("message", Json.mkObj [("role", Json.str "user"), ("content", Json.arr #[Json.mkObj [
+      ("type", Json.str "text"),
+      ("text", Json.str ("Another Claude session sent a message:\n<agent-message from=\"a0618\">\n" ++
+        "[Subagent hand-back] Report follows:\n  ## Done\n</agent-message>\n\n" ++
+        "That \"other Claude session\" is an agent working inside this same session."))]])])
+  ]).compress
+
+def claudePeerImportFixture : String := String.intercalate "\n" [
+  cControlFixtureUserLine "pe1" none "T1" (Json.str "Build the viewer."),
+  claudePeerHandbackLine
+]
+
+/-- A peer line is conversation authored by another agent, not by the person: it imports as a
+`peer` message carrying the exact body from the record's `origin`, with a role-coercion note,
+and the person's own line before it stays a user message. -/
+example : (match importClaudeCode claudePeerImportFixture with
+    | .ok t =>
+        (match t.entries[0]?.map (·.payload), t.entries[1]?.map (·.payload) with
+          | some (Payload.userMsg [UserBlock.text opening]),
+            some (Payload.otherMsg "peer" [UserBlock.text text]) =>
+              opening == "Build the viewer." &&
+              text == "Peer final report from general-purpose a0618:\n[Subagent hand-back] Report follows:\n  ## Done"
+          | _, _ => false) &&
+        t.importNotes.any (fun note =>
+          (match note.kind with | .roleCoerced => true | _ => false) &&
+          note.loc == some (cClaudeFixtureUuid "pe2"))
+    | .error _ => false) = true := by native_decide
 
 def claudeControlImportFixture : String := String.intercalate "\n" [
   cControlFixtureUserLine "ce1" none "T1" (Json.str claudeControlOrdinaryString),

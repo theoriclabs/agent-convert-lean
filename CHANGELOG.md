@@ -12,6 +12,11 @@ lands; move them into a dated version section when publishing a release.
 
 ### Fixed
 
+- Import Claude Code peer lines (a subagent's hand-back or a teammate's message,
+  relayed by the harness as a `user` row with `turnOrigin: "peer"`) as `peer`
+  messages carrying the body from the record's `origin`, with a role-coercion
+  note, instead of showing another agent's report as the person's words.
+
 - Accept Claude Code 2.1.274's decoupled compaction shape: `isCompactSummary`'s
   `parentUuid` now names the ordinary record that preceded it in real time,
   not the `compact_boundary` itself, and a session's sole boundary can sit off

@@ -55,6 +55,7 @@ loom text <session-id-or-file>   # JSON rows for indexing
 ```
 
 For agent tool access, see the [MCP server](./mcp/README.md).
+To browse every local session as a chat thread, run the [viewer](./viewer/README.md).
 For changes and design goals, see the [changelog](./CHANGELOG.md) and
 [product intent](./INTENT.md).
 
