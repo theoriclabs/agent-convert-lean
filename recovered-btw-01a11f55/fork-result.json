@@ -1,0 +1,71 @@
+{
+  "thread": {
+    "id": "01a11f6b-74ea-7c13-9eed-cf7dfa46eaf2",
+    "environments": [
+      {
+        "environmentId": "local",
+        "cwd": "/Users/harshwork/code/derive_the_runtime",
+        "runtimeWorkspaceRoots": [
+          "/Users/harshwork/code/derive_the_runtime"
+        ]
+      }
+    ],
+    "extra": null,
+    "sessionId": "01a11f6b-74ea-7c13-9eed-cf7dfa46eaf2",
+    "forkedFromId": "01a11f55-cc97-7d12-bf77-26a8b784ae3b",
+    "parentThreadId": null,
+    "preview": "",
+    "ephemeral": false,
+    "section": null,
+    "sectionEnteredAt": null,
+    "projectId": null,
+    "historyMode": "legacy",
+    "modelProvider": "openai",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh",
+    "createdAt": 1791528498,
+    "updatedAt": 1791528498,
+    "recencyAt": 1791528498,
+    "status": {
+      "type": "idle"
+    },
+    "path": "/Users/harshwork/.codex/sessions/2026/10/08/rollout-2026-10-08T23-48-18-01a11f6b-74ea-7c13-9eed-cf7dfa46eaf2.jsonl",
+    "cwd": "/Users/harshwork/code/derive_the_runtime",
+    "cliVersion": "0.162.0",
+    "originator": "codex-tui",
+    "source": "vscode",
+    "canAcceptDirectInput": true,
+    "threadSource": null,
+    "agentNickname": null,
+    "agentRole": null,
+    "gitInfo": {
+      "sha": "726ed0ee3189707fefaccf58a189d7cd75ee5afb",
+      "branch": "main",
+      "originUrl": "git@github.com:hargup/derive_the_runtime.git"
+    },
+    "name": null,
+    "daybreakEnabled": null,
+    "turns": []
+  },
+  "model": "gpt-6-astra",
+  "modelProvider": "openai",
+  "serviceTier": "priority",
+  "disabledPluginIds": [],
+  "cwd": "/Users/harshwork/code/derive_the_runtime",
+  "runtimeWorkspaceRoots": [
+    "/Users/harshwork/code/derive_the_runtime"
+  ],
+  "instructionSources": [],
+  "approvalPolicy": "on-request",
+  "approvalsReviewer": "auto_review",
+  "sandbox": {
+    "type": "workspaceWrite",
+    "writableRoots": [],
+    "networkAccess": false,
+    "excludeTmpdirEnvVar": false,
+    "excludeSlashTmp": false
+  },
+  "activePermissionProfile": null,
+  "reasoningEffort": "xhigh",
+  "multiAgentMode": "explicitRequestOnly"
+}

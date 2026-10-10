@@ -1,0 +1,61 @@
+{
+  "source": "/Users/harshwork/.claude/projects/-Users-harshwork-code-sglang/758163dd-af83-4d41-8776-fbfaefe599fd.jsonl",
+  "sourceCutoffLine": 4927,
+  "sourceCutoffTimestamp": "2026-09-28T05:54:14.165Z",
+  "sourceSha256": "3c4db2004a3421adb934c60f20122dd635fedf6cff0e2af9f5cac2bbb9d1bf9f",
+  "convertedInput": "/Users/harshwork/code/agent-convert-lean/line-count-758163dd-after-maps.codex.jsonl",
+  "output": "/Users/harshwork/code/agent-convert-lean/line-count-758163dd-after-maps.clean.codex.jsonl",
+  "sessionId": "c04c8a9a-ce13-4346-a148-e07d70e1cb7d",
+  "timestamp": "2026-10-04T05:22:19.070Z",
+  "recoveredResults": [
+    {
+      "callId": "toolu_0184Lpxsq6aFAeEvrW2eDrbb",
+      "sourceLine": 4607,
+      "mediaPreviewInSourceOnly": false
+    },
+    {
+      "callId": "toolu_01RVufD5r2sG8tnzBA1vi47J",
+      "sourceLine": 4634,
+      "mediaPreviewInSourceOnly": false
+    },
+    {
+      "callId": "toolu_01JpitToaDgxguQRyqpYUL1P",
+      "sourceLine": 4706,
+      "mediaPreviewInSourceOnly": false
+    },
+    {
+      "callId": "toolu_01XKsARTreyd3zajA9DuahLo",
+      "sourceLine": 4821,
+      "mediaPreviewInSourceOnly": true
+    },
+    {
+      "callId": "toolu_01PgECyWmVH978n6sXxzysFt",
+      "sourceLine": 4904,
+      "mediaPreviewInSourceOnly": false
+    }
+  ],
+  "mediaPreviewLimitations": [
+    {
+      "callId": "toolu_01XKsARTreyd3zajA9DuahLo",
+      "sourceLine": 4821
+    }
+  ],
+  "rows": 79,
+  "outputSha256": "d6a7de88b2e45bacae1bd8f72bc5d27be2fecf8baf1229d80ac54cfa42293752",
+  "carrierMetadataRemovedFromRollout": {
+    "_agent_convert": 35,
+    "_agent_convert_handoff": 1,
+    "_agent_convert_source_archive": 1
+  },
+  "installed": "/Users/harshwork/.codex/sessions/2026/10/04/rollout-2026-10-04T05-22-19-c04c8a9a-ce13-4346-a148-e07d70e1cb7d.jsonl",
+  "installedSha256": "d6a7de88b2e45bacae1bd8f72bc5d27be2fecf8baf1229d80ac54cfa42293752",
+  "resumeCommand": "codex -C /Users/harshwork/code/sglang resume c04c8a9a-ce13-4346-a148-e07d70e1cb7d",
+  "checks": {
+    "loomCodexImport": true,
+    "nativeToolCalls": 33,
+    "nativeToolResults": 33,
+    "historicalToolWrappersInDialogue": 0,
+    "finalMapCompletionPresent": true,
+    "testedCodexResume": false
+  }
+}

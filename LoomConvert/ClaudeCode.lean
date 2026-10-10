@@ -1820,6 +1820,16 @@ private def cStampNewProtoProvenance
           timeOverride := timeOverride.orElse (fun _ => proto.timeOverride) })
     { acc with protos := protos.toArray }
 
+/-- Recent Claude background-task notifications no longer set `isMeta`.
+Their system-origin metadata, rather than XML-looking text alone, identifies
+them as generated controls. Keep literal user examples in the conversation. -/
+private def cSyntheticControlRecord (j : Json) : Bool :=
+  cbool j "isMeta" ||
+    ((cobj j "origin" >>= fun origin => cstr origin "kind") ==
+        some "task-notification" &&
+      cstr j "promptSource" == some "system" &&
+      cstr j "turnOrigin" == some "task_notification")
+
 /-- A peer message: Claude Code 2.1 relays another agent's message (a subagent's hand-back, a
 teammate's note) as a `user` line with `promptSource: "system"`, `turnOrigin: "peer"` and an
 `origin` object naming the sender and carrying the exact body. The text block repeats that body
@@ -1856,7 +1866,7 @@ private def stepLine (byUuid : List (String × Json)) (acc : Acc) (j : Json) : A
   let ts := cstr j "timestamp"
   let carrierIndices := cCarrierBlockIndices j
   let toolCanonical := cCarrierToolCanonical j
-  let syntheticControl := cbool j "isMeta"
+  let syntheticControl := cSyntheticControlRecord j
   let identity := cCarrierIdentityProvenance? j
   let timeOverride := cCarrierTimeProvenance? j
   let unverified := (cParseInertPayloadCarrier? j).isSome ||
@@ -3607,6 +3617,39 @@ def claudeControlLiteralCollisionPreserved : Bool :=
       cArchivedControlValue? transcript 0 "raw" == some claudeControlLiteralCollisionText
 
 example : claudeControlLiteralCollisionPreserved = true := by native_decide
+
+/-- Claude 2.1.283/284 emits system-origin task notifications without `isMeta`.
+Archive the exact generated record while preserving byte-identical user text
+and ordinary messages that follow the notification in the ancestry graph. -/
+def claudeTaskOriginControlsArchived : Bool :=
+  let literal := cControlFixtureUserLine "task-literal" none "T1"
+    (Json.str claudeControlTaskCompactRaw)
+  let generated := match Json.parse (cControlFixtureUserLine "task-generated"
+      (some "task-literal") "T2" (Json.str claudeControlTaskCompactRaw)) with
+    | .ok record =>
+        cReplaceJsonField
+          (cReplaceJsonField
+            (cReplaceJsonField record "origin"
+              (Json.mkObj [("kind", Json.str "task-notification")]))
+            "promptSource" (Json.str "system"))
+          "turnOrigin" (Json.str "task_notification")
+    | .error _ => Json.null
+  let after := cControlFixtureUserLine "task-after" (some "task-generated") "T3"
+    (Json.str "Continue from the actual conversation.")
+  let source := String.intercalate "\n" [literal, generated.compress, after]
+  match importClaudeCode source with
+  | .error _ => false
+  | .ok transcript =>
+      transcript.entries.size == 2 &&
+      cEntryUserText? transcript 0 == some claudeControlTaskCompactRaw &&
+      cEntryUserText? transcript 1 == some "Continue from the actual conversation." &&
+      (cArchivedControls? transcript).map Array.size == some 1 &&
+      cArchivedControlValue? transcript 0 "raw" == some claudeControlTaskCompactRaw &&
+      ((cArchivedControls? transcript >>= fun controls => controls[0]? >>= fun control =>
+        cobj control "record") == some generated) &&
+      (Loom.violations transcript).isEmpty
+
+example : claudeTaskOriginControlsArchived = true := by native_decide
 
 def claudeMalformedJsonLineFixture : String := String.intercalate "\n" [
   cControlFixtureUserLine "jm1" none "T1" (Json.str "before"),

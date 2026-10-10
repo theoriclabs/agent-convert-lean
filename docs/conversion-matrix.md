@@ -34,7 +34,7 @@ subject to validation and is not necessarily a byte-for-byte file copy.
 
 | Source | Input | Source-specific limit |
 | --- | --- | --- |
-| Claude Code | Session JSONL or resolvable session ID | Supported subagent sidecars are separate files. |
+| Claude Code | Session JSONL or resolvable session ID | Supported subagent sidecars are separate files. Generated task notifications are archived using `isMeta` or explicit system-origin metadata, including recent records without `isMeta`; literal user XML stays in conversation. |
 | Codex CLI | Rollout JSONL or resolvable session ID | Harness targets receive the latest active compaction context plus subsequent history; `loom` archives the full stream. |
 | Pi | Session JSONL or resolvable session ID | Branches must be selected or preserved in an appropriate output. |
 | Cursor Agent | Agent transcript JSONL | Observed source format has tool calls but no tool-result records; conversion cannot recover results from this file alone. |

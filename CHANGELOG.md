@@ -17,6 +17,11 @@ lands; move them into a dated version section when publishing a release.
   messages carrying the body from the record's `origin`, with a role-coercion
   note, instead of showing another agent's report as the person's words.
 
+- Archive Claude background-task notifications with system-origin metadata
+  even when recent Claude versions omit `isMeta`. Their completion details stay
+  in provenance instead of appearing as user prompts in a converted session;
+  literal user examples of the same XML remain ordinary conversation.
+
 - Accept Claude Code 2.1.274's decoupled compaction shape: `isCompactSummary`'s
   `parentUuid` now names the ordinary record that preceded it in real time,
   not the `compact_boundary` itself, and a session's sole boundary can sit off

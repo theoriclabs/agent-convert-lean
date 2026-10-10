@@ -1,0 +1,10 @@
+{
+  "installedPath": "/Users/harshwork/.codex/sessions/2026/10/08/rollout-2026-10-08T23-48-18-01a11f6b-74ea-7c13-9eed-cf7dfa46eaf2.jsonl",
+  "beforeSha256": "05cc05eb81e443ddf575d86be32ee14cd8a405927b72e4aeb208d810af2c4a3e",
+  "stagedPath": "/Users/harshwork/code/agent-convert-lean/recovered-btw-01a11f55/verified-fork.jsonl",
+  "displayTwinsAdded": 4,
+  "nativeResponseItemsPreserved": 61,
+  "nativeToolCalls": 18,
+  "newToolsExecuted": 0,
+  "parserNormalization": "Missing optional reasoning content is serialized as null; every populated field retained exactly."
+}
