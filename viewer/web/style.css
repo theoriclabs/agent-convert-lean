@@ -1,0 +1,71 @@
+/* Loom viewer: the catalog on the left, the thread on the right. Tokens follow LeanReact's site. */
+:root {
+  --ink: #25332b;
+  --muted: #70776e;
+  --line: #dce1d4;
+  --green: #24583e;
+  --paper: #fffef9;
+  --field: #f7f8f2;
+  --alert: #8a2f2f;
+  --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  color: var(--ink);
+  background: var(--paper);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  line-height: 1.45;
+}
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body { margin: 0; }
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: default; opacity: .55; }
+button:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px solid #709667; outline-offset: 2px; }
+
+/* Two columns, each scrolling on its own. */
+.viewer { display: grid; grid-template-columns: 360px minmax(0, 1fr); height: 100%; }
+.catalog {
+  display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto;
+  padding: 16px; border-right: 1px solid var(--line); background: var(--field);
+}
+.catalog h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -.3px; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  padding: 3px 10px; font-size: 12px; font-weight: 500;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--paper);
+}
+.chip:hover { border-color: var(--green); }
+.chip.chosen { color: #f6f8ef; background: var(--green); border-color: var(--green); }
+
+.search {
+  width: 100%; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--paper);
+}
+
+.sessions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.session {
+  display: flex; flex-direction: column; width: 100%; min-width: 0; padding: 7px 10px;
+  text-align: left; border: 1px solid transparent; border-radius: 8px; background: transparent;
+}
+.session:hover { background: var(--paper); border-color: var(--line); }
+.session.chosen { background: var(--paper); border-color: var(--green); }
+.session-title, .session-meta { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.session-title { font-weight: 550; }
+.session-meta { font-size: 12px; color: var(--muted); }
+
+.pager { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 4px; }
+.pager button { padding: 4px 12px; font-size: 13px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); }
+
+/* The pane: a header, then the thread filling what is left; the thread viewport scrolls. */
+.pane { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; padding: 16px 24px; }
+.conversation { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.conversation > .thread-area { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.conversation-header { padding-bottom: 12px; }
+.conversation-header h2 { margin: 0 0 4px; font-size: 20px; font-weight: 600; letter-spacing: -.3px; overflow-wrap: anywhere; }
+.meta { margin: 0; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.mono { font-family: var(--mono); font-size: 12px; }
+.note { margin: 0; font-size: 13px; color: var(--muted); }
+.placeholder { margin: auto; font-size: 15px; }
+[role="alert"] { margin: 0; color: var(--alert); }
+.aui-thread { flex: 1 1 auto; min-height: 0; }

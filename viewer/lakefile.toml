@@ -1,0 +1,34 @@
+# The Loom viewer: every local coding-agent conversation, in one chat UI.
+#
+# A sub-package so the Loom core stays dependency-free. It requires Loom (the importers and the
+# IR) from the parent checkout and LeanReact (which brings LeanAPI, LeanDB, leanontology and
+# their native pieces) from the sibling checkout. `lake build` here builds the server; the
+# browser bundle is `node scripts/build.mjs` (see README.md).
+name = "loom_viewer"
+version = "0.1.0"
+defaultTargets = ["Viewer", "loom_viewer"]
+# Share LeanReact's dependency checkouts: one clone per pinned revision, already built there.
+packagesDir = "../../leanreact/.lake/packages"
+
+[[require]]
+name = "loom"
+path = ".."
+
+[[require]]
+name = "leanreact"
+path = "../../leanreact"
+
+# The domain (harnesses and their stores, sessions, the projection to a thread) and the
+# server. `Viewer.UI` is portable and is compiled by LeanJS for the browser (Generate.lean).
+[[lean_lib]]
+name = "Viewer"
+
+[[lean_exe]]
+name = "loom_viewer"
+root = "Main"
+
+# In-process checks of the catalog and the HTTP layer over fixture stores copied under
+# `.lake/checks-home` (one lifecycle fixture per harness). Run from this directory.
+[[lean_exe]]
+name = "loom_viewer_checks"
+root = "Checks"
