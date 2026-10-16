@@ -1089,6 +1089,9 @@ def runConvert (fromFmt toFmt inp : String) (outp : Option String)
     if let some blocker := contradictoryErrorBlocker? toFmt source then
       IO.eprintln s!"export error: {blocker}"
       return 3
+    if let some blocker := avoidableNativeHistoryBlocker? toFmt source then
+      IO.eprintln s!"export error: {blocker}"
+      return 3
     let sourceVs := violations source
     if sourceVs.length > 0 then
       IO.eprintln s!"export error: source imported to a malformed IR ({sourceVs.length} violations) — refusing to export"

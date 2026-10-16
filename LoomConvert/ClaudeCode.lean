@@ -4412,6 +4412,29 @@ private def cClaudeNativeEntryProvenance (t : Transcript) (entryIdx : Nat) : Boo
   | some entry => entry.disposition == EntryDisposition.native
   | none => false
 
+/-- Independent shape test for the publication guard. It deliberately does not
+consult the translation table or result-content renderer: either can regress
+without making a completed, representable source pair ineligible. -/
+def rawNativeToolPairEligibleAt (t : Transcript) (entryIdx blockIdx : Nat)
+    (idValid nameValid : String → Bool) : Bool :=
+  match t.entries[entryIdx]? with
+  | some { payload := .assistantMsg blocks, .. } =>
+    match blocks[blockIdx]? with
+    | some (.toolCall name args (some id)) =>
+      cClaudeNativeEntryProvenance t entryIdx &&
+      !(cEntryCarrierForced t entryIdx blockIdx) && cJsonIsObject args &&
+      idValid id && nameValid name.raw && cCallIdCount t id == 1 &&
+      match cResultSitesForCall t entryIdx blockIdx with
+      | [site] => decide (entryIdx < site.entry) &&
+          cClaudeNativeEntryProvenance t site.entry &&
+          !(cEntryCarrierForced t site.entry site.block)
+      | _ => false
+    | _ => false
+  | _ => false
+
+def claudeRawNativeToolPairEligibleAt (t : Transcript) (entry block : Nat) : Bool :=
+  rawNativeToolPairEligibleAt t entry block claudeNativeToolIdValid cClaudeToolNameValid
+
 private def cNativeClaudeCallAt
     (t : Transcript) (entryIdx blockIdx : Nat)
     (name : ToolName) (args : Json) (rawId : Option String) : Bool :=

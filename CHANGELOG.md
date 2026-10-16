@@ -7,6 +7,11 @@ lands; move them into a dated version section when publishing a release.
 
 ### Fixed
 
+- Block avoidable tool-history prose before continuation publication. Independent
+  native-shape checks cover Claude and sidecars; serialized-output checks cover
+  continuation targets while preserving literal source quotes, duplicate-id
+  exceptions, and explicitly inert history
+  ([#18](https://github.com/theoriclabs/agent-convert-lean/issues/18)).
 - Preserve native Claude call/result history for encrypted and unsupported
   result content. Emit a labeled unavailable-output block, retain the complete
   original content in validated metadata, and restore it on re-import

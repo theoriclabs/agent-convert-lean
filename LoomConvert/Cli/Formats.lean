@@ -12,6 +12,12 @@ not decide which Codex context a continuation should import.
 
 open Loom LoomConvert
 
+private def jsonString? (json : Lean.Json) (key : String) : Option String :=
+  (json.getObjVal? key >>= Lean.Json.getStr?).toOption
+
+private def jsonValue? (json : Lean.Json) (key : String) : Option Lean.Json :=
+  (json.getObjVal? key).toOption
+
 /-- CLI source/target string → format row, for export-readiness checks. -/
 def formatByCliName? (fmt : String) : Option Format :=
   match fmt with
@@ -74,8 +80,90 @@ example : contradictoryErrorFlag true [.text "printed timeout"]
 example : contradictoryErrorFlag false [.text "printed timeout"]
     (.heuristic true "guess") = false := by native_decide
 
+private def rawNativeHistoryEligibleAt (target : String) (t : Transcript)
+    (entry block : Nat) : Bool :=
+  match target with
+  | "loom" | "cursor-agent" => false -- Cursor has no native result channel.
+  | "claude" => claudeRawNativeToolPairEligibleAt t entry block
+  | "codex" => rawNativeToolPairEligibleAt t entry block codexWireCallIdValid (fun s => !s.isEmpty)
+  | "pi" | "opencode" => rawNativeToolPairEligibleAt t entry block (fun s => !s.isEmpty) (fun s => !s.isEmpty)
+  | _ => false
+
+/-- Shape eligibility is independent of the renderer's current decision. This
+also covers sidecar publication, which bypasses flat export dispatch. -/
+def avoidableNativeHistoryBlocker? (target : String) (t : Transcript) : Option String :=
+  if target != "claude" then none else Id.run do
+    for (entry, index) in t.entries.toList.zipIdx do
+      if let .assistantMsg blocks := entry.payload then
+        for (block, blockIndex) in blocks.zipIdx do
+          if let .toolCall name _ _ := block then
+            if rawNativeHistoryEligibleAt target t index blockIndex &&
+                !claudeToolCallEmitsNativeAt t index blockIndex then
+              return some s!"avoidable tool-history fallback at entry {index}, tool '{name.raw}': valid native id, object arguments, and one recorded result"
+    return none
+
+private def conversationContentTexts : Lean.Json → List String
+  | .str value => [value]
+  | .arr blocks => blocks.toList.filterMap (fun block => do
+      let kind ← jsonString? block "type"
+      guard (["text", "input_text", "output_text"].contains kind)
+      jsonString? block "text")
+  | _ => []
+
+/-- Read only conversation text; metadata and native result bodies are data and
+must never be mistaken for newly generated assistant/user carrier prose. -/
+private def exportedConversationTexts (output : String) : List String :=
+  let rows := match Lean.Json.parse output with
+    | .ok document => [document]
+    | .error _ => (output.splitOn "\n").filterMap (fun line => (Lean.Json.parse line).toOption)
+  rows.flatMap (fun row =>
+    let message := (jsonValue? row "message").getD row
+    let role := (jsonString? message "role").orElse (fun _ => jsonString? row "type")
+    let ordinary := if role == some "user" || role == some "assistant" then
+        conversationContentTexts ((jsonValue? message "content").getD .null) else []
+    let payload := (jsonValue? row "payload").getD .null
+    let codex := if jsonString? row "type" == some "response_item" &&
+        jsonString? payload "type" == some "message" then
+        conversationContentTexts ((jsonValue? payload "content").getD .null) else []
+    let openCode := ((row.getObjVal? "messages" >>= Lean.Json.getArr?).toOption).getD #[]
+      |>.toList.flatMap (fun message =>
+        conversationContentTexts ((jsonValue? message "parts").getD .null))
+    ordinary ++ codex ++ openCode)
+
+private def historicalProseCallId? (text : String) : Option String := do
+  guard (text.startsWith "[Historical tool call" || text.startsWith "[Historical tool result")
+  let raw ← (Lean.Json.parse (String.intercalate "\n" ((text.splitOn "\n").drop 1))).toOption
+  let carrier ← jsonString? raw "carrier"
+  guard (["agent-convert.claude-tool-call.v1", "agent-convert.claude-tool-result.v1",
+    "agent-convert.codex-tool-call.v1", "agent-convert.codex-tool-result.v1",
+    "agent-convert.cursor-tool-call.v1", "agent-convert.cursor-tool-result.v1"].contains carrier)
+  jsonString? raw "id"
+
+private def sourceHasLiteralText (t : Transcript) (text : String) : Bool :=
+  t.entries.any (fun entry => match entry.payload with
+    | .userMsg blocks => blocks.any (fun block => match block with | .text value => value == text | _ => false)
+    | .assistantMsg blocks => blocks.any (fun block => match block with | .text value => value == text | _ => false)
+    | _ => false)
+
+/-- Last-line check on the actual serialized conversation. Literal source text,
+duplicate identities, open calls, and inert historical records are exempt. -/
+def avoidableProseCarrierBlocker? (target : String) (t : Transcript)
+    (output : String) : Option String :=
+  if target == "loom" then none else Id.run do
+    for text in exportedConversationTexts output do
+      if let some id := historicalProseCallId? text then
+        if !sourceHasLiteralText t text then
+          for (entry, index) in t.entries.toList.zipIdx do
+            if let .assistantMsg blocks := entry.payload then
+              for (block, blockIndex) in blocks.zipIdx do
+                if let .toolCall name _ (some rawId) := block then
+                  if id == rawId && rawNativeHistoryEligibleAt target t index blockIndex then
+                    return some s!"avoidable prose carrier at entry {index}, tool '{name.raw}': valid native id '{id}', object arguments, and one recorded result"
+    return none
+
 def targetValidityBlocker? (toFmt : String) (t : Transcript) : Option String :=
-  (contradictoryErrorBlocker? toFmt t).orElse (fun _ =>
+  ((contradictoryErrorBlocker? toFmt t).orElse (fun _ =>
+    avoidableNativeHistoryBlocker? toFmt t)).orElse (fun _ =>
   let failure? := match toFmt with
     | "pi" => match piExportPreflight t with
       | .ok _ => none
@@ -126,15 +214,19 @@ def importByFormat (fmt text : String) : Except String Transcript :=
 
 /-- Loom IR → target format text. `loom` is the versioned, thread-preserving
 wire form; the others are flat harness targets. -/
-def exportByFormat (fmt : String) (t : Transcript) : Except String String :=
-  match fmt with
-  | "pi"           => exportPiChecked t
-  | "loom"         => .ok (exportLoomWire t)
-  | "claude"       => exportClaudeCodeChecked t
-  | "codex"        => exportCodexCliChecked t
-  | "cursor-agent" => LoomConvert.exportCursorAgentTargetChecked t
-  | "opencode"     => exportOpenCodeChecked t
-  | _ => .error s!"no exporter for target '{fmt}' (exporters: loom, pi, claude, codex, cursor-agent, opencode)"
+def exportByFormat (fmt : String) (t : Transcript) : Except String String := do
+  let output ← match fmt with
+    | "pi"           => exportPiChecked t
+    | "loom"         => .ok (exportLoomWire t)
+    | "claude"       => exportClaudeCodeChecked t
+    | "codex"        => exportCodexCliChecked t
+    | "cursor-agent" => LoomConvert.exportCursorAgentTargetChecked t
+    | "opencode"     => exportOpenCodeChecked t
+    | _ => .error s!"no exporter for target '{fmt}' (exporters: loom, pi, claude, codex, cursor-agent, opencode)"
+
+  if let some blocker := avoidableProseCarrierBlocker? fmt t output then
+    .error blocker
+  else pure output
 
 /-- Import → (well-formedness + hard export-obligation checks) → export. Refuses
 to emit a structurally invalid IR, or a stitched sidechain transcript through a
@@ -147,13 +239,6 @@ def runPipeline (_fromFmt toFmt : String) (t : Transcript) : Except String Strin
     .error blocker
   else
     exportByFormat toFmt t
-
-private def jsonString? (json : Lean.Json) (key : String) : Option String :=
-  (json.getObjVal? key >>= Lean.Json.getStr?).toOption
-
-private def jsonValue? (json : Lean.Json) (key : String) : Option Lean.Json :=
-  (json.getObjVal? key).toOption
-
 private def detectionRecords (text : String) : Except String (List Lean.Json) := do
   match Lean.Json.parse text with
   | .ok document => pure [document]
