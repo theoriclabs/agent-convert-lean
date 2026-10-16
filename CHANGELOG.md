@@ -7,6 +7,10 @@ lands; move them into a dated version section when publishing a release.
 
 ### Fixed
 
+- Read Codex runner status, whole-chunk exit codes, and unambiguously associated
+  command-completion events as structured error evidence. Preserve the deciding
+  source and raw command events; inner failures override outer-runner success
+  ([#12](https://github.com/theoriclabs/agent-convert-lean/issues/12)).
 - Split derived tool errors into `structured` source evidence and `heuristic`
   guesses. Preserve both through wire and historical-carrier codecs, and decode
   legacy `inferred` records as heuristic evidence

@@ -166,9 +166,21 @@ function sourceErrorSignal(blocks) {
       guessed = true;
     } else if (!/^(?:Script (?:completed|failed)$|Chunk ID: |Wall time[: ]|Original token count: |Process exited with code )/.test(line)) break;
   }
-  return codes.length
-    ? { kind: "structured", isError: codes.some(code => code !== 0), source: "codex.runner.process_exit_code" }
-    : { kind: "heuristic", isError: guessed, method: "codexOutputIndicatesError (codexAdapter.ts:75)" };
+  const evidence = blocks.flatMap(block => {
+    if (block.kind !== "text") return [];
+    try {
+      const chunk = JSON.parse(block.text);
+      return Number.isInteger(chunk?.exit_code)
+        ? [{ kind: "structured", isError: chunk.exit_code !== 0, source: "codex.runner.chunk.exit_code" }] : [];
+    } catch { return []; }
+  });
+  if (codes.length) evidence.push({ kind: "structured", isError: codes.some(code => code !== 0),
+    source: "codex.runner.process_exit_code" });
+  const status = text.split('\n')[0];
+  if (status === "Script completed" || status === "Script failed") evidence.push({
+    kind: "structured", isError: status === "Script failed", source: "codex.runner.status" });
+  return evidence.find(e => e.isError) || evidence[0] ||
+    { kind: "heuristic", isError: guessed, method: "codexOutputIndicatesError (codexAdapter.ts:75)" };
 }
 
 function sourceResult(payload) {

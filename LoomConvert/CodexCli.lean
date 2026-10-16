@@ -164,9 +164,15 @@ def codexOutputErrorSignal (out : String) : ErrorSignal :=
     if line.startsWith "Process exited with code " then
       (line.drop "Process exited with code ".length).toString.toInt?
     else none)
-  if codes.isEmpty then .heuristic (codexOutputIndicatesError out)
+  let status := match (out.splitOn "\n").head? with
+    | some "Script failed" => some true
+    | some "Script completed" => some false
+    | _ => none
+  if codes.any (· != 0) then .structured true "codex.runner.process_exit_code"
+  else if let some failed := status then .structured failed "codex.runner.status"
+  else if !codes.isEmpty then .structured false "codex.runner.process_exit_code"
+  else .heuristic (codexOutputIndicatesError out)
     "codexOutputIndicatesError (codexAdapter.ts:75)"
-  else .structured (codes.any (· != 0)) "codex.runner.process_exit_code"
 
 example : codexOutputErrorSignal "Process exited with code 1\nFinal output:\n" =
     .structured true "codex.runner.process_exit_code" := by native_decide
@@ -404,6 +410,69 @@ private def toolOutputText (content : List UserBlock) : String :=
   String.intercalate "" (content.filterMap (fun block => match block with
     | .text text => some text
     | _ => none))
+
+/-- Whole chunks are parsed as JSON; quoted JSON inside printed output is never
+status evidence. A failure at any recorded layer wins over outer-runner success. -/
+private def codexToolOutputErrorSignal (content : List UserBlock)
+    (commands : Array Json := #[]) : ErrorSignal := Id.run do
+  let mut signals : List (Bool × String) := []
+  for record in commands do
+    if let some item := oobj record "payload" >>= (fun p => oobj p "item") then
+      if let some code := (item.getObjVal? "exit_code" >>= Json.getInt?).toOption then
+        signals := signals ++ [(code != 0, "codex.item_completed.CommandExecution.exit_code")]
+      if let some status := ostr item "status" then
+        if status == "failed" || status == "completed" then
+          signals := signals ++ [(status == "failed", "codex.item_completed.CommandExecution.status")]
+  for block in content do
+    if let .text chunk := block then
+      if let .ok parsed := Json.parse chunk then
+        if let some code := (parsed.getObjVal? "exit_code" >>= Json.getInt?).toOption then
+          signals := signals ++ [(code != 0, "codex.runner.chunk.exit_code")]
+  let header := codexOutputErrorSignal (toolOutputText content)
+  if let .structured failed source := header then
+    signals := signals ++ [(failed, source)]
+  match signals.find? (·.1) |>.orElse (fun _ => signals.head?) with
+  | some (failed, source) => return .structured failed source
+  | none => return header
+
+/-- Positional association is valid only with one pending outer call and an
+established matching turn. Concurrent calls and cross-turn events remain raw. -/
+private def codexCommandCompletionIndex (records : List Json) : List (Nat × Array Json) := Id.run do
+  let mut turn : Option String := none
+  let mut pending : List (String × Option String × Array Json) := []
+  let mut results : List (Nat × Array Json) := []
+  for (record, index) in records.zipIdx do
+    let p := (oobj record "payload").getD Json.null
+    let kind := ostr p "type"
+    if ostr record "type" == some "session_meta" || ostr record "type" == some "compacted" then
+      pending := []; turn := none
+    if ostr record "type" == some "turn_context" || ostr record "type" == some "event_msg" then
+      if let some value := ostr p "turn_id" then turn := some value
+    if ostr record "type" == some "response_item" then
+      if kind == some "custom_tool_call" || kind == some "function_call" then
+        if let some callId := ostr p "call_id" then
+          pending := pending ++ [(callId, turn, #[])]
+      else if kind == some "custom_tool_call_output" || kind == some "function_call_output" then
+        if let some callId := ostr p "call_id" then
+          let candidates := pending.filter (fun entry => entry.1 == callId)
+          if let [(_, callTurn, commands)] := candidates then
+            if callTurn.isSome && callTurn == turn && !commands.isEmpty then
+              results := results ++ [(index, commands)]
+          pending := pending.filter (fun entry => entry.1 != callId)
+    else if ostr record "type" == some "event_msg" && kind == some "item_completed" &&
+        (oobj p "item" >>= fun item => ostr item "type") == some "CommandExecution" then
+      if let [(callId, callTurn, commands)] := pending then
+        if callTurn.isSome && callTurn == ostr p "turn_id" then
+          pending := [(callId, callTurn, commands.push record)]
+  return results
+
+example : codexToolOutputErrorSignal [.text "Script failed\nOutput:\nerror"] =
+    .structured true "codex.runner.status" := by native_decide
+example : codexToolOutputErrorSignal [.text "Script completed\nOutput:\n",
+    .text "{\"exit_code\":7,\"output\":\"failed\"}"] =
+    .structured true "codex.runner.chunk.exit_code" := by native_decide
+example : codexToolOutputErrorSignal [.text "Script completed\nOutput:\n{\"exit_code\":7}"] =
+    .structured false "codex.runner.status" := by native_decide
 
 /-! ## Reversible historical carriers
 
@@ -982,6 +1051,7 @@ private structure Kept where
   target provenance, typed projection, and linked lifecycle all still agree. -/
   nativeToolRaw : Option Json := none
   retainedMessage : Option Json := none
+  commandCompletions : Array Json := #[]
 
 /-- Build an `ImportNote` carrying a record-index locator. -/
 private def mkNote (k : AssumptionKind) (i : Nat) (d : String) : ImportNote :=
@@ -1649,11 +1719,13 @@ private def adaptRecords (records : List Json) (carrierSessionSelfIdentified : B
   let mut segment : Nat := 0
   let mut idx : Nat := 0                         -- record index (post-header), for note locs
   let recordArray := records.toArray
+  let commandIndex := codexCommandCompletionIndex records
   for j in records do
     let j := if carrierSessionSelfIdentified then codexRestoreMappedCallId j else j
     let ty := (ostr j "type").getD ""
     let p := (oobj j "payload").getD Json.null
     let ts := ostr j "timestamp"
+    let commands := (commandIndex.find? (fun pair => pair.1 == idx)).map (·.2) |>.getD #[]
     let keptBefore := kept.size
     let timeProvenance := if carrierSessionSelfIdentified then
         parseCodexTimeProvenance? j
@@ -1873,7 +1945,7 @@ private def adaptRecords (records : List Json) (carrierSessionSelfIdentified : B
           else
             let recorded := if carrierSessionSelfIdentified then
                 codexPayloadErrorSignal? p else none
-            let err := recorded.getD (codexOutputErrorSignal (toolOutputText content))
+            let err := recorded.getD (codexToolOutputErrorSignal content commands)
             if recorded.isSome then
               notes := notes.push (mkNote (.other "errorProvenancePreserved") idx
                 "function_call_output error signal preserved from exporter-owned metadata; output text unchanged")
@@ -1883,7 +1955,7 @@ private def adaptRecords (records : List Json) (carrierSessionSelfIdentified : B
             kept := kept.push { (mkKept (.ktool (.byId segment callId) content err
               (some ("codex.unresolved.function_call_output", p)))
               ts .environment "" none) with
-                envelopeEligible := true, nativeToolRaw := some j }
+                envelopeEligible := true, nativeToolRaw := some j, commandCompletions := commands }
         | _, _ =>
             kept := kept.push (mkKept (.kenv [
               .unmodeled "codex.malformed.function_call_output" p])
@@ -2000,7 +2072,7 @@ private def adaptRecords (records : List Json) (carrierSessionSelfIdentified : B
         -- text is the RAW `output` — NEITHER unwraps a Codex exec envelope here (that
         -- unwrap is convert-path-only and applies to `function_call_output`; see the
         -- D-unwrap census note), so keeping the raw output matches both. `isError` is
-        -- inferred by the same `codexOutputIndicatesError` heuristic; the `call_id`
+        -- read from runner and command status before heuristic fallback; the `call_id`
         -- resolves positionally to the `custom_tool_call` above.
         match ostr p "call_id", (oobj p "output" >>= codexToolOutputBlocks?) with
         | some callId, some content =>
@@ -2013,13 +2085,13 @@ private def adaptRecords (records : List Json) (carrierSessionSelfIdentified : B
           else
             let recorded := if carrierSessionSelfIdentified then
                 codexPayloadErrorSignal? p else none
-            let err := recorded.getD (codexOutputErrorSignal (toolOutputText content))
+            let err := recorded.getD (codexToolOutputErrorSignal content commands)
             notes := notes.push (mkNote (if recorded.isSome then
                 .other "errorProvenancePreserved" else .errorInferred) idx
               ("custom_tool_call_output error status: " ++ errorSignalProvenance err))
             kept := kept.push { (mkKept (.ktool (.byId segment callId) content err
               (some ("codex.unresolved.custom_tool_call_output", p)))
-              ts .environment "" none) with nativeToolRaw := some j }
+              ts .environment "" none) with nativeToolRaw := some j, commandCompletions := commands }
         | _, _ =>
             kept := kept.push (mkKept (.kenv [
               .unmodeled "codex.malformed.custom_tool_call_output" p])
@@ -2240,6 +2312,8 @@ private def buildEntries (kept : Array Kept) : Array Entry :=
       (match k.nativeToolRaw with
         | some raw => [(codexNativeToolRawRecordKey, raw)]
         | none => []) ++
+      (if k.commandCompletions.isEmpty then [] else
+        [("codex_command_completions", Json.arr k.commandCompletions)]) ++
       (match k.retainedMessage with
         | some raw => [("codex_retained_message", raw)] ++
             ["order", "turn_id", "revision"].filterMap (fun key => (oobj raw key).map (key, ·))
@@ -3613,7 +3687,8 @@ private def exactImportedNativeResultEvidence? (t : Transcript)
   -- Exact source metadata takes precedence over text heuristics. Reusing a
   -- retained record must agree with the complete typed error signal.
   let expectedError := (codexPayloadErrorSignal? payload).getD
-    (codexOutputErrorSignal (toolOutputText parsedContent))
+    (codexToolOutputErrorSignal parsedContent
+      ((oarr extras "codex_command_completions").getD #[]))
   guard (errorSignalJson error == errorSignalJson expectedError)
   match ostr payload "type" with
   | some "function_call_output" =>

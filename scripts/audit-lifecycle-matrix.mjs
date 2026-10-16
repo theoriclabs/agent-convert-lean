@@ -1042,8 +1042,20 @@ function codexErrorSignal(blocks) {
   const text = blocks.filter(b => b.kind === "text").map(b => b.text).join("");
   const header = text.split(/\n(?:Output:|Final output:)/, 1)[0];
   const codes = [...header.matchAll(/^Process exited with code (-?\d+)$/gm)].map(m => Number(m[1]));
-  return codes.length ? structuredError(codes.some(c => c !== 0), "codex.runner.process_exit_code")
-    : heuristicError(codexOutputIndicatesError(blocks), "codexOutputIndicatesError (codexAdapter.ts:75)");
+  const evidence = blocks.flatMap(block => {
+    if (block.kind !== "text") return [];
+    try {
+      const chunk = JSON.parse(block.text);
+      return Number.isInteger(chunk?.exit_code)
+        ? [structuredError(chunk.exit_code !== 0, "codex.runner.chunk.exit_code")] : [];
+    } catch { return []; }
+  });
+  if (codes.length) evidence.push(structuredError(codes.some(c => c !== 0), "codex.runner.process_exit_code"));
+  const status = text.split('\n')[0];
+  if (status === "Script completed" || status === "Script failed")
+    evidence.push(structuredError(status === "Script failed", "codex.runner.status"));
+  return evidence.find(e => e.value) || evidence[0] ||
+    heuristicError(codexOutputIndicatesError(blocks), "codexOutputIndicatesError (codexAdapter.ts:75)");
 }
 
 function parseCodexOutput(value, context) {
