@@ -593,7 +593,7 @@ private def codexReservedRecordSourceFailure?
     some "exporter-owned Codex carrier envelope requires canonical JSONL bytes"
   else none
 
-/-! ### Codex 0.144.1–0.153 compacted-record domain
+/-! ### Codex compacted-record semantic domain
 
 The rollout schema stores a compacted checkpoint as a six-field payload; Codex
 0.153 added three bookkeeping fields (`compaction_response_id`,
@@ -603,10 +603,10 @@ recording an empty `message`. Codex adds such keys every few releases, and a
 key whitelist here silently demoted every real checkpoint of a long thread to
 `codex-malformed-compaction-record`. The domain is therefore OPEN-WORLD for
 unknown keys and strict only about the semantic shape: a string `message`, a
-`replacement_history` of messages ending in the encrypted `compaction`
-signature, a positive `window_number`, and the three window ids. Its `replacement_history` is replayable Responses input and ends in
-a server-issued `compaction` item whose `encrypted_content` is the opaque
-summary signature. Loom's typed compaction can project only `message`; the complete
+`replacement_history` of messages with an optional final encrypted `compaction`
+signature, a positive `window_number`, and the three window ids. Newer
+checkpoints omit the signature and retain conversation in additional fields.
+Loom's typed compaction can project only `message`; the complete
 checkpoint therefore remains entry-scoped provenance and is reusable only when
 the typed projection still agrees with it. -/
 
@@ -678,8 +678,9 @@ private def codexReplacementHistoryValid (history : Array Json) : Bool :=
   match history.toList.reverse with
   | [] => false
   | signature :: reversedMessages =>
-      codexCompactionSignatureItemValid signature &&
-        reversedMessages.all codexCompactionMessageItemValid
+      (codexCompactionSignatureItemValid signature &&
+        reversedMessages.all codexCompactionMessageItemValid) ||
+      history.all codexCompactionMessageItemValid
 
 private def codexCompactedPayloadValid (payload : Json) : Bool :=
   codexCompactionIsObject payload &&
@@ -1492,7 +1493,7 @@ private def adaptRecords (records : List Json) (carrierSessionSelfIdentified : B
       else
         archived := archived.push j
         notes := notes.push (mkNote (.other "codex-malformed-compaction-record") idx
-          "Compacted record is outside the strict Codex 0.144.1–0.153 checkpoint domain; complete record retained outside dialogue")
+          "Compacted record does not have a valid resumable checkpoint shape; complete record retained outside dialogue")
     else if ty == "turn_context" then
       if codexGeneratedTargetDefaultsMarkerExact p then
         generatedControls := generatedControls.push j
@@ -8947,6 +8948,36 @@ def codexCurrentCompactionCheckpointAccepted : Bool :=
    | .error _ => false)
 
 example : codexCurrentCompactionCheckpointAccepted = true := by native_decide
+
+/-- Codex 0.162 no longer appends a server-issued compaction signature. Its
+otherwise-valid message history and additional checkpoint metadata stay valid.
+An empty or malformed signature is not a substitute for that optional item. -/
+def codexUnsignedCompactionCheckpointAccepted : Bool := Id.run do
+  let history := (oarr codexCurrentCompactionPayload "replacement_history").getD #[]
+    |>.filter (fun item => ostr item "type" != some "compaction")
+  let payload := codexCurrentCompactionPayload
+    |>.setObjVal! "replacement_history" (Json.arr history)
+    |>.setObjVal! "compaction_response_id" Json.null
+    |>.setObjVal! "retained_context" (Json.mkObj [
+      ("user_messages", Json.arr #[]), ("assistant_messages", Json.arr #[])])
+    |>.setObjVal! "replacement_history_metadata" (Json.arr #[])
+    |>.setObjVal! "resume_metadata" (Json.mkObj [])
+  let record := codexCurrentCompactionRecord.setObjVal! "payload" payload
+  let fixture := codexCurrentCompactionImportFixture.replace
+    codexCurrentCompactionRecord.compress record.compress
+  let .ok imported := importCodexCli fixture | return false
+  return codexCompactedRecordValid record &&
+    imported.entries.any (fun entry => match entry.payload with
+      | .compaction _ _ _ => true
+      | _ => false) &&
+    !imported.importNotes.any (fun note => match note.kind with
+      | .other "codex-malformed-compaction-record" => true
+      | _ => false) &&
+    !codexReplacementHistoryValid #[] &&
+    !codexReplacementHistoryValid #[Json.mkObj [
+      ("type", Json.str "compaction"), ("encrypted_content", Json.str "")]]
+
+example : codexUnsignedCompactionCheckpointAccepted = true := by native_decide
 
 /-- Malformed/native-unproven checkpoints are never activated or silently
 dropped by checked export. Summary drift and Loom-only extent/token facts refuse

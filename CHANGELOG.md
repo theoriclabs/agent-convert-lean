@@ -13,6 +13,9 @@ lands; move them into a dated version section when publishing a release.
 - Repair lifecycle-audit identity validation for compiler/capability metadata
   and update its Claude target version. All 40 conversion cells now pass;
   local verification runs the full matrix, including its mutation self-tests.
+- Accept Codex checkpoints whose replacement history omits the optional trailing
+  compaction signature, retaining the complete checkpoint as provenance while
+  continuing to reject malformed histories ([#21](https://github.com/theoriclabs/agent-convert-lean/issues/21)).
 
 ## [0.2.0-preview.4] - 2026-10-15
 
