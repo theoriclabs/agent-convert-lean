@@ -766,6 +766,8 @@ private def transcriptSummaryJson
     ("activeContextCompactionBoundaries", Lean.Json.arr activeBoundaries),
     ("retainedContexts", (source.origin.extras >>= fun extras =>
       (extras.getObjVal? "retained_contexts").toOption).getD (Lean.Json.arr #[])),
+    ("unconsumedCheckpointContent", (source.origin.extras >>= fun extras =>
+      (extras.getObjVal? "unconsumed_checkpoint_content").toOption).getD (Lean.Json.arr #[])),
     ("thinkingBlocksImported", Lean.Json.num thinking),
     ("reasoningBlocksImported", Lean.Json.num thinking),
     ("compactionEvents", Lean.Json.num (transcriptCompactionEventCount source)),
@@ -970,7 +972,11 @@ def continuationContextBlocker? (toFmt : String) (t : Transcript) : Option Strin
   let fields := retained.toList.flatMap (fun context => match context with
     | .obj values => values.toList.map (·.1)
     | _ => []) |>.eraseDups
-  some s!"'{toFmt}' session would contain no user message; the resumed model has no request to continue. Source: {source} {version}; checkpoints: {transcriptCompactionEventCount t}; retained-context fields: {fields}. Use --allow-empty-dialogue for a deliberate tool-only archive."
+  let unknown := (t.origin.extras >>= fun extras =>
+    (extras.getObjVal? "unconsumed_checkpoint_content" >>= Lean.Json.getArr?).toOption).getD #[]
+  let unknownKeys := unknown.toList.filterMap (fun finding =>
+    (finding.getObjVal? "key" >>= Lean.Json.getStr?).toOption) |>.eraseDups
+  some s!"'{toFmt}' session would contain no user message; the resumed model has no request to continue. Source: {source} {version}; checkpoints: {transcriptCompactionEventCount t}; retained-context fields: {fields}; unconsumed checkpoint content: {unknownKeys}. Use --allow-empty-dialogue for a deliberate tool-only archive."
 
 private def continuationContextGuardPinned : Bool := Id.run do
   let user : Entry := {
@@ -1068,7 +1074,8 @@ def runConvert (fromFmt toFmt inp : String) (outp : Option String)
   | .error e => IO.eprintln s!"import error: {e}"; pure 2
   | .ok t0 =>
     for note in t0.importNotes do
-      if note.kind == .other "cursorIdeTranscriptRecoveryUnavailable" then
+      if note.kind == .other "cursorIdeTranscriptRecoveryUnavailable" ||
+          note.kind == .other "codex-unconsumed-checkpoint-content" then
         IO.eprintln s!"warning: {note.detail}"
     let t0 := if opts.tsParity && fromFmt == "codex" then codexTsParity t0 else t0
     let source := applyCliOverrides toFmt opts t0

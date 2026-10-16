@@ -24,7 +24,7 @@ function convert(rows, target = 'loom', expectedStatus = 0, flags = []) {
   }
   return { artifact: target === 'loom' ? JSON.parse(readFileSync(output, 'utf8')) :
     readFileSync(output, 'utf8').trim().split('\n').map(JSON.parse),
-    summary: JSON.parse(run.stdout.trim().split('\n').at(-1)) };
+    summary: JSON.parse(run.stdout.trim().split('\n').at(-1)), stderr: run.stderr };
 }
 const archive = rows => convert(rows).artifact;
 const malformedCount = t => t.importNotes.filter(n => n.kind === 'codex-malformed-compaction-record').length;
@@ -49,6 +49,24 @@ try {
   assert.deepEqual(retained.summary.retainedContexts, [checkpoint.payload.retained_context]);
   assert.equal(retained.summary.activeContextCompactionBoundaries[0].retainedMessageCount, 3);
   assert.equal(retained.summary.allowEmptyDialogue, false);
+  assert.deepEqual(retained.summary.unconsumedCheckpointContent, []);
+  const future = structuredClone(rows);
+  const futureCheckpoint = future.find(r => r.type === 'compacted').payload;
+  futureCheckpoint.retained_context_v3 = futureCheckpoint.retained_context;
+  delete futureCheckpoint.retained_context;
+  // Unknown bookkeeping stays open-world; message-shaped unknown content is loud.
+  futureCheckpoint.future_bookkeeping = { window: 42, text: 'not a message' };
+  for (const target of ['loom', 'claude']) {
+    const converted = convert(future, target, 0, ['--allow-empty-dialogue']);
+    assert.deepEqual(converted.summary.unconsumedCheckpointContent, [{
+      key: 'retained_context_v3', items: 3, recordIndex: 2,
+      sampleText: 'RETAINED-ASSISTANT The task viewer renders correctly.',
+    }]);
+    assert.match(converted.stderr, /warning: retained_context_v3: 3 message-shaped items not imported/);
+    assert.equal(converted.summary.importJudgments.filter(n =>
+      n.kind === 'codex-unconsumed-checkpoint-content').length, 1);
+  }
+  assert.match(convert(future, 'claude', 3).stderr, /unconsumed checkpoint content: \[retained_context_v3\]/);
   const empty = structuredClone(rows);
   delete empty.find(r => r.type === 'compacted').payload.retained_context;
   for (const target of ['claude', 'pi', 'codex', 'cursor-agent', 'opencode']) {

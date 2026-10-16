@@ -63,6 +63,9 @@ them, never weaken them:
    `guardian_history`, `latest_token_usage_record`, metadata
    `content_item_kinds` / `create_time`). Only the semantic shape is strict.
    Never reintroduce a key whitelist there.
+   Unknown keys containing message-shaped objects must produce an import warning
+   and `unconsumedCheckpointContent` JSON diagnostics; open-world acceptance must
+   not silently discard a new conversation field.
 5. `codexCompactedRolloutConvertsActive` (Main.lean) and
    `codexCurrentCompactionCheckpointAccepted` (CodexCli.lean) are the
    regression pins for this exact bug. If either must change, the bug is back.

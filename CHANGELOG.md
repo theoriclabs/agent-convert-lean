@@ -7,6 +7,10 @@ lands; move them into a dated version section when publishing a release.
 
 ### Fixed
 
+- Warn when unknown Codex checkpoint fields contain unconsumed message-shaped
+  content. Include field names, counts, source locations, and samples in JSON
+  diagnostics, and name the fields in no-dialogue export refusals
+  ([#23](https://github.com/theoriclabs/agent-convert-lean/issues/23)).
 - Refuse continuation exports whose active window has no native user text turn.
   Report source/checkpoint context and support an explicit, JSON-reported
   `--allow-empty-dialogue` override for deliberate tool-only archives

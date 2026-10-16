@@ -35,3 +35,16 @@ private def retainedDialogueImported : Bool :=
       (t.entries.filter (fun e => match e.payload with | .userMsg _ => true | _ => false)).size == 2
 
 example : retainedDialogueImported = true := by native_decide
+
+private def unknownRetainedContentWarns : Bool :=
+  let source := (include_str "0.162.1/compacted-rollout.jsonl").replace
+    "\"retained_context\":" "\"retained_context_v3\":"
+  [importCodexCli source, importCodexCliActive source].all (fun result =>
+    match result with
+    | .error _ => false
+    | .ok t => t.importNotes.any (fun note =>
+        note.kind == .other "codex-unconsumed-checkpoint-content" &&
+        note.detail == "retained_context_v3: 3 message-shaped items not imported" &&
+        note.loc == some "record2"))
+
+example : unknownRetainedContentWarns = true := by native_decide

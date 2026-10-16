@@ -959,6 +959,40 @@ private structure Kept where
 private def mkNote (k : AssumptionKind) (i : Nat) (d : String) : ImportNote :=
   { kind := k, loc := some ("record" ++ toString i), detail := d }
 
+/-- Bounded shape detection, not a decoder: report conversation in unfamiliar
+checkpoint fields without guessing its authorship or activating it as dialogue. -/
+private def codexMessageShapedTexts : Nat → Json → List String
+  | depth, value =>
+      let here := if ["role", "turn_id", "message_id", "order"].any
+          (fun key => (oobj value key).isSome) then
+        (ostr value "text" <|> ostr value "content").toList
+      else []
+      match depth with
+      | 0 => here
+      | fuel + 1 => here ++ (match value with
+          | .arr items => items.toList.flatMap (codexMessageShapedTexts fuel)
+          | .obj fields => fields.toList.flatMap (fun (_, child) => codexMessageShapedTexts fuel child)
+          | _ => [])
+
+private def codexUnconsumedCheckpointContent (records : List Json) :
+    Array Json × List ImportNote := Id.run do
+  let mut findings : Array Json := #[]
+  let mut notes : List ImportNote := []
+  for (record, index) in records.zipIdx do
+    if ostr record "type" == some "compacted" then
+      if let some (.obj fields) := oobj record "payload" then
+        for (key, value) in fields.toList do
+          if !["message", "replacement_history", "retained_context"].contains key then
+            let messages := codexMessageShapedTexts 3 value
+            if !messages.isEmpty then
+              findings := findings.push (Json.mkObj [
+                ("key", Json.str key), ("items", Json.num messages.length),
+                ("recordIndex", Json.num index),
+                ("sampleText", Json.str (String.ofList ((messages.headD "").toList.take 160)))])
+              notes := notes ++ [mkNote (.other "codex-unconsumed-checkpoint-content") index
+                s!"{key}: {messages.length} message-shaped items not imported"]
+  return (findings, notes)
+
 /-- Build a `Kept` entry (keeps every push-site in the fold single-line). -/
 private def mkKept (kp : KPayload) (ts : Option String) (role : Role)
     (text : String) (callKey : Option CodexCallKey) : Kept :=
@@ -2449,6 +2483,9 @@ private def buildCodexTranscript (mp : Json) (records : List Json)
   let sourceArchive := parseCodexSourceArchive? mp
   let (kept, notes, controls, generatedControls, archived, boundaries) :=
     adaptRecords records carrierSession activeContext
+  let originalRecords := (activeContextProvenance >>= fun provenance =>
+    oarr provenance "raw_source_records").map (·.toList) |>.getD records
+  let (unconsumedContent, unconsumedNotes) := codexUnconsumedCheckpointContent originalRecords
   let sourceSessionPayload := sourceArchive.map (·.sourceSessionPayload) |>.getD mp
   let sourceIdentity := codexSourceIdentityJson sourceSessionPayload
   let headerEnv : EnvInfo := {
@@ -2471,7 +2508,7 @@ private def buildCodexTranscript (mp : Json) (records : List Json)
     entries := entries,
     env := sourceEnv,
     activeLeaf := activeLeaf,
-    importNotes := codexDualIdentityNotes mp ++ notes.toList ++ activeLeafNotes,
+    importNotes := codexDualIdentityNotes mp ++ notes.toList ++ unconsumedNotes ++ activeLeafNotes,
     origin := {
       format := Format.codexCli, sourceRef := "importCodexCli",
       rawId := codexSessionId? mp,
@@ -2485,6 +2522,7 @@ private def buildCodexTranscript (mp : Json) (records : List Json)
         ("retained_contexts", Json.arr (compactionRecords.filterMap (fun record => do
           let payload ← oobj record "payload"
           oobj payload "retained_context"))),
+        ("unconsumed_checkpoint_content", Json.arr unconsumedContent),
         ("active_context", Json.bool activeContext),
         ("carrier_session_self_identified", Json.bool carrierSession),
         ("raw_session_meta_payload", sourceSessionPayload),
