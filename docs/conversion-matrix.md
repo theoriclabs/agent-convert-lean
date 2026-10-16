@@ -59,6 +59,12 @@ in entry provenance without duplicating conversation. Unambiguous same-turn
 non-dialogue completions attach to neighboring entries; unmatched conversation
 and unknown future event kinds remain explicit events.
 
+The opt-in `scripts/continuation-probe.mjs` gate checks current-request and
+last-result recall in a signed-in Claude harness. All three versioned Codex
+compaction fixtures passed on Claude Code 2.1.301 on 2026-10-16; exact replies
+and limits are in `REQUIREMENTS_EVIDENCE.md`. Other harnesses are not covered by
+this live probe.
+
 Claude exports batch events, archived controls, and archived records into one
 `agent-convert-provenance` header. Events retain their position and graph links
 for re-import, while physical conversation parents bypass them. Consumed Codex

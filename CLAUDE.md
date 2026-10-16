@@ -80,6 +80,13 @@ loom convert <rollout.jsonl> claude ~/.claude/projects/<proj>/<uuid>.jsonl --tar
 cd <project> && claude -p --resume <uuid> "Reply RESUME-OK"   # then delete the throwaway file
 ```
 
+Also run `node scripts/continuation-probe.mjs <rollout.jsonl> claude --expect
+<current-request-keyword>` with a signed-in harness. This checks the model's
+current request and last tool outcome, with tools disabled, and removes its
+throwaway session automatically. Add `--expect-outcome <result-keyword>` when
+the last result is readable. Record synthetic probe transcripts as described
+in `docs/releasing.md`; an opening-only `RESUME-OK` does not establish continuity.
+
 A converted Claude session whose size is a large fraction of the rollout, or
 whose entry count tracks the rollout's record count, is this bug returning.
 

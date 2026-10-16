@@ -49,6 +49,7 @@ node scripts/test-codex-exec-status.mjs
 node scripts/test-codex-item-completed.mjs
 node scripts/test-claude-event-batch.mjs
 node scripts/test-source-version.mjs
+node scripts/test-continuation-probe.mjs
 python3 scripts/test-claude-task-notifications.py
 python3 scripts/test-cursor-ide-transcript.py
 

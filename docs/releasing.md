@@ -55,3 +55,32 @@ checked separately in exact boundary provenance. Use `--report <path>` to keep
 the fixture hashes and results. The repository CI workflow runs this checker in
 `scripts/verify-local.sh` alongside the route and lifecycle checks. These are
 artifact checks; signed-in harness continuation is a separate release gate.
+
+Before a release, run the opt-in continuation gate with the exact release
+binary and a signed-in Claude Code installation:
+
+```sh
+LOOM_BIN=/path/to/release/loom node scripts/continuation-probe.mjs testdata/codex/0.144.1/compacted-rollout.jsonl claude --expect viewer --expect-outcome README.md --report /tmp/probe-0.144.json
+LOOM_BIN=/path/to/release/loom node scripts/continuation-probe.mjs testdata/codex/0.153.0/compacted-rollout.jsonl claude --expect viewer --expect-outcome README.md --report /tmp/probe-0.153.json
+LOOM_BIN=/path/to/release/loom node scripts/continuation-probe.mjs testdata/codex/0.162.1/compacted-rollout.jsonl claude --expect preview --expect-outcome README.md --report /tmp/probe-0.162.json
+```
+
+The script installs a fresh UUID under a temporary project's Claude store,
+resumes a nonpersistent fork with tools, MCP, and customizations disabled, and
+asks for the current user request and last tool outcome. It rejects missing
+context, missing expected words, and error claims when the source's last
+selected tool result has authoritative success status. Pick `--expect` from
+the current source dialogue; repeat it for multiple required words. Add
+`--expect-outcome` to check result content. Heuristic or absent status does not
+establish success. This is a keyword continuity check, not a general semantic
+judge or proof of non-execution across all harness modes.
+
+The receipt includes the exact prompt and reply, harness version, source and
+binary hashes, conversion diagnostics, and pass/fail result. The installed
+session is deleted even on failure unless `--keep` is explicit; private
+diagnostics remain in a temporary directory. Only Claude is implemented;
+other target names fail before installation. The gate incurs a model request
+and requires existing authentication, so ordinary CI runs only its offline
+negative checks. Retain synthetic receipts and record observed transcripts in
+`REQUIREMENTS_EVIDENCE.md`; do not commit private session contents. Each
+release needs its own candidate-bound receipts.

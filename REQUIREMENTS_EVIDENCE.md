@@ -579,6 +579,46 @@ npm run test:loom:corpus -- cursor-agent <dir> --ts-parity
 
 ## Verdict
 
+### Development continuation observations, 2026-10-16 (#28)
+
+`scripts/continuation-probe.mjs` passed on the three public Codex compacted
+fixtures using Claude Code **2.1.301**. The converter was the development build
+of `2516ef299e66ee937a2eec687633c3eaaa673bc8`, SHA-256
+`909156f1a448f83a961f88b008c917f00a6a546ea583a13a884cedece95f6d1e`.
+Its adapter still reports its separately pinned Claude validation build; these
+observations do not broaden that historical qualification automatically.
+
+Each invocation used `claude --expect viewer --expect-outcome README.md` for
+0.144.1 and 0.153.0, or `claude --expect preview --expect-outcome README.md` for
+0.162.1. The exact prompt was:
+
+> In one sentence, what did the user most recently ask you to do, and what was the result of the last tool call? If you have no user request in context, reply NO-REQUEST.
+
+Observed replies:
+
+- **0.144.1:** “The user asked me to build the synthetic task viewer, and the last tool call (`git status --short`) exited with code 0, showing only `README.md` as modified.”
+- **0.153.0:** “You asked me to build the synthetic task viewer, and the last tool call (`git status --short`) exited with code 0 and showed one modified file, `README.md`.”
+- **0.162.1:** “You most recently asked me to deploy only to the synthetic preview, and the last tool call (`git status --short`) succeeded with exit code 0 and showed a single modified file, `README.md`.”
+
+Fixture SHA-256 values, in the same order:
+
+```text
+bd52232a56e7f022dccc7b1cc3eb1670f6026d578d097bced81326570a062e2c
+8603cd31128e6c1562bfb8eccddf6c778c005304537f824eb08d62b38c5b6ef9
+b5e3ea8f2a1cd3e55b4dc6f247efda61fbdd1c8392b2a589be92c9bd95cbf29e
+```
+
+All three responses completed in one harness turn with tools disabled and no
+permission denials. Source and installed-history bytes were unchanged; the
+temporary installed sessions were deleted. This establishes observed request
+and result recall for these fixtures in this harness configuration. It is not
+candidate-bound release qualification, a private-session census, or evidence
+for other target harnesses. The offline probe checks reject missing context,
+wrong request/outcome, and false failure claims. The release procedure requires
+new exact-binary receipts before publishing.
+
+### Requirements verdict
+
 The requirements case describes an experimental developer-preview candidate
 and does not claim release readiness. V-012 and V-013 are historical
 observations, not candidate-bound release evidence. R-001, R-003, R-006, R-010,

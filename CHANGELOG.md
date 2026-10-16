@@ -5,6 +5,10 @@ lands; move them into a dated version section when publishing a release.
 
 ## [Unreleased]
 
+- Add an opt-in Claude continuation probe that checks the resumed model's
+  current request and last tool outcome, with temporary sessions and retained
+  hash-bound receipts; document the per-version release gate (#28).
+
 ### Fixed
 
 - Add a CI corpus gate for compacted Codex 0.144.1, 0.153.0, and 0.162.1
