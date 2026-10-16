@@ -13,14 +13,16 @@ const scratch = mkdtempSync(join(tmpdir(), 'loom-exec-status-'));
 const fixture = readFileSync(join(root, 'testdata/codex/0.162.1/exec-status.jsonl'), 'utf8')
   .trim().split('\n').map(JSON.parse);
 let sequence = 0;
-function convert(rows, target = 'claude') {
+function convert(rows, target = 'claude', raw = false) {
   const input = join(scratch, `source-${sequence}.jsonl`);
   const output = join(scratch, `claude-${sequence++}.jsonl`);
   writeFileSync(input, rows.map(JSON.stringify).join('\n') + '\n');
   const run = spawnSync(loom, ['convert', input, target, output, '--no-subagents'], { encoding: 'utf8' });
   assert.equal(run.status, 0, run.stderr);
   if (target === 'loom') return JSON.parse(readFileSync(output, 'utf8'));
-  return readFileSync(output, 'utf8').trim().split('\n').map(JSON.parse)
+  const records = readFileSync(output, 'utf8').trim().split('\n').map(JSON.parse);
+  if (raw) return records;
+  return records
     .flatMap(r => Array.isArray(r.message?.content) ? r.message.content : [])
     .filter(b => b.type === 'tool_result');
 }
@@ -90,6 +92,27 @@ try {
     mutation(ambiguous);
     assert.deepEqual(signal(ambiguous), { kind: 'structured', isError: 'false',
       source: 'codex.runner.chunk.exit_code' });
+  }
+  for (const [text, expectedFlag, expectedKind] of [
+    ['Command timed out after 30 seconds', false, 'heuristic'],
+    ['Script failed\nOutput:\nerror', true, 'structured'],
+    ['Script completed\nOutput:\nok', false, 'structured'],
+  ]) {
+    const source = structuredClone(fixture);
+    source[3].payload.output = [{ type: 'input_text', text }];
+    const exported = convert(source, 'claude', true);
+    const result = exported.find(r => r.message?.content?.some(b => b.tool_use_id === 'call_ok'));
+    assert.equal(result.message.content[0].is_error, expectedFlag);
+    assert.equal(result._agent_convert.toolResultErrors[0].errorSignal.kind, expectedKind);
+    assert.deepEqual(signal(exported), signal(source), 'original error provenance survives Claude round trip');
+    const invalid = structuredClone(exported);
+    invalid.find(r => r.message?.content?.some(b => b.tool_use_id === 'call_ok'))
+      .message.content[0].is_error = !expectedFlag;
+    const input = join(scratch, `invalid-${sequence++}.jsonl`);
+    writeFileSync(input, invalid.map(JSON.stringify).join('\n') + '\n');
+    const rejected = spawnSync(loom, ['convert', input, 'loom', input + '.loom'], { encoding: 'utf8' });
+    assert.equal(rejected.status, 2);
+    assert.match(rejected.stderr, /contradicts the emitted native error flag/);
   }
   console.log('Codex error headers: successful printed content cannot set a native error flag.');
 } finally {

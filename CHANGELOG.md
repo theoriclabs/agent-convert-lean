@@ -7,6 +7,10 @@ lands; move them into a dated version section when publishing a release.
 
 ### Fixed
 
+- Keep heuristic tool-error guesses out of Claude’s native `is_error` flag.
+  Preserve structured, heuristic, and unknown signals in validated record metadata
+  so native history retains exact error provenance across repeated conversions
+  ([#14](https://github.com/theoriclabs/agent-convert-lean/issues/14)).
 - Read Codex runner status, whole-chunk exit codes, and unambiguously associated
   command-completion events as structured error evidence. Preserve the deciding
   source and raw command events; inner failures override outer-runner success

@@ -1008,15 +1008,26 @@ function parseClaudeRows(rows, allowTargetCarriers, context) {
         state.events.push(event);
         state.calls.push(event);
       } else if (row.type === "user" && block?.type === "tool_result") {
-        invariant(nonemptyString(block.tool_use_id) && typeof block.is_error === "boolean",
+        invariant(nonemptyString(block.tool_use_id) &&
+          (!hasOwn(block, "is_error") || typeof block.is_error === "boolean"),
           `${context}: malformed native Claude tool_result`);
         const id = rawId(block.tool_use_id);
         const resultContent = typeof block.content === "string"
           ? [textBlock(block.content)]
           : Array.isArray(block.content) ? block.content.map(parseClaudeResultBlock)
             : hasOwn(block, "content") ? [unmodeledBlock("tool_result_content", block.content)] : [];
+        let error = hasOwn(block, "is_error") ? nativeError(block.is_error) : unrecordedError();
+        const retained = marker?.toolResultErrors?.filter(e => e.block === blockIndex) || [];
+        invariant(retained.length <= 1, `${context}: duplicate result error provenance`);
+        if (retained.length) {
+          error = exactCarrierError(retained[0].errorSignal);
+          invariant(error, `${context}: malformed result error provenance`);
+          const flag = error.provenance === "heuristic" ? false : error.value;
+          invariant(flag === (hasOwn(block, "is_error") ? block.is_error : null),
+            `${context}: result error provenance contradicts native flag`);
+        }
         state.events.push(rawResult(`native-result:${rowIndex}:${blockIndex}`, id,
-          resultContent, nativeError(block.is_error),
+          resultContent, error,
           resolvePrior(state, id, null, "Claude tool_result")));
       }
     }

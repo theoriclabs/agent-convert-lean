@@ -320,7 +320,7 @@ function targetLifecycle(rows) {
   const events = [];
   for (const row of rows) {
     const content = Array.isArray(row.message?.content) ? row.message.content : [];
-    for (const block of content) {
+    for (const [blockIndex, block] of content.entries()) {
       if (row.type === "assistant" && block?.type === "tool_use") {
         events.push({
           kind: "call",
@@ -354,6 +354,7 @@ function targetLifecycle(rows) {
           // value or an omitted flag reads as an asserted success.
           error: { kind: "native", isError: block.is_error === true },
           errorRecorded: Object.hasOwn(block, "is_error"),
+          retainedError: row._agent_convert?.toolResultErrors?.find(e => e.block === blockIndex)?.errorSignal,
           carried: false,
           occurrence: null,
           call: null,
@@ -384,12 +385,11 @@ function lifecycleValue(event) {
     : { id: event.id, content: event.content, error: event.error };
 }
 
-// A native `tool_result` cannot carry error PROVENANCE, only the bool. Compare
-// what Claude can hold: the recorded value, or `null` when the source recorded
-// no value at all and the target must therefore omit the field.
+// Native flags use authoritative evidence only. Exact error provenance, when
+// present in the record marker, is checked separately below.
 function recordedErrorValue(error) {
   if (!error || error.kind === "unrecorded") return null;
-  return error.isError === true;
+  return error.kind === "heuristic" || error.kind === "inferred" ? false : error.isError === true;
 }
 
 function compareLifecycle(source, target) {
@@ -435,7 +435,10 @@ function compareLifecycle(source, target) {
           `source ${JSON.stringify(expectedValue)}, target ${JSON.stringify(actualValue)}`,
         );
       }
-      if (expected.error?.kind !== "native") provenanceNormalizedResults++;
+      if (actual.retainedError && !isDeepStrictEqual(expected.error, actual.retainedError)) {
+        throw new Error(`native result error provenance mismatch at lifecycle index ${index}`);
+      }
+      if (expected.error?.kind !== "native" && !actual.retainedError) provenanceNormalizedResults++;
     } else if (!isDeepStrictEqual(lifecycleValue(expected), lifecycleValue(actual))) {
       const field = expected.kind === "call" ? "id/name/arguments" :
         "id/content/error provenance";

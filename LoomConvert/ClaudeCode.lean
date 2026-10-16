@@ -641,6 +641,15 @@ private def cErrorSignalJson : ErrorSignal → Json
       ("source", Json.str source)]
   | .unrecorded => Json.mkObj [("kind", Json.str "unrecorded")]
 
+/-- Only recorded or structured status can assert a native error. Heuristic
+values remain reversible metadata on the native tool-result record. -/
+def errorBool : ErrorSignal → Bool
+  | .native value | .structured value _ => value
+  | .heuristic _ _ | .unrecorded => false
+
+example : errorBool (.heuristic true "codexOutputIndicatesError (codexAdapter.ts:75)") =
+    false := by decide
+
 private def cParseErrorSignal? (j : Json) : Option ErrorSignal := do
   match ← cstr j "kind" with
   | "native" => pure (.native (← cbool? j "isError"))
@@ -1320,6 +1329,20 @@ private def cCarrierToolTranslation? (j : Json) : Option (List Json) := do
 private def cCarrierToolTranslation (j : Json) : List Json :=
   (cCarrierToolTranslation? j).getD []
 
+private def cCarrierToolErrors? (j : Json) : Option (List (Nat × ErrorSignal)) := do
+  let marker ← cobj j claudeCarrierMarkerKey
+  guard (cstr marker "protocol" == some claudeCarrierProtocol)
+  match cobj marker "toolResultErrors" with
+  | none => pure []
+  | some (Json.arr values) => values.toList.mapM (fun value => do
+      let block ← cobj value "block" >>= (fun raw => raw.getNat?.toOption)
+      let raw ← cobj value "errorSignal"
+      let signal ← cParseErrorSignal? raw
+      guard (raw == cErrorSignalJson signal)
+      guard (value == Json.mkObj [("block", Json.num block), ("errorSignal", raw)])
+      pure (block, signal))
+  | some _ => none
+
 private def cCanonicalForBlock
     (overrides : List (Nat × CanonicalTool)) (blockIdx : Nat) : Option CanonicalTool :=
   (overrides.find? (fun entry => entry.1 == blockIdx)).map Prod.snd
@@ -1989,12 +2012,15 @@ private def stepLine (byUuid : List (String × Json)) (acc : Acc) (j : Json) : A
                         else ErrorSignal.heuristic
                           (claudeOutputIndicatesError (cResultText resultBlocks))
                           claudeStatusHeuristic
+                    let preservedError := ((cCarrierToolErrors? j).getD [] |>.find?
+                      (fun pair => pair.1 == sourceIdx)).map (·.2)
+                    let errSignal := preservedError.getD errSignal
                     let blk := EnvBlock.toolResult call resultBlocks errSignal
                     { a with
                       protos := a.protos.push (mkProto uuid parentUuid ts
                         (Payload.envMsg [blk]) (if carrierMarked then [0] else [])
                         (rawEnvelope := some raw)
-                        (inferredError := match errSignal with
+                        (inferredError := if preservedError.isSome then none else match errSignal with
                           | .heuristic value _ | .structured value _ => some value
                           | _ => none)),
                       matchedCalls := cRememberResolvedCall a.matchedCalls call }
@@ -2291,7 +2317,7 @@ private def cValidateConversationCarrierMarker
       else pure ()
       let recognizedPurpose :=
         ["contentBlocks", "provenance", "identityProvenance", "timeProvenance",
-          "toolCanonical", "toolTranslation"].any
+          "toolCanonical", "toolTranslation", "toolResultErrors"].any
           (fun key => (marker.getObjVal? key).toOption.isSome)
       if !recognizedPurpose then
         cSchemaError line claudeCarrierMarkerKey
@@ -2355,6 +2381,33 @@ private def cValidateConversationCarrierMarker
               s!"block index {blockIdx} does not address a native tool_use block")
       | .ok _ => (cSchemaError line
           (claudeCarrierMarkerKey ++ ".toolTranslation") "must be an array")
+      match marker.getObjVal? "toolResultErrors" with
+      | .error _ => pure ()
+      | .ok _ =>
+          let pairs ← match cCarrierToolErrors? record with
+            | some pairs => pure pairs
+            | none => (cSchemaError line (claudeCarrierMarkerKey ++ ".toolResultErrors")
+                "must list exact block/errorSignal objects")
+          if pairs.isEmpty || cHasDuplicateNat (pairs.map Prod.fst) then
+            cSchemaError line (claudeCarrierMarkerKey ++ ".toolResultErrors")
+              "must contain unique result-block indices"
+          else pure ()
+          pairs.forM (fun (index, signal) => do
+            let block ← match content with
+              | .arr blocks => match blocks[index]? with
+                | some block => pure block
+                | none => cSchemaError line "toolResultErrors.block" "is out of range"
+              | _ => cSchemaError line "toolResultErrors.block" "requires content array"
+            if cstr block "type" != some "tool_result" then
+              cSchemaError line "toolResultErrors.block" "must address a native tool_result"
+            else pure ()
+            let agrees := match signal with
+              | .unrecorded => (cobj block "is_error").isNone
+              | _ => cbool? block "is_error" == some (errorBool signal)
+            if !agrees then
+              cSchemaError line "toolResultErrors.errorSignal"
+                "contradicts the emitted native error flag"
+            else pure ())
       match marker.getObjVal? "provenance" with
       | .error _ => pure ()
       | .ok _ =>
@@ -3813,14 +3866,6 @@ Fidelity notes (the semantic IR round-trips, while native record layout may not)
   carrier containing the typed summary and exact source provenance. Events use
   a totality fallback because Claude has no safe native event encoding here. -/
 
-/-- Claude serializes a native tool-result's `is_error` as a bool. Non-native
-provenance is carried instead of being collapsed through this projection. -/
-def errorBool : ErrorSignal → Bool
-  | ErrorSignal.native b => b
-  | ErrorSignal.heuristic b _ => b
-  | ErrorSignal.structured b _ => b
-  | ErrorSignal.unrecorded => false
-
 /-- Recover the source `tool_use_id` for a `toolResult` from its `CallRef`: a
 resolved ref points at the spawning `toolCall`, whose `rawId` IS that id; an
 unresolved ref carries whatever raw id it recorded. Lets a re-import rebuild the
@@ -4326,11 +4371,8 @@ private def cNativeClaudeCallAt
           decide (entryIdx < site.entry) &&
           cClaudeNativeEntryProvenance t site.entry &&
           !(cEntryCarrierForced t site.entry site.block) &&
-          -- The error signal is deliberately NOT gated on `.native`. Claude's
-          -- `is_error` is a plain bool and `errorBool` is a total projection
-          -- from every ErrorSignal. Structured source status and heuristic
-          -- provenance do not prevent a result from using native history.
-          -- Requiring source `.native` here would turn Codex history into prose.
+          -- Error provenance does not block native history. The native flag
+          -- uses only authoritative evidence; the exact signal stays in metadata.
           cNativeResultContentValid site.content
       | _ => false
 
@@ -4383,21 +4425,8 @@ private def cEnvBlockToJsonAt
         | .resolved callEntry callBlock => cCallAtIsNative t callEntry callBlock
         | .unresolved _ _ => false
       if native then
-        -- `is_error` is OMITTED for `ErrorSignal.unrecorded`, never emitted as
-        -- `false`. Claude's field is a bare bool with no "unknown" state, so
-        -- writing `false` would turn "the source did not record whether this
-        -- errored" into "the source recorded that it succeeded" — an error
-        -- state the source never asserted, which `LoomOps.Interop` rates
-        -- `corrupting` rather than merely lossy.
-        --
-        -- Omitting it is exactly reversible rather than a mere approximation:
-        -- the importer already maps an absent `is_error` back to `.unrecorded`
-        -- (see the `| _ => ErrorSignal.unrecorded` arm), so `.unrecorded`
-        -- round-trips through this target with no carrier and no loss.
-        --
-        -- `.heuristic` is deliberately still emitted through `errorBool`: there
-        -- the VALUE is real and only the provenance normalizes to `.native` on
-        -- re-import, which is the reportable class (Interop P2/P4).
+        -- Unknown status omits the flag; heuristic status projects to false.
+        -- The record-level marker retains the exact signal in both cases.
         Json.mkObj ([
           ("type", Json.str "tool_result"),
           ("tool_use_id", Json.str (callRefToolUseId t call).get!)] ++
@@ -4657,14 +4686,27 @@ private def cToolCanonicalJson (pairs : List (Nat × CanonicalTool)) : Json :=
     ("block", Json.num (Lean.JsonNumber.fromNat blockIdx)),
     ("canonical", Json.str (cCanonicalToolName canonical))])).toArray
 
+private def cEntryToolErrors (t : Transcript) (entry : Entry) : List Json :=
+  match entry.payload with
+  | .envMsg blocks => blocks.zipIdx.filterMap (fun (block, index) =>
+      match block with
+      | .toolResult _ _ (.native _) => none
+      | .toolResult _ _ signal =>
+          if cToolResultAtIsNative t block then some (Json.mkObj [
+            ("block", Json.num index), ("errorSignal", cErrorSignalJson signal)])
+          else none
+      | _ => none)
+  | _ => []
+
 private def cCarrierMarker
     (indices : List Nat) (rawEnvelope : Option Json := none)
     (identityProvenance : Option Json := none)
     (timeProvenance : Option Json := none)
     (toolCanonical : List (Nat × CanonicalTool) := [])
-    (toolTranslation : List Json := []) : Option Json :=
+    (toolTranslation : List Json := []) (toolErrors : List Json := []) : Option Json :=
   if indices.isEmpty && rawEnvelope.isNone && identityProvenance.isNone &&
-      timeProvenance.isNone && toolCanonical.isEmpty && toolTranslation.isEmpty then none else
+      timeProvenance.isNone && toolCanonical.isEmpty && toolTranslation.isEmpty &&
+      toolErrors.isEmpty then none else
     some (Json.mkObj ([
       ("protocol", Json.str claudeCarrierProtocol)] ++
       (if indices.isEmpty then [] else [
@@ -4674,6 +4716,8 @@ private def cCarrierMarker
         ("toolCanonical", cToolCanonicalJson toolCanonical)]) ++
       (if toolTranslation.isEmpty then [] else [
         ("toolTranslation", Json.arr toolTranslation.toArray)]) ++
+      (if toolErrors.isEmpty then [] else [
+        ("toolResultErrors", Json.arr toolErrors.toArray)]) ++
       (match rawEnvelope with
        | some raw => [("provenance", Json.mkObj [
            ("carrier", Json.str "agent-convert.claude-envelope-provenance.v1"),
@@ -4696,9 +4740,9 @@ private def cCarrierTopLevelStampWithRaw
     (identityProvenance : Option Json := none)
     (timeProvenance : Option Json := none)
     (toolCanonical : List (Nat × CanonicalTool) := [])
-    (toolTranslation : List Json := []) : List (String × Json) :=
+    (toolTranslation : List Json := []) (toolErrors : List Json := []) : List (String × Json) :=
   match cCarrierMarker indices rawEnvelope identityProvenance timeProvenance
-      toolCanonical toolTranslation with
+      toolCanonical toolTranslation toolErrors with
   | some marker => [(claudeCarrierMarkerKey, marker)]
   | none => []
 
@@ -4802,7 +4846,7 @@ private def cClaudeEntryToJson
   let render := fun (provenanceRaw : Option Json) =>
     let ordinaryStamp := stamp ++
       cCarrierTopLevelStampWithRaw carrierIndices provenanceRaw
-        identityProvenance timeProvenance toolCanonical toolTranslation
+        identityProvenance timeProvenance toolCanonical toolTranslation (cEntryToolErrors t e)
     if cEntryNeedsWholeHistoricalCarrier t i e carrierIndices then
       match e.payload with
       | Payload.compaction summary coverage tokensBefore =>
@@ -5787,7 +5831,8 @@ private def cTranslatedBashRestored (expected : String) (text : String) : Bool :
       (match transcript.entries[1]? with
        | some entry => match entry.payload with
          | .envMsg [
-             .toolResult (.resolved 0 0) [.text "command-result"] (.native false)] =>
+             .toolResult (.resolved 0 0) [.text "command-result"]
+               (.heuristic false "Codex result fixture")] =>
              true
          | _ => false
        | _ => false) &&
