@@ -34,6 +34,7 @@ structure CliOptions where
   /-- `none` = default policy (`resolveWithSubagents`); `some` = explicit flag. -/
   withSubagents : Option Bool := none
   json         : Bool := false
+  allowEmptyDialogue : Bool := false
   cwd          : Option String := none
   provider     : Option String := none
   model        : Option String := none
@@ -63,6 +64,7 @@ private def parseCli (args : List String) : Except String (CliOptions × List St
     | "--with-subagents" :: rest => loop rest { opts with withSubagents := some true } positional
     | "--no-subagents" :: rest => loop rest { opts with withSubagents := some false } positional
     | "--json" :: rest => loop rest { opts with json := true } positional
+    | "--allow-empty-dialogue" :: rest => loop rest { opts with allowEmptyDialogue := true } positional
     | "--cwd" :: value :: rest => loop rest { opts with cwd := some value } positional
     | "--target-cwd" :: value :: rest => loop rest { opts with cwd := some value } positional
     | "--provider" :: value :: rest => loop rest { opts with provider := some value } positional
@@ -211,6 +213,7 @@ private def applyCliOverrides (toFmt : String) (opts : CliOptions)
   let origin := if toFmt == "pi" then
       applyTargetExtra origin "pi_assistant_history" opts.piAssistantHistory
     else origin
+  let origin := setOriginExtra origin "allow_empty_dialogue" (Lean.Json.bool opts.allowEmptyDialogue)
   { t with origin }
 
 private def cliTargetOptionsPreserveSourceEnvironment : Bool :=
@@ -757,6 +760,8 @@ private def transcriptSummaryJson
     ("exportObligationCount", Lean.Json.num exportObligations.length),
     ("exportObligations", Lean.Json.arr exportObligationJsons),
     ("activeContext", Lean.Json.bool (transcriptUsesActiveContext source)),
+    ("allowEmptyDialogue", (source.origin.extras >>= fun extras =>
+      (extras.getObjVal? "allow_empty_dialogue").toOption).getD (Lean.Json.bool false)),
     ("excludedSourceRecords", Lean.Json.num excludedRecords),
     ("activeContextCompactionBoundaries", Lean.Json.arr activeBoundaries),
     ("retainedContexts", (source.origin.extras >>= fun extras =>
@@ -942,6 +947,49 @@ def preCompactionHistoryBlocker? (toFmt : String) (t : Transcript) : Option Stri
       else none
   | none => none
 
+/-- Only an actual native user text turn supplies a continuation request. Tool
+results, archived carriers, and empty or whitespace-only text do not qualify. -/
+def dialogueUserTurn (entry : Entry) : Bool :=
+  entry.disposition == .native && match entry.payload with
+  | .userMsg blocks => blocks.any (fun block => match block with
+      | .text text =>
+          let text := text.trimAscii.toString
+          !text.isEmpty && !text.startsWith "[Historical " &&
+            !text.startsWith "[historical "
+      | _ => false)
+  | _ => false
+
+/-- Independent of the importer and its checkpoint policy: an exported active
+window must include a real user request unless the caller explicitly opts out. -/
+def continuationContextBlocker? (toFmt : String) (t : Transcript) : Option String :=
+  if toFmt == "loom" || t.entries.any dialogueUserTurn then none else
+  let source := formatToWireString t.origin.format
+  let version := t.env.harnessVersion.getD "unknown version"
+  let retained := (t.origin.extras >>= fun extras =>
+    (extras.getObjVal? "retained_contexts" >>= Lean.Json.getArr?).toOption).getD #[]
+  let fields := retained.toList.flatMap (fun context => match context with
+    | .obj values => values.toList.map (·.1)
+    | _ => []) |>.eraseDups
+  some s!"'{toFmt}' session would contain no user message; the resumed model has no request to continue. Source: {source} {version}; checkpoints: {transcriptCompactionEventCount t}; retained-context fields: {fields}. Use --allow-empty-dialogue for a deliberate tool-only archive."
+
+private def continuationContextGuardPinned : Bool := Id.run do
+  let user : Entry := {
+    payload := .userMsg [.text "Continue the task"]
+    origin := summaryCodexHistoricalOrigin }
+  let empty := summaryCodexHistoricalFixture
+  let valid := { empty with entries := #[user] }
+  let carrier := { user with payload := .userMsg [.text "[Historical tool result from source transcript]"] }
+  return dialogueUserTurn user &&
+    !dialogueUserTurn { user with disposition := .historicalUnverified } &&
+    !dialogueUserTurn { user with payload := .userMsg [.text "  \n "] } &&
+    !dialogueUserTurn carrier &&
+    ["claude", "pi", "codex", "cursor-agent", "opencode"].all (fun target =>
+      (continuationContextBlocker? target empty).isSome &&
+      (continuationContextBlocker? target valid).isNone) &&
+    (continuationContextBlocker? "loom" empty).isNone
+
+example : continuationContextGuardPinned = true := by native_decide
+
 private def transcriptMentions (t : Transcript) (needle : String) : Bool :=
   t.entries.any (fun e => match e.payload with
     | .userMsg blocks => blocks.any (fun b => match b with
@@ -1027,6 +1075,10 @@ def runConvert (fromFmt toFmt inp : String) (outp : Option String)
     if let some blocker := preCompactionHistoryBlocker? toFmt source then
       IO.eprintln s!"export error: {blocker}"
       return 3
+    if !opts.allowEmptyDialogue then
+      if let some blocker := continuationContextBlocker? toFmt source then
+        IO.eprintln s!"export error: {blocker}"
+        return 3
     let sourceVs := violations source
     if sourceVs.length > 0 then
       IO.eprintln s!"export error: source imported to a malformed IR ({sourceVs.length} violations) — refusing to export"
@@ -1091,6 +1143,10 @@ private def runCursorIde (db composerId toFmt : String) (outp : Option String)
   | .error error => IO.eprintln s!"import error: {error}"; pure 2
   | .ok imported =>
       let source := applyCliOverrides toFmt opts imported
+      if !opts.allowEmptyDialogue then
+        if let some blocker := continuationContextBlocker? toFmt source then
+          IO.eprintln s!"export error: {blocker}"
+          return 3
       match runPipeline "cursor-ide" toFmt source with
       | .error error => IO.eprintln s!"export error: {error}"; pure 3
       | .ok output =>
@@ -1709,6 +1765,7 @@ def usage : String :=
   "  --target-cwd <dir>  --target-provider <name>  --target-model <name>\n" ++
   "  --target-session-id <id>  --target-timestamp <iso>\n" ++
   "  --with-subagents | --no-subagents  --json\n"
+  ++ "  --allow-empty-dialogue  permit deliberate tool-only continuation archives\n"
 
 def main (args : List String) : IO UInt32 := do
   let (opts, pos) ← match parseCli args with

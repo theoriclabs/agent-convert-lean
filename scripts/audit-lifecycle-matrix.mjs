@@ -3522,6 +3522,9 @@ async function runMatrix(paths) {
       sourceArtifact.path,
       artifactPath,
       ...targetLaunchArgs(target, cell),
+      // These deliberately tool-only fixtures test lifecycle representation.
+      // User-request continuity is checked separately by the CLI guard tests.
+      "--allow-empty-dialogue",
       "--json",
     ];
     writeFileSync(commandPath, canonicalJson({

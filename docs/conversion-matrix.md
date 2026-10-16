@@ -47,6 +47,11 @@ subject to validation and is not necessarily a byte-for-byte file copy.
 `gais` is also accepted as an explicit source alias for `google-ai-studio`.
 Bare-ID discovery covers Claude Code, Codex, and Pi; use paths for other sources.
 
+Continuation exports require at least one native user text turn in the active
+window. `--allow-empty-dialogue` permits deliberate tool-only archives and is
+recorded as `allowEmptyDialogue` in `--json` output. The `loom` archive target is
+exempt from this guard.
+
 ## How each target represents history
 
 | Target | Tool-history representation | Output / next step | Important limits |

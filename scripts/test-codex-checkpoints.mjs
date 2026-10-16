@@ -12,15 +12,15 @@ const loom = resolve(process.env.LOOM_BIN || join(root, '.lake/build/bin/loom'))
 const scratch = mkdtempSync(join(tmpdir(), 'loom-checkpoints-'));
 const source = readFileSync(join(root, 'testdata/codex/0.162.1/compacted-rollout.jsonl'), 'utf8');
 let sequence = 0;
-function convert(rows, target = 'loom', expectedStatus = 0) {
+function convert(rows, target = 'loom', expectedStatus = 0, flags = []) {
   const input = join(scratch, `source-${sequence}.jsonl`);
   const output = join(scratch, `archive-${sequence++}.json`);
   writeFileSync(input, rows.map(JSON.stringify).join('\n') + '\n');
-  const run = spawnSync(loom, ['convert', input, target, output, '--no-subagents', '--json'], { encoding: 'utf8' });
+  const run = spawnSync(loom, ['convert', input, target, output, '--no-subagents', '--json', ...flags], { encoding: 'utf8' });
   assert.equal(run.status, expectedStatus, run.stderr);
   if (expectedStatus !== 0) {
     assert.equal(existsSync(output), false, 'invalid checkpoint wrote an artifact');
-    return;
+    return { stderr: run.stderr };
   }
   return { artifact: target === 'loom' ? JSON.parse(readFileSync(output, 'utf8')) :
     readFileSync(output, 'utf8').trim().split('\n').map(JSON.parse),
@@ -48,6 +48,19 @@ try {
   assert.equal(dialogue.some(t => t.includes('OLD-PRECOMPACTION')), false);
   assert.deepEqual(retained.summary.retainedContexts, [checkpoint.payload.retained_context]);
   assert.equal(retained.summary.activeContextCompactionBoundaries[0].retainedMessageCount, 3);
+  assert.equal(retained.summary.allowEmptyDialogue, false);
+  const empty = structuredClone(rows);
+  delete empty.find(r => r.type === 'compacted').payload.retained_context;
+  for (const target of ['claude', 'pi', 'codex', 'cursor-agent', 'opencode']) {
+    const refused = convert(empty, target, 3);
+    assert.match(refused.stderr, /session would contain no user message/);
+    assert.match(refused.stderr, /0\.162\.1; checkpoints: 1/);
+  }
+  convert(empty, 'loom');
+  assert.equal(convert(empty, 'claude', 0, ['--allow-empty-dialogue']).summary.allowEmptyDialogue, true);
+  const onlyTools = rows.filter(r => r.type === 'session_meta' ||
+    ['custom_tool_call', 'custom_tool_call_output'].includes(r.payload?.type));
+  assert.match(convert(onlyTools, 'claude', 3).stderr, /checkpoints: 0/);
   for (const mutate of [
     p => { p.retained_context.user_messages[0].order = 'first'; },
     p => { p.retained_context.user_messages[0].order = 2; },

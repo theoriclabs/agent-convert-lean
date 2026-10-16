@@ -7,6 +7,10 @@ lands; move them into a dated version section when publishing a release.
 
 ### Fixed
 
+- Refuse continuation exports whose active window has no native user text turn.
+  Report source/checkpoint context and support an explicit, JSON-reported
+  `--allow-empty-dialogue` override for deliberate tool-only archives
+  ([#20](https://github.com/theoriclabs/agent-convert-lean/issues/20)).
 - Restore Codex checkpoint `retained_context` dialogue in source order, with exact
   message identities and metadata. Preserve retention flags and verified answers
   in archive provenance and JSON reports; refuse ambiguous retained message data
