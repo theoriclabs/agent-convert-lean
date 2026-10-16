@@ -42,3 +42,16 @@ its semantic shape is valid. Add a synthetic version directory and review its
 shape before advancing a baseline. The fixture check refuses both unacknowledged
 new directories and baseline bumps without fixtures. Cursor Agent has no release
 version in the reviewed native corpus, so its shared hook has no baseline yet.
+
+`node scripts/check-codex-corpus.mjs` checks the synthetic 0.144.1, 0.153.0,
+and 0.162.1 compacted rollouts. It verifies full archival checkpoints, active
+window bounds, retained user dialogue, native tool history, successful exec
+status, and the same behavior with default and disabled subagent stitching.
+The 0.162 fixture includes unsigned replacement history, retained context,
+notes tools with opaque output, and structured completion events. The checker
+also rejects mutations reproducing the reported failures. `recordIndex` is the
+zero-based index after the session header; the recorded source `ordinal` is
+checked separately in exact boundary provenance. Use `--report <path>` to keep
+the fixture hashes and results. The repository CI workflow runs this checker in
+`scripts/verify-local.sh` alongside the route and lifecycle checks. These are
+artifact checks; signed-in harness continuation is a separate release gate.

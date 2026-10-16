@@ -7,6 +7,10 @@ lands; move them into a dated version section when publishing a release.
 
 ### Fixed
 
+- Add a CI corpus gate for compacted Codex 0.144.1, 0.153.0, and 0.162.1
+  rollouts. Check active-window size, retained dialogue, native tool history,
+  status, both subagent policies, and mutations of the reported regressions
+  ([#27](https://github.com/theoriclabs/agent-convert-lean/issues/27)).
 - Warn when a recorded source version exceeds its reviewed fixture baseline,
   with a typed import note and `sourceVersionBeyondReviewed` JSON evidence.
   Compare semantic versions and check fixture directories against the single

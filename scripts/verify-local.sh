@@ -44,6 +44,7 @@ node scripts/test-codex-call-ids.mjs
 node scripts/test-claude-exec-history.mjs
 node scripts/test-claude-notes-history.mjs
 node scripts/test-codex-checkpoints.mjs
+node scripts/check-codex-corpus.mjs
 node scripts/test-codex-exec-status.mjs
 node scripts/test-codex-item-completed.mjs
 node scripts/test-claude-event-batch.mjs

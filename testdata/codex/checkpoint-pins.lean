@@ -25,7 +25,7 @@ private def retainedDialogueImported : Bool :=
   match importCodexCliActive (include_str "0.162.1/compacted-rollout.jsonl") with
   | .error _ => false
   | .ok t =>
-      t.entries.size == 6 &&
+      t.entries.size == 8 &&
       t.entries[0]?.any (fun e => (match e.payload with | .userMsg [.text text] => text == "RETAINED-USER Build the task viewer." | _ => false) &&
         e.origin.rawId == some "msg_01" && e.time == .absent) &&
       t.entries[1]?.any (fun e => (match e.payload with | .assistantMsg [.text text] => text == "RETAINED-ASSISTANT The task viewer renders correctly." | _ => false) &&

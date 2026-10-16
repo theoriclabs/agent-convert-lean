@@ -33,3 +33,9 @@ unambiguous enclosing `exec` call in the same recorded turn.
 `scripts/test-claude-event-batch.mjs` checks the same fixture's three exact
 completion records in one provenance header, event order and graph restoration,
 malformed batches, appended native turns, and the provenance byte budget.
+
+`scripts/check-codex-corpus.mjs` runs every version's compacted rollout through
+both the archive and Claude continuation paths, with both subagent policies.
+The latest fixture combines retained context, notes tools, opaque output,
+exec status, and completion mirrors in twelve records. CI runs this corpus and
+its negative mutations through `scripts/verify-local.sh`.
