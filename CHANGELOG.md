@@ -16,6 +16,10 @@ lands; move them into a dated version section when publishing a release.
 
 ### Fixed
 
+- Give foreign OpenCode exports stable source-specific session IDs and scope
+  all message, part, metadata, and attachment IDs to the selected target session.
+  Refuse invalid explicit session IDs instead of using a shared fallback (#5).
+
 - Add a CI corpus gate for compacted Codex 0.144.1, 0.153.0, and 0.162.1
   rollouts. Check active-window size, retained dialogue, native tool history,
   status, both subagent policies, and mutations of the reported regressions

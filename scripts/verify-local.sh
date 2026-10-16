@@ -46,6 +46,7 @@ node scripts/test-claude-notes-history.mjs
 node scripts/test-claude-reasoning.mjs
 node scripts/test-compaction-context.mjs
 node scripts/test-claude-mixed-blocks.mjs
+node scripts/test-opencode-store.mjs
 node scripts/test-codex-checkpoints.mjs
 node scripts/check-codex-corpus.mjs
 node scripts/test-codex-exec-status.mjs

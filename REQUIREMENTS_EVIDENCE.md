@@ -675,6 +675,16 @@ support for future block types.
 The real compacted artifact still contained 36 native call/result pairs and
 167 records; its source bytes were unchanged. This was an artifact check.
 
+The #5 OpenCode isolation check imported four synthetic conversions into an
+empty temporary OpenCode 1.1.34 store on 2026-10-16: two distinct foreign UUIDs
+with default IDs, and two distinct explicit target IDs. After all imports, the
+actual CLI exporter returned each session's own text, image, and successful
+tool-result attachment. `scripts/test-opencode-store.mjs` checks disjoint part
+keys and rejects malformed explicit IDs before publication. Set `OPENCODE_BIN`
+to the pinned binary to repeat the isolated target check; the ordinary local
+suite checks artifacts only. This is a storage test without provider execution;
+the chronological-order correction is tracked separately in #6.
+
 ### Requirements verdict
 
 The requirements case describes an experimental developer-preview candidate

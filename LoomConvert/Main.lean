@@ -1556,6 +1556,7 @@ private def smartTargetOptions (toFmt : String) (source : Transcript)
       codexExcludeSlashTmp := continuation.codexExcludeSlashTmp.orElse (fun _ => some true)
       codexSummary := continuation.codexSummary.orElse (fun _ => some "auto") }
   | "opencode" => { continuation with
+      sessionId := opts.sessionId.orElse (fun _ => some (openCodeDefaultSessionId source))
       provider := continuation.provider.orElse (fun _ => some "openai")
       model := continuation.model.orElse (fun _ => some "gpt-5")
       harnessVersion := continuation.harnessVersion.orElse

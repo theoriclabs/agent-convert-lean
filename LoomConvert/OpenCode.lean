@@ -417,8 +417,45 @@ private def callAt? (t : Transcript) (entry block : Nat) : Option AssistantBlock
   | .assistantMsg blocks => blocks[block]?
   | _ => none
 
+private def targetString (t : Transcript) (key : String) : Option String := do
+  let extras ← t.origin.extras
+  let value ← (extras.getObjVal? key >>= Json.getStr?).toOption
+  if value.isEmpty then none else some value
+
+/-- IDs are also storage path components. OpenCode accepts the prefix alone,
+but an explicitly selected target must have a nonempty, path-safe suffix. -/
+private def validSessionId (value : String) : Bool :=
+  value.startsWith "ses_" && value.length > 4 && value.toList.all (fun c =>
+    c.isAlphanum && c.toNat < 128 || c == '_' || c == '-')
+
+private def sessionFingerprint (material : String) : String :=
+  let upper := (String.hash ("agent-convert.opencode.session.a|" ++ material)).toNat
+  let lower := (String.hash ("agent-convert.opencode.session.b|" ++ material)).toNat
+  let digits := Nat.toDigits 16 (upper * (2 ^ 64) + lower)
+  String.ofList (List.replicate (32 - digits.length) '0' ++ digits)
+
+/-- Preserve a native identity; bind foreign defaults to source format and
+session identity, falling back to the source artifact when no ID was recorded. -/
+def openCodeDefaultSessionId (t : Transcript) : String :=
+  match t.env.sessionId with
+  | some native =>
+      if t.origin.format == .openCode && validSessionId native then native
+      else "ses_loom_" ++ sessionFingerprint (reprStr t.origin.format ++ "|" ++ native)
+  | none => "ses_loom_" ++ sessionFingerprint (reprStr t.origin.format ++ "|" ++
+      t.origin.rawId.getD ((exportLoomWireJson
+        { t with origin := { t.origin with extras := none } }).compress))
+
+private def exportSessionId (t : Transcript) : String :=
+  (targetString t "target_session_id").getD (openCodeDefaultSessionId t)
+
 def openCodeTargetExportPrerequisiteFailures (t : Transcript) : List String := Id.run do
   let mut failures : List String := []
+  match t.origin.extras.bind (fun extras => (extras.getObjVal? "target_session_id").toOption) with
+  | none | some .null => pure ()
+  | some (.str value) =>
+      if !validSessionId value then
+        failures := ["invalid --target-session-id: OpenCode requires 'ses_' followed by ASCII letters, digits, '_' or '-'"]
+  | some _ => failures := ["invalid OpenCode target_session_id: expected a string"]
   for (entry, entryIndex) in t.entries.toList.zipIdx do
     if entry.disposition == .historicalUnverified then
       failures := failures ++ [s!"entry {entryIndex}: historical/unverified entries have no reviewed OpenCode inert carrier"]
@@ -467,18 +504,6 @@ private def resultFor? (t : Transcript) (entry block : Nat) : Option OCResult :=
             if e == entry && b == block then some { content, error } else none
         | _ => none
     | _ => none
-
-private def targetString (t : Transcript) (key : String) : Option String := do
-  let extras ← t.origin.extras
-  let value ← (extras.getObjVal? key >>= Json.getStr?).toOption
-  if value.isEmpty then none else some value
-
-private def validSessionId (value : String) : Bool := value.startsWith "ses"
-
-private def exportSessionId (t : Transcript) : String :=
-  match targetString t "target_session_id" <|> t.env.sessionId with
-  | some value => if validSessionId value then value else "ses_loom_converted"
-  | none => "ses_loom_converted"
 
 private def exportTimestamp (base : Nat) (entry : Entry) (ordinal : Nat) : Nat :=
   match entry.time with
@@ -530,7 +555,7 @@ private def attachEntryMetadata (sessionId messageId : String) (entry : Entry)
         parts.set! 0 (addSourceMetadata first entry)
       else
         let carrier := Json.mkObj [
-          ("id", .str s!"prt_loom_{entryIndex}_meta"),
+          ("id", .str s!"prt_loom_{sessionId}_{entryIndex}_meta"),
           ("sessionID", .str sessionId), ("messageID", .str messageId),
           ("type", .str "text"), ("text", .str ""),
           ("synthetic", .bool true), ("ignored", .bool true)]
@@ -560,26 +585,26 @@ private def contentAttachments (sessionId messageId baseId : String)
 private def userBlockPart (sessionId messageId : String)
     (entryIndex blockIndex : Nat) : UserBlock → Json
   | .text value => Json.mkObj (ocPartBase sessionId messageId
-      s!"prt_loom_{entryIndex}_{blockIndex}" "text" ++ [("text", .str value)])
+      s!"prt_loom_{sessionId}_{entryIndex}_{blockIndex}" "text" ++ [("text", .str value)])
   | .media mime url => attachmentJson sessionId messageId
-      s!"prt_loom_{entryIndex}_{blockIndex}" mime url
+      s!"prt_loom_{sessionId}_{entryIndex}_{blockIndex}" mime url
   | .unmodeled _ raw => raw
 
 private def assistantBlockPart (t : Transcript) (sessionId messageId : String)
     (entry : Entry) (entryIndex blockIndex created : Nat) : AssistantBlock → Json
   | .text value => Json.mkObj (ocPartBase sessionId messageId
-      s!"prt_loom_{entryIndex}_{blockIndex}" "text" ++ [("text", .str value)])
+      s!"prt_loom_{sessionId}_{entryIndex}_{blockIndex}" "text" ++ [("text", .str value)])
   | .thinking value signature =>
       let raw := Json.mkObj (ocPartBase sessionId messageId
-        s!"prt_loom_{entryIndex}_{blockIndex}" "reasoning" ++ [
+        s!"prt_loom_{sessionId}_{entryIndex}_{blockIndex}" "reasoning" ++ [
           ("text", .str value), ("time", Json.mkObj [("start", .num created)])])
       match signature with
       | some sig => addSourceMetadata raw entry [("reasoningSignature", .str sig)]
       | none => raw
   | .media mime url => attachmentJson sessionId messageId
-      s!"prt_loom_{entryIndex}_{blockIndex}" mime url
+      s!"prt_loom_{sessionId}_{entryIndex}_{blockIndex}" mime url
   | .toolCall name args rawId =>
-      let partId := s!"prt_loom_{entryIndex}_{blockIndex}"
+      let partId := s!"prt_loom_{sessionId}_{entryIndex}_{blockIndex}"
       let callId := match rawId with
         | some value => if value.isEmpty then s!"call_loom_{entryIndex}_{blockIndex}" else value
         | none => s!"call_loom_{entryIndex}_{blockIndex}"
@@ -637,7 +662,7 @@ private def mkAssistantInfo (sessionId messageId parentId provider model agent c
 
 private def eventMessage (sessionId messageId provider model agent : String)
     (entry : Entry) (entryIndex created : Nat) (event : MetaEvent) : Json :=
-  let part := Json.mkObj (ocPartBase sessionId messageId s!"prt_loom_{entryIndex}_0" "text" ++ [
+  let part := Json.mkObj (ocPartBase sessionId messageId s!"prt_loom_{sessionId}_{entryIndex}_0" "text" ++ [
     ("text", .str ""), ("synthetic", .bool true), ("ignored", .bool true)])
   let part := addSourceMetadata part entry [("kind", .str "event"), ("event", eventToCarrier event)]
   Json.mkObj [
@@ -658,17 +683,17 @@ def exportOpenCodeChecked (t : Transcript) : Except String String := do
     (fun timestamp => timestamp.ms) |>.getD 0
   let agent := "build"
   let mut messages : Array Json := #[]
-  let mut lastMessageId := "msg_loom_root"
+  let mut lastMessageId := s!"msg_loom_{sessionId}_root"
   let mut usedInstructions := false
   for (entry, entryIndex) in t.entries.toList.zipIdx do
     let created := exportTimestamp targetBase entry entryIndex
-    let messageId := s!"msg_loom_{entryIndex}"
+    let messageId := s!"msg_loom_{sessionId}_{entryIndex}"
     match entry.payload with
     | .userMsg blocks =>
         let mut parts := (blocks.zipIdx.map (fun (block, blockIndex) =>
           userBlockPart sessionId messageId entryIndex blockIndex block)).toArray
         if parts.isEmpty then
-          parts := #[Json.mkObj (ocPartBase sessionId messageId s!"prt_loom_{entryIndex}_0" "text" ++ [("text", .str "")])]
+          parts := #[Json.mkObj (ocPartBase sessionId messageId s!"prt_loom_{sessionId}_{entryIndex}_0" "text" ++ [("text", .str "")])]
         parts := attachEntryMetadata sessionId messageId entry entryIndex parts
         let system := if usedInstructions then none else t.env.instructions
         if system.isSome then usedInstructions := true
@@ -680,7 +705,7 @@ def exportOpenCodeChecked (t : Transcript) : Except String String := do
         let mut parts := (blocks.zipIdx.map (fun (block, blockIndex) =>
           assistantBlockPart t sessionId messageId entry entryIndex blockIndex created block)).toArray
         if parts.isEmpty then
-          parts := #[Json.mkObj (ocPartBase sessionId messageId s!"prt_loom_{entryIndex}_0" "text" ++ [("text", .str "")])]
+          parts := #[Json.mkObj (ocPartBase sessionId messageId s!"prt_loom_{sessionId}_{entryIndex}_0" "text" ++ [("text", .str "")])]
         parts := attachEntryMetadata sessionId messageId entry entryIndex parts
         messages := messages.push (Json.mkObj [
           ("info", mkAssistantInfo sessionId messageId lastMessageId provider model agent cwd created),
@@ -688,14 +713,14 @@ def exportOpenCodeChecked (t : Transcript) : Except String String := do
         lastMessageId := messageId
     | .envMsg _ => pure ()
     | .compaction summary _ _ =>
-        let requestId := s!"msg_loom_{entryIndex}_compact"
+        let requestId := s!"msg_loom_{sessionId}_{entryIndex}_compact"
         let requestPart := Json.mkObj (ocPartBase sessionId requestId
-          s!"prt_loom_{entryIndex}_compact" "compaction" ++ [("auto", .bool false)])
+          s!"prt_loom_{sessionId}_{entryIndex}_compact" "compaction" ++ [("auto", .bool false)])
         messages := messages.push (Json.mkObj [
           ("info", mkUserInfo sessionId requestId provider model agent created),
           ("parts", .arr #[requestPart])])
         let summaryPart := addSourceMetadata (Json.mkObj (ocPartBase sessionId messageId
-          s!"prt_loom_{entryIndex}_0" "text" ++ [("text", .str summary)])) entry
+          s!"prt_loom_{sessionId}_{entryIndex}_0" "text" ++ [("text", .str summary)])) entry
         messages := messages.push (Json.mkObj [
           ("info", mkAssistantInfo sessionId messageId requestId provider model agent cwd created true),
           ("parts", .arr #[summaryPart])])
