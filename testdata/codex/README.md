@@ -20,3 +20,7 @@ the Claude exec-history regression covers that case.
 `0.162.1/exec-status.jsonl` reproduces success output containing timeout/limit
 text alongside a runner failure. `scripts/test-codex-exec-status.mjs` checks
 native Claude result flags without executing any recorded command.
+
+`0.162.1/notes-tool.jsonl` contains a synthetic namespaced notes call and an
+encrypted result. `scripts/test-claude-notes-history.mjs` checks raw-name native
+history and exact source-namespace metadata without executing source tools.

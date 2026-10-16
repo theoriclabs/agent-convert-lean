@@ -2009,11 +2009,41 @@ function validateClaudeTimeProvenance(value, context) {
 
 function validateClaudeMarker(marker, content, rowType, context) {
   invariant(exactOptionalKeys(marker, ["protocol"], ["contentBlocks", "identityProvenance",
-    "inertPayload", "provenance", "timeProvenance"]) &&
+    "inertPayload", "provenance", "timeProvenance", "toolCanonical", "toolTranslation", "toolResultErrors"]) &&
     marker.protocol === CLAUDE_PROTOCOL, `${context}: invalid Claude marker`);
   invariant(rowType === "system" ? hasOwn(marker, "inertPayload") &&
     !hasOwn(marker, "contentBlocks") : !hasOwn(marker, "inertPayload"),
   `${context}: Claude marker fields disagree with the row type`);
+  for (const key of ["toolCanonical", "toolTranslation", "toolResultErrors"]) {
+    if (!hasOwn(marker, key)) continue;
+    invariant(Array.isArray(marker[key]) && marker[key].length > 0 &&
+      new Set(marker[key].map(value => value.block)).size === marker[key].length,
+      `${context}: invalid ${key} indices`);
+    for (const value of marker[key]) {
+      const block = content[value.block];
+      invariant(Number.isSafeInteger(value.block) && value.block >= 0 &&
+        block?.type === (key === "toolResultErrors" ? "tool_result" : "tool_use"),
+        `${context}: ${key} must address a matching native block`);
+      if (key === "toolTranslation") {
+        invariant(exactOptionalKeys(value, ["block", "sourceFormat", "sourceInput", "sourceName"],
+          ["sourceNamespace"]) && nonemptyString(value.sourceFormat) && nonemptyString(value.sourceName) &&
+          (!hasOwn(value, "sourceNamespace") || typeof value.sourceNamespace === "string"),
+          `${context}: invalid tool translation provenance`);
+      } else if (key === "toolCanonical") {
+        invariant(exactKeys(value, ["block", "canonical"]) &&
+          ["bash", "read", "write", "edit", "grep", "glob", "webFetch", "webSearch", "agentSpawn", "applyPatch"].includes(value.canonical),
+          `${context}: invalid canonical tool provenance`);
+      } else {
+        invariant(exactKeys(value, ["block", "errorSignal"]), `${context}: invalid result error provenance`);
+        validateClaudeHistoricalError(value.errorSignal, context);
+        const signal = value.errorSignal;
+        const flag = signal.kind === "unrecorded" ? null
+          : signal.kind === "heuristic" ? false : signal.isError;
+        invariant(flag === (hasOwn(block, "is_error") ? block.is_error : null),
+          `${context}: error provenance contradicts native flag`);
+      }
+    }
+  }
   if (hasOwn(marker, "contentBlocks")) {
     invariant(Array.isArray(marker.contentBlocks) &&
       marker.contentBlocks.every(Number.isInteger) &&
@@ -2119,11 +2149,10 @@ function validateClaudeTargetEnvelope(rows, expected, context) {
           `${context}: row ${index + 1} invalid native Claude tool_use`);
         } else if (block?.type === "tool_result") {
           invariant(row.type === "user" &&
-            exactOptionalKeys(block, ["content", "is_error", "tool_use_id", "type"],
-              ["isError"]) &&
+            exactOptionalKeys(block, ["content", "tool_use_id", "type"], ["is_error"]) &&
             nonemptyString(block.tool_use_id) &&
             (typeof block.content === "string" || Array.isArray(block.content)) &&
-            typeof (block.is_error ?? block.isError ?? false) === "boolean",
+            (!hasOwn(block, "is_error") || typeof block.is_error === "boolean"),
           `${context}: row ${index + 1} invalid native Claude tool_result`);
         } else {
           throw new AuditError(

@@ -1321,6 +1321,9 @@ private def cCarrierToolTranslation? (j : Json) : Option (List Json) := do
         let sourceName ← cstr value "sourceName"
         guard (!sourceFormat.isEmpty && !sourceName.isEmpty)
         let _ ← cobj value "sourceInput"
+        match cobj value "sourceNamespace" with
+        | none | some (.str _) => pure ()
+        | _ => none
         pure value)
   | some _ => none
 
@@ -4262,9 +4265,8 @@ private def cJsonOnlyKeys (args : Json) (allowed : List String) : Bool :=
   | Json.obj fields => fields.toList.all (fun pair => allowed.contains pair.1)
   | _ => false
 
-/-- Reviewed physical Codex schemas. This is deliberately narrower than
-guessing from familiar-looking names: an unreviewed source schema is carried,
-not partially projected into an executable target call. -/
+/-- Reviewed physical Codex schemas eligible for semantic translation. Other
+valid call shapes retain their source name and arguments in native history. -/
 private def cCodexObservedCanonical? (name : String) (args : Json) : Option CanonicalTool :=
   match name with
   | "exec_command" =>
@@ -4276,23 +4278,22 @@ private def cClaudeTargetToolAt?
     (t : Transcript) (entryIdx : Nat) (name : ToolName) (args : Json) :
     Option ClaudeTargetTool := do
   let entry ← t.entries[entryIdx]?
-  if entry.origin.format == Format.claudeCode then
-    guard (cClaudeToolNameValid name.raw && cJsonIsObject args)
-    pure { name := name.raw, input := args, canonical := name.canonical }
+  let rawNative := if cClaudeToolNameValid name.raw && cJsonIsObject args then
+      some { name := name.raw, input := args, canonical := name.canonical : ClaudeTargetTool }
+    else none
+  if entry.origin.format == Format.claudeCode then rawNative
   else if entry.origin.format == Format.codexCli && name.raw == "exec" then
-    let source ← cstr args "input"
-    match cCodexWrappedExec? source with
+    match cstr args "input" >>= cCodexWrappedExec? with
     | some wrapped =>
         let input := cClaudeBashInput wrapped.command wrapped.cwd
         pure { name := "Bash", input, canonical := some .bash }
-    | none =>
-        pure { name := name.raw, input := args, canonical := name.canonical }
+    | none => rawNative
   else
-    let canonical ← name.canonical.orElse (fun _ =>
+    let canonical := name.canonical.orElse (fun _ =>
       if entry.origin.format == Format.codexCli then
         cCodexObservedCanonical? name.raw args
       else none)
-    cCanonicalClaudeTool? canonical args
+    (canonical >>= fun value => cCanonicalClaudeTool? value args).orElse (fun _ => rawNative)
 
 private def cNativeResultContentValid (content : List UserBlock) : Bool :=
   content.all (fun block => match block with
@@ -4572,11 +4573,15 @@ private def cEntryToolTranslation
         match block with
         | .toolCall name args rawId =>
             if cNativeClaudeCallAt t entryIdx blockIdx name args rawId then
-              some (Json.mkObj [
+              some (Json.mkObj ([
                 ("block", Json.num (Lean.JsonNumber.fromNat blockIdx)),
                 ("sourceFormat", Json.str (cToolSourceFormatName entry.origin.format)),
                 ("sourceName", Json.str name.raw),
-                ("sourceInput", args)])
+                ("sourceInput", args)] ++
+                (match entry.origin.extras >>= (fun extras => cobj extras "raw_native_tool_record")
+                    >>= (fun record => cobj record "payload") >>= (fun payload => cstr payload "namespace") with
+                 | some sourceNamespace => [("sourceNamespace", Json.str sourceNamespace)]
+                 | none => [])))
             else none
         | _ => none)
     | _ => []
@@ -5770,27 +5775,22 @@ private def cRawToolUseRestored (text : String) : Bool :=
       | none => false
   | .error _ => false
 
-/-- Native lifecycle output depends on target capability, semantic identity,
-and structural validity. A foreign raw name with no reviewed meaning is not a
-Claude capability merely because it matches Claude's identifier grammar.
+/-- Typed completed lifecycles with valid native shapes retain raw tool names
+when there is no semantic translation. This records past execution without
+registering the source tool as a callable tool in Claude.
 
-An unknown Pi call therefore stays a reversible carrier. Reviewed canonical
-calls and recognized source-tool mappings are tested separately below; those
-are the calls that make a converted session resumable (`LoomOps.Interop`, P1).
-
-Raw lifecycle-SHAPED open-world blocks stay carriers: an `.unmodeled` blob
-must never be promoted to executable state merely because its JSON resembles a
-tool call. That distinction is structural, not provenance-based. -/
+Raw lifecycle-shaped open-world blocks stay inert: unmodeled JSON is never
+promoted to a tool call merely because it resembles one. -/
 def claudeNativeRegistryPolicyChecked : Bool :=
   let crossExport := cExportClaudeFixture claudeCrossFormatClosedToolFixture
   let mixedOrigin := { claudeCrossFormatClosedToolFixture with
     origin := { format := .claudeCode, sourceRef := "mixed-origin-tool-fixture" } }
   let mixedExport := cExportClaudeFixture mixedOrigin
   let rawExport := cExportClaudeFixture claudeRawToolUseFixture
-  !cContains crossExport "\"type\":\"tool_use\"" &&
-  !cContains crossExport "\"type\":\"tool_result\"" &&
-  !cContains mixedExport "\"type\":\"tool_use\"" &&
-  !cContains mixedExport "\"type\":\"tool_result\"" &&
+  cContains crossExport "\"type\":\"tool_use\"" &&
+  cContains crossExport "\"type\":\"tool_result\"" &&
+  cContains mixedExport "\"type\":\"tool_use\"" &&
+  cContains mixedExport "\"type\":\"tool_result\"" &&
   cContains crossExport ("\"" ++ claudeCarrierMarkerKey ++ "\"") &&
   cContains mixedExport ("\"" ++ claudeCarrierMarkerKey ++ "\"") &&
   !cContains rawExport "\"type\":\"tool_use\"" &&
@@ -5836,6 +5836,9 @@ private def cTranslatedBashRestored (expected : String) (text : String) : Bool :
        | _ => false) &&
       exportClaudeCode transcript == text
   | .error _ => false
+
+example : claudeToolCallEmitsNativeAt (cCodexClosedToolFixture "read_file"
+    "call_notes" (Json.mkObj [("path", Json.str "priority")])) 0 0 = true := by native_decide
 
 /-- Continuation fidelity for the Codex orchestration boundary:
 

@@ -7,6 +7,10 @@ lands; move them into a dated version section when publishing a release.
 
 ### Fixed
 
+- Keep valid completed source tools as raw-name native Claude history when no
+  semantic translation exists. Preserve Codex notes/history tool namespaces and
+  exact source arguments in reversible metadata
+  ([#16](https://github.com/theoriclabs/agent-convert-lean/issues/16)).
 - Refuse contradictory continuation error flags before publication, naming the
   source entry, call id, and successful status evidence. Inner command failures
   remain valid under an outer successful runner. Pi and OpenCode now preserve
