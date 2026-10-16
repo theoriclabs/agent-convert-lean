@@ -79,10 +79,11 @@ cd <project> && claude -p --resume <uuid> "Reply RESUME-OK"   # then delete the 
 A converted Claude session whose size is a large fraction of the rollout, or
 whose entry count tracks the rollout's record count, is this bug returning.
 
-## Known pre-existing failures (not caused by the above)
+## Requirements regression checks
 
-As of 2026-09-04 `lake build LoomRequirements` fails on the baseline in three
-`native_decide` proofs: `environmentLossPolicyPinned`,
-`previewRequiredSuccessesPass`, and `previewRequiredRefusalsPass` (the
-`claude-refuses-wrong-target-reader-version` row expects
-`target_harness_version must be '2.1.216'`). `lake build loom` is green.
+`lake build LoomRequirements` is required and runs in `scripts/verify-local.sh`.
+The three former failures were repaired on 2026-10-15: the Claude validation
+version agrees with the adapter, the refusal check follows that version, and
+the preview witness checks native `Bash` translation plus exact source-call
+provenance. Keep these checks enabled; passing them does not establish live
+harness continuation or complete the external release qualification.

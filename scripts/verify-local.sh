@@ -17,7 +17,7 @@ trap 'rm -rf "$scratch"' EXIT
 export LOOM_BIN="$ROOT/.lake/build/bin/loom"
 
 echo "== product build and Lean smoke checks =="
-lake build loom LoomOps
+lake build loom LoomOps LoomRequirements
 lake env lean smoke.lean
 lake env lean convert_smoke.lean
 

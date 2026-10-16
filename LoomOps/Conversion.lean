@@ -755,7 +755,7 @@ private def codexCarriesSourceEnvironment (t : Transcript) : Bool :=
 validated. This policy constant is cross-pinned to the adapter constant in the
 requirements proofs, avoiding a dependency from conversion policy back into an
 exporter. -/
-def claudeTargetHarnessVersion : String := "2.1.216"
+def claudeTargetHarnessVersion : String := "2.1.251"
 
 private def jsonNullableStringField (value : Lean.Json) (key : String) : Bool :=
   match value.getObjVal? key with

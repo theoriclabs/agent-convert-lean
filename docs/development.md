@@ -40,7 +40,7 @@ With Lean/Lake, Node, Python 3, and `sqlite3` on PATH:
 scripts/verify-local.sh
 ```
 
-This builds `loom` and `LoomOps`, runs the two Lean smoke programs, tests
+This builds `loom`, `LoomOps`, and `LoomRequirements`, runs the two Lean smoke programs, tests
 publication rollback and wire mutations, exercises native tool history and
 Cursor store recovery using synthetic data, and checks audit harnesses, route
 inventory, and release metadata. No authenticated model requests are made.
@@ -62,9 +62,8 @@ checks. It is not the local development entry point. The viewer has its own
 
 ## Validation gaps and remaining structure work
 
-The full `lake build LoomRequirements` gate has known failing requirements pins
-documented in [CLAUDE.md](../CLAUDE.md). Keep this distinct from the product
-build. The lifecycle audit's identity validator also uses an exact key whitelist
+The full `lake build LoomRequirements` gate passes and is included in local
+verification. The lifecycle audit's identity validator still uses an exact key whitelist
 that rejects the CLI's additive `compilerVersion` and `capabilities` fields;
 its self-tests passing does not mean its 8-by-5 product audit passes.
 

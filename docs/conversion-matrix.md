@@ -127,8 +127,8 @@ round-trips is not native-history fidelity. See [product intent](../INTENT.md).
   The synthetic live probe passed on Claude Code 2.1.263 on 2026-09-07,
   including exact empty-output recall. This is not a claim about every tool
   schema or unresolved lifecycle.
-- **Remaining suite failures:** the full requirements build retains the three
-  pre-existing failures recorded in [CLAUDE.md](../CLAUDE.md). Keep known failures
+- **Requirements checks:** the full requirements build now passes and runs in
+  `scripts/verify-local.sh`. Keep known validation gaps
   and vendor versions visible when adding new test results.
 
 For a newly verified route, record the source variant, target version, content

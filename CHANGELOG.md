@@ -5,6 +5,12 @@ lands; move them into a dated version section when publishing a release.
 
 ## [Unreleased]
 
+### Fixed
+
+- Repair all three failing requirements proofs: align the Claude validation
+  version, follow it in refusal checks, and verify native tool translation with
+  exact source-call provenance. Include `LoomRequirements` in local verification.
+
 ## [0.2.0-preview.4] - 2026-10-15
 
 ### Added

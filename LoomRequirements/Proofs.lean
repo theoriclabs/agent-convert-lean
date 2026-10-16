@@ -1341,11 +1341,15 @@ downgrade native source events to historical state, but may never reactivate a
 historical event. Refusal is not success. -/
 private def requiredConversionSucceeds
     (fromFmt target : String) (source : Except String Transcript)
-    (exactDisposition : Bool := false) : Bool :=
+    (exactDisposition : Bool := false)
+    (expectedNative : Option Transcript := none) : Bool :=
   match source with
   | .error _ => false
   | .ok imported =>
       let prepared := targetReady target imported
+      -- A fixture may state an independent expected native tool translation.
+      -- All other content, linkage, timing and environment checks still apply.
+      let expected := targetReady target (expectedNative.getD imported)
       (violations prepared).isEmpty &&
         (exportBlocker? target prepared).isNone &&
         match runPipeline fromFmt target prepared with
@@ -1354,14 +1358,14 @@ private def requiredConversionSucceeds
             match importByFormat target exported with
             | .error _ => false
             | .ok restored =>
-                let sourceEvents := continuationEvents? prepared
+                let sourceEvents := continuationEvents? expected
                 let restoredEvents := restoredContinuationEvents? target prepared restored
                 let targetFormat := (formatByCliName? target).getD
                   (Format.other target)
                 (violations restored).isEmpty &&
                   (if target == "loom" then
                     auditProjection prepared == auditProjection restored
-                   else targetStateRelation targetFormat target prepared restored) &&
+                   else targetStateRelation targetFormat target expected restored) &&
                   (sourceEvents.bind fun source => restoredEvents.map fun targetEvents =>
                     historicalDispositionDoesNotUpgrade source targetEvents &&
                       -- `exactDisposition` cells (same-format, and every
@@ -2583,6 +2587,36 @@ unsupported environment fields. -/
 private def previewCursorAgentContinuationFixture : String :=
   String.intercalate "\n" ((cursorAgentFixture.splitOn "\n").take 2)
 
+/-- The preview fixture's recorded `exec_command {cmd: "pwd"}` has the native
+Claude spelling `Bash {command: "pwd"}`. State that expectation independently
+of the exporter and require the exact source call in its translation metadata.
+This does not normalize arbitrary tool names or arguments out of comparisons. -/
+private def previewCodexClaudeTranslationSucceeds
+    (source : Except String Transcript) : Bool := Id.run do
+  let .ok imported := source | return false
+  let sourceArgs := Lean.Json.mkObj [("cmd", Lean.Json.str "pwd")]
+  let targetArgs := Lean.Json.mkObj [("command", Lean.Json.str "pwd")]
+  let expected := { imported with entries := imported.entries.map fun entry =>
+    match entry.payload with
+    | .assistantMsg blocks => { entry with payload := .assistantMsg (blocks.map fun
+        | .toolCall name args id =>
+            if name.raw == "exec_command" && args == sourceArgs then
+              .toolCall { raw := "Bash", canonical := some .bash } targetArgs id
+            else .toolCall name args id
+        | block => block) }
+    | _ => entry }
+  let prepared := targetReady "claude" imported
+  let .ok exported := runPipeline "codex" "claude" prepared | return false
+  let provenance := Lean.Json.mkObj [
+    ("block", Lean.Json.num 0), ("sourceFormat", Lean.Json.str "codex"),
+    ("sourceName", Lean.Json.str "exec_command"), ("sourceInput", sourceArgs)]
+  let sourceRetained := (exported.splitOn "\n").any fun line =>
+    ((Lean.Json.parse line >>= fun row => row.getObjVal? "_agent_convert" >>=
+      fun marker => marker.getObjVal? "toolTranslation" >>= Lean.Json.getArr?).toOption)
+      |>.any (fun translations => translations.contains provenance)
+  return sourceRetained && requiredConversionSucceeds "codex" "claude" source
+    false (some expected)
+
 def previewRequiredSuccessMatrix : List (String × Bool) :=
   let pi := importPi fix1
   let claude := importClaudeCode claudeFixture
@@ -2603,7 +2637,7 @@ def previewRequiredSuccessMatrix : List (String × Bool) :=
     ("claude-to-codex",
       requiredConversionSucceeds "claude" "codex" previewClaude),
     ("codex-to-claude",
-      requiredConversionSucceeds "codex" "claude" previewCodex),
+      previewCodexClaudeTranslationSucceeds previewCodex),
     ("pi-to-pi", requiredConversionSucceeds "pi" "pi" pi true),
     ("claude-to-claude",
       requiredConversionSucceeds "claude" "claude" previewClaude true),
@@ -2651,7 +2685,7 @@ def previewRequiredRefusalMatrix : List (String × Bool) :=
           (targetReady "pi" { source with activeLeaf := none })).isSome),
     ("claude-refuses-wrong-target-reader-version",
       (exportBlocker? "claude" wrongClaudeVersion).any (fun error =>
-        error.contains "target_harness_version must be '2.1.216'")),
+        error.contains s!"target_harness_version must be '{claudeTargetValidationBuild}'")),
     -- The "cursor-refuses-unpreserved-nonrecorded-time" row was removed
     -- 2026-07-27. `Interop.knownLosses` now classifies `dropTimeProvenance`
     -- `.reportable`: what is at risk is a NON-recorded time — `.absent`,
