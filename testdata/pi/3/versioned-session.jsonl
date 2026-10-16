@@ -1,0 +1,2 @@
+{"type":"session","version":3,"id":"90000000-0000-4000-8000-000000000026","timestamp":"2026-10-10T00:00:00.000Z","cwd":"/tmp/loom-reviewed-version"}
+{"type":"message","id":"reviewed-user","parentId":null,"timestamp":"2026-10-10T00:00:01.000Z","message":{"role":"user","timestamp":1791590401000,"content":[{"type":"text","text":"Keep this reviewed conversation."}]}}

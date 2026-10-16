@@ -740,6 +740,8 @@ private def transcriptSummaryJson
     ("provider", source.env.provider.map Lean.Json.str |>.getD Lean.Json.null),
     ("harnessVersion",
       source.env.harnessVersion.map Lean.Json.str |>.getD Lean.Json.null),
+    ("sourceVersionBeyondReviewed", (source.origin.extras >>= fun extras =>
+      (extras.getObjVal? "source_version_beyond_reviewed").toOption).getD Lean.Json.null),
     ("targetSessionId", (targetOptionString emitted "target_session_id").map
       Lean.Json.str |>.getD Lean.Json.null),
     ("targetCwd", (targetOptionString emitted "target_cwd").map
@@ -1101,7 +1103,8 @@ def runConvert (fromFmt toFmt inp : String) (outp : Option String)
   | .ok t0 =>
     for note in t0.importNotes do
       if note.kind == .other "cursorIdeTranscriptRecoveryUnavailable" ||
-          note.kind == .other "codex-unconsumed-checkpoint-content" then
+          note.kind == .other "codex-unconsumed-checkpoint-content" ||
+          note.kind == .other "source-version-beyond-reviewed" then
         IO.eprintln s!"warning: {note.detail}"
     let t0 := if opts.tsParity && fromFmt == "codex" then codexTsParity t0 else t0
     let source := applyCliOverrides toFmt opts t0

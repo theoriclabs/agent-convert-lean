@@ -1,4 +1,5 @@
 import Loom
+import LoomConvert.SourceVersion
 
 /-!
 # LoomConvert.Pi — the pi importer/exporter (role-content-sum IR)
@@ -3148,7 +3149,7 @@ def importPi (text : String) : Except String Transcript := do
            (piSourceEnvironmentExtraKey, piSourceEnvironmentJson source)]
        | none => []))
     let activeLeaf := if entries.isEmpty then none else some (entries.length - 1)
-    pure {
+    pure (reviewSourceVersion .pi ((onat hj "version").map toString) {
       threads := #[{ kind := .main }],
       entries := entries.toArray,
       env := { cwd := some parsedHeader.cwd, sessionId := some parsedHeader.id },
@@ -3157,7 +3158,7 @@ def importPi (text : String) : Except String Transcript := do
         resultNotes,
       origin := { format := .pi, sourceRef := "importPi", rawId := some parsedHeader.id,
                   extras := some headerExtras }
-    }
+    })
 
 private def piValidateTimestampValue (ctx value : String) : Except String Unit :=
   if (iso8601ToEpochMs? value).isSome then pure ()

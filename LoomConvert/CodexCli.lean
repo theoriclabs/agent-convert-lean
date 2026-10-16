@@ -1,4 +1,5 @@
 import Loom
+import LoomConvert.SourceVersion
 import LoomConvert.Parity
 import LoomConvert.Hermes
 import LoomConvert.CursorIde
@@ -2775,7 +2776,11 @@ private def buildCodexTranscript (mp : Json) (records : List Json)
         kind := .activeLeafGuessed, loc := some s!"entry{leaf}",
         detail := "Codex records a linear rollout but no active-leaf field; selected the final materialized entry" }]
     | none => []
-  { threads := #[{ kind := .main }],
+  let observedVersions := (ostr mp "cli_version").toList ++ originalRecords.filterMap (fun record =>
+    if ostr record "type" == some "session_meta" then oobj record "payload" >>= fun payload => ostr payload "cli_version"
+    else none)
+  reviewSourceVersion .codexCli (latestSourceVersion observedVersions) {
+    threads := #[{ kind := .main }],
     entries := entries,
     env := sourceEnv,
     activeLeaf := activeLeaf,

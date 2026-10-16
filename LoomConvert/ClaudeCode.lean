@@ -1,4 +1,5 @@
 import Loom
+import LoomConvert.SourceVersion
 import LoomConvert.Parity
 import LoomOps.Conversion
 
@@ -3403,11 +3404,12 @@ def importClaudeCode (text : String) : Except String Transcript := do
     -- Retargeted artifacts restore the inert source env; native sessions keep the
     -- physical record identity as their env. The target launch identity is always
     -- the physical records (`cwd`/`sid`), carried in `origin.extras` when retargeted.
+    let observedVersion := latestSourceVersion (physical.filterMap (fun record => cstr record "version"))
     let env : EnvInfo := match sourceEnv? with
       | some sourceEnv => sourceEnv
-      | none => { cwd := cwd, sessionId := sid }
+      | none => { cwd := cwd, sessionId := sid, harnessVersion := observedVersion }
     let physicalTimestamp := stamped.bind (fun record => cstr record "timestamp")
-    pure {
+    pure (reviewSourceVersion .claudeCode observedVersion {
       threads := #[{ kind := ThreadKind.main }],
       entries := entries.toArray,
       env := env,
@@ -3418,7 +3420,7 @@ def importClaudeCode (text : String) : Except String Transcript := do
                   extras := cTranscriptExtras archivedControls archivedRecords
                     (lastPrompt.map (fun pair => pair.1.1)) sourceEnv?
                     sourceEnvCarrier? cwd sid physicalTimestamp }
-    }
+    })
 
 /-! ## Target policy: Codex tools are historical in Claude
 

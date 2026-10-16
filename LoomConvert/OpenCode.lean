@@ -1,4 +1,5 @@
 import Loom
+import LoomConvert.SourceVersion
 import LoomConvert.Wire
 
 /-!
@@ -380,7 +381,7 @@ def importOpenCode (text : String) : Except String Transcript := do
       ocError (msgCtx ++ ".info") s!"unsupported role '{role}'"
 
   let activeLeaf := if entries.isEmpty then none else some (entries.size - 1)
-  pure {
+  pure (reviewSourceVersion .openCode (some version) {
     threads := #[{ kind := .main }]
     entries
     env := {
@@ -399,7 +400,7 @@ def importOpenCode (text : String) : Except String Transcript := do
       rawId := some sessionId
       extras := some (Json.mkObj [("opencodeRawInfo", info)])
     }
-  }
+  })
 
 private def isObject : Json → Bool
   | .obj _ => true

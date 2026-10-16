@@ -12,7 +12,8 @@ Before publishing:
 2. Move the relevant `Unreleased` entries into a dated version section; keep
    `Unreleased` for subsequent work. Update the changelog's release/compare links.
 3. Run `node scripts/release-notes.mjs --check`, the conversion-matrix inventory
-   check, and relevant builds and regressions. Record known failures rather
+   check, `node scripts/check-reviewed-versions.mjs`, and relevant builds and
+   regressions. Record known failures rather
    than presenting a prerelease as fully validated.
 4. Commit the release metadata. Run `bash scripts/build-release.sh` from that
    clean tracked revision. It builds an archive of committed source and stamps
@@ -32,3 +33,12 @@ an npm release or completion of the historical qualification process in
 
 The first release is `v0.2.0-preview.1`. Later work starts in `Unreleased` and
 uses a new version; published notes and assets should not be silently replaced.
+
+Source-version review is separate from target-harness qualification.
+`LoomConvert/SourceVersion.lean` records the newest reviewed fixture version for
+Codex, Claude, OpenCode, and Pi's numeric file schema. A newer source produces a
+warning and `sourceVersionBeyondReviewed` evidence; it remains importable when
+its semantic shape is valid. Add a synthetic version directory and review its
+shape before advancing a baseline. The fixture check refuses both unacknowledged
+new directories and baseline bumps without fixtures. Cursor Agent has no release
+version in the reviewed native corpus, so its shared hook has no baseline yet.

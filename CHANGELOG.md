@@ -7,6 +7,11 @@ lands; move them into a dated version section when publishing a release.
 
 ### Fixed
 
+- Warn when a recorded source version exceeds its reviewed fixture baseline,
+  with a typed import note and `sourceVersionBeyondReviewed` JSON evidence.
+  Compare semantic versions and check fixture directories against the single
+  baseline table during verification
+  ([#26](https://github.com/theoriclabs/agent-convert-lean/issues/26)).
 - Batch Claude event and archive provenance into one header, retaining event
   positions, exact Codex completion records, and original graph links for
   re-import. Keep events out of the physical conversation chain. Report

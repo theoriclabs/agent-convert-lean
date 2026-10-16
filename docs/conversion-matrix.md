@@ -47,6 +47,12 @@ subject to validation and is not necessarily a byte-for-byte file copy.
 `gais` is also accepted as an explicit source alias for `google-ai-studio`.
 Bare-ID discovery covers Claude Code, Codex, and Pi; use paths for other sources.
 
+Recorded versions newer than `reviewedSourceVersion` produce an import warning
+and `sourceVersionBeyondReviewed: {observed, reviewed}` in conversion JSON.
+Versioned fixtures define the baseline; this warning does not reject otherwise
+valid open-world records. Pi records a schema number, while the reviewed Cursor
+Agent corpus has no release-version baseline.
+
 Codex `item_completed` events that exactly mirror adjacent dialogue are retained
 in entry provenance without duplicating conversation. Unambiguous same-turn
 `exec` command completions supply structured result status. Other reviewed

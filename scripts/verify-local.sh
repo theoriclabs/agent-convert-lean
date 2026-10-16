@@ -47,6 +47,7 @@ node scripts/test-codex-checkpoints.mjs
 node scripts/test-codex-exec-status.mjs
 node scripts/test-codex-item-completed.mjs
 node scripts/test-claude-event-batch.mjs
+node scripts/test-source-version.mjs
 python3 scripts/test-claude-task-notifications.py
 python3 scripts/test-cursor-ide-transcript.py
 
@@ -59,6 +60,7 @@ node scripts/audit-lifecycle-matrix.mjs --loom "$LOOM_BIN" \
 
 echo "== route and release metadata =="
 node scripts/check-conversion-matrix.mjs
+node scripts/check-reviewed-versions.mjs
 node scripts/release-notes.mjs --check
 
 echo "repository-local verification passed"

@@ -59,6 +59,7 @@ LOOM_BIN="$LOOM_BIN" python3 "$LOOM_ROOT/scripts/test-cursor-ide-transcript.py"
 LOOM_BIN="$LOOM_BIN" node "$LOOM_ROOT/scripts/test-codex-call-ids.mjs"
 LOOM_BIN="$LOOM_BIN" node "$LOOM_ROOT/scripts/test-claude-exec-history.mjs"
 node "$LOOM_ROOT/scripts/check-conversion-matrix.mjs"
+node "$LOOM_ROOT/scripts/check-reviewed-versions.mjs"
 node "$LOOM_ROOT/scripts/release-notes.mjs" --check
 SUBAGENT_SKIP_RUNTIME_FINGERPRINT=1 node --test \
   test/codexAdapter.d13-dedup.test.mjs \

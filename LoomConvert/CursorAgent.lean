@@ -1,4 +1,5 @@
 import Loom
+import LoomConvert.SourceVersion
 import LoomConvert.Parity
 
 /-!
@@ -771,14 +772,16 @@ def importCursorAgent (text : String) : Except String Transcript := do
     notes := notes.push {
       kind := .activeLeafGuessed, loc := some s!"entry{leaf}",
       detail := "cursor-agent records no active selection; selected the final linear entry by file order" }
-  pure {
+  let observedVersion := latestSourceVersion (jsons.filterMap (fun (record, _) =>
+    ostr record "version" <|> ostr record "cli_version"))
+  pure (reviewSourceVersion .cursorAgent observedVersion {
     threads     := #[{ kind := .main }],
     entries     := entries,
     env         := { cwd := none },
     activeLeaf  := activeLeaf,
     importNotes := notes.toList,
     origin      := { format := .cursorAgent, sourceRef := "importCursorAgent", rawId := none }
-  }
+  })
 
 /-! ## Actuator: the only IO. -/
 
