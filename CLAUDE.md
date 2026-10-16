@@ -47,7 +47,8 @@ them, never weaken them:
 
 1. `codexImportMode`: every continuation target (`claude`, `pi`, `codex`,
    `cursor-agent`, `opencode`) imports the context Codex itself would resume —
-   the latest compaction's `replacement_history` plus everything after it.
+   the latest compaction's `replacement_history`, ordered `retained_context`
+   dialogue, and everything after it.
    Only the `loom` archive target imports the full stream. This is a property
    of the target alone. It must never depend on subagent policy or any other
    CLI flag.

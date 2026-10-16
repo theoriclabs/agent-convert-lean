@@ -7,6 +7,10 @@ lands; move them into a dated version section when publishing a release.
 
 ### Fixed
 
+- Restore Codex checkpoint `retained_context` dialogue in source order, with exact
+  message identities and metadata. Preserve retention flags and verified answers
+  in archive provenance and JSON reports; refuse ambiguous retained message data
+  ([#19](https://github.com/theoriclabs/agent-convert-lean/issues/19)).
 - Repair all three failing requirements proofs: align the Claude validation
   version, follow it in refusal checks, and verify native tool translation with
   exact source-call provenance. Include `LoomRequirements` in local verification.

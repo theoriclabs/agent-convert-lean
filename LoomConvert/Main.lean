@@ -645,7 +645,8 @@ private def activeContextBoundarySummary (boundary : Lean.Json) : Lean.Json :=
     ("excludedRecordCount", value "excluded_record_count"),
     ("retainedPrefixTurnContextCount",
       value "retained_prefix_turn_context_count"),
-    ("replacementHistoryCount", value "replacement_history_count")]
+    ("replacementHistoryCount", value "replacement_history_count"),
+    ("retainedMessageCount", value "retained_message_count")]
 
 private def targetOptionString (t : Transcript) (key : String) : Option String :=
   t.origin.extras >>= fun extras =>
@@ -758,6 +759,8 @@ private def transcriptSummaryJson
     ("activeContext", Lean.Json.bool (transcriptUsesActiveContext source)),
     ("excludedSourceRecords", Lean.Json.num excludedRecords),
     ("activeContextCompactionBoundaries", Lean.Json.arr activeBoundaries),
+    ("retainedContexts", (source.origin.extras >>= fun extras =>
+      (extras.getObjVal? "retained_contexts").toOption).getD (Lean.Json.arr #[])),
     ("thinkingBlocksImported", Lean.Json.num thinking),
     ("reasoningBlocksImported", Lean.Json.num thinking),
     ("compactionEvents", Lean.Json.num (transcriptCompactionEventCount source)),

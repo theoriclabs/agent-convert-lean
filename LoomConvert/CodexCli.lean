@@ -737,17 +737,52 @@ private def codexCompactedRecordShapeValid (record : Json) : Bool :=
      | none => true
      | some _ => (parseCodexTimeProvenance? record).isSome)
 
+/-- Retained messages have their own chronology and identity, independent of the
+checkpoint timestamp. Keep the complete source object, including future fields. -/
+private structure CodexRetainedMessage where
+  assistant : Bool
+  order : Nat
+  messageId : String
+  text : String
+  raw : Json
+
+private def codexRetainedMessage? (assistant : Bool) (raw : Json) : Option CodexRetainedMessage := do
+  let order ← (oobj raw "order") >>= (·.getNat?.toOption)
+  let messageId ← ostr raw "message_id"
+  guard (!messageId.isEmpty)
+  let _ ← ostr raw "turn_id"
+  let _ ← ostr raw "revision"
+  let text ← ostr raw "text"
+  pure { assistant, order, messageId, text, raw }
+
+private def codexRetainedMessages? (payload : Json) : Option (Array CodexRetainedMessage) := do
+  match oobj payload "retained_context" with
+  | none | some Json.null => pure #[]
+  | some retained =>
+      let users ← oarr retained "user_messages"
+      let assistants ← oarr retained "assistant_messages"
+      let userMessages ← users.mapM (codexRetainedMessage? false)
+      let assistantMessages ← assistants.mapM (codexRetainedMessage? true)
+      let messages := userMessages ++ assistantMessages
+      -- A duplicate position or identity makes the resume chronology ambiguous.
+      let orders := messages.toList.map (·.order)
+      let ids := messages.toList.map (·.messageId)
+      guard (orders.eraseDups.length == orders.length && ids.eraseDups.length == ids.length)
+      pure (messages.toList.mergeSort (fun a b => a.order ≤ b.order)).toArray
+
 /-- The one checked checkpoint view used by full import, active import, boundary
 reporting, and native replay validation. Unknown bookkeeping keys stay in raw. -/
 private structure CodexCheckpoint where
   summary : String
   replacementHistory : Array Json
+  retainedMessages : Array CodexRetainedMessage
 
 private def codexCheckpoint? (record : Json) : Option CodexCheckpoint := do
   guard (codexCompactedRecordShapeValid record)
   let payload ← oobj record "payload"
   pure { summary := ← ostr payload "message"
-         replacementHistory := ← oarr payload "replacement_history" }
+         replacementHistory := ← oarr payload "replacement_history"
+         retainedMessages := ← codexRetainedMessages? payload }
 
 private def codexCompactedRecordValid (record : Json) : Bool :=
   (codexCheckpoint? record).isSome
@@ -918,6 +953,7 @@ private structure Kept where
   /-- Exact native call/output response record. Export may reuse it only while
   target provenance, typed projection, and linked lifecycle all still agree. -/
   nativeToolRaw : Option Json := none
+  retainedMessage : Option Json := none
 
 /-- Build an `ImportNote` carrying a record-index locator. -/
 private def mkNote (k : AssumptionKind) (i : Nat) (d : String) : ImportNote :=
@@ -1498,7 +1534,8 @@ private def optionalCodexEncryptedContent? (payload : Json) : Option (Option Str
 /-- Fold the post-`session_meta` records into a kept list + the import-note
 trace, applying the cross-channel dedup. Pure: argument-JSON parse failures are
 absorbed (matching the TS try/catch), so no `Except` is needed here. -/
-private def adaptRecords (records : List Json) (carrierSessionSelfIdentified : Bool) :
+private def adaptRecords (records : List Json) (carrierSessionSelfIdentified : Bool)
+    (activeContext : Bool := false) :
     Array Kept × Array ImportNote × Array Json × Array Json × Array Json ×
       Array CodexSessionBoundary := Id.run do
   let mut kept : Array Kept := #[]
@@ -1529,8 +1566,16 @@ private def adaptRecords (records : List Json) (carrierSessionSelfIdentified : B
       lastChannel := ""
     else if ty == "compacted" then
       if let some checkpoint := codexCheckpoint? j then
-        kept := kept.push { (mkKept (.kcompaction checkpoint.summary) ts .assistant "" none) with
-          nativeCompactionRaw := some j }
+        if activeContext then
+          for message in checkpoint.retainedMessages do
+            let role := if message.assistant then Role.assistant else Role.user
+            let payload := if message.assistant then KPayload.kassistant [.text message.text]
+              else KPayload.kuser [.text message.text]
+            kept := kept.push { (mkKept payload none role message.text none) with
+              retainedMessage := some message.raw }
+        else
+          kept := kept.push { (mkKept (.kcompaction checkpoint.summary) ts .assistant "" none) with
+            nativeCompactionRaw := some j }
         lastChannel := "compacted"
       else
         archived := archived.push j
@@ -1957,7 +2002,8 @@ private def adaptRecords (records : List Json) (carrierSessionSelfIdentified : B
         s!"Unknown Codex top-level record type '{ty}' retained outside dialogue")
     if kept.size > keptBefore then
       kept := kept.modify (kept.size - 1) (fun entry =>
-        { entry with timeProvenance := timeProvenance })
+        if entry.retainedMessage.isSome then entry
+        else { entry with timeProvenance := timeProvenance })
     idx := idx + 1
   return (kept, notes, controls, generatedControls, archived, boundaries)
 
@@ -2097,6 +2143,10 @@ private def buildEntries (kept : Array Kept) : Array Entry :=
         | none => []) ++
       (match k.nativeToolRaw with
         | some raw => [(codexNativeToolRawRecordKey, raw)]
+        | none => []) ++
+      (match k.retainedMessage with
+        | some raw => [("codex_retained_message", raw)] ++
+            ["order", "turn_id", "revision"].filterMap (fun key => (oobj raw key).map (key, ·))
         | none => [])
     ({ parent := if i == 0 then none else some (i - 1),
        thread := 0,
@@ -2107,7 +2157,7 @@ private def buildEntries (kept : Array Kept) : Array Entry :=
                    sourceRef := (if k.historicalCarrier then "historical-carrier-entry"
                                  else if k.envelopeEligible then "fnout-entry"
                                  else "entry") ++ toString i,
-                   rawId := none,
+                   rawId := k.retainedMessage >>= (fun raw => ostr raw "message_id"),
                    extras := if originExtras.isEmpty then none
                      else some (Json.mkObj originExtras) },
        disposition := if k.historicalCarrier then .historicalUnverified
@@ -2148,7 +2198,11 @@ private def applyLatestCompactionSegment (records : List Json) :
                   ("timestamp", Json.str ts), ("payload", item)])
     let preHead := (records.take lastIdx).filter (fun r =>
       ostr r "type" == some "turn_context")
-    pure (preHead ++ synthetic ++ records.drop (lastIdx + 1))
+    -- Pass the checked source checkpoint itself to the active fold. Retained
+    -- dialogue is not a synthetic Responses record or a user-spoofable marker.
+    let retained := if (codexCheckpoint? compacted).any (fun c => !c.retainedMessages.isEmpty)
+      then [compacted] else []
+    pure (preHead ++ synthetic ++ retained ++ records.drop (lastIdx + 1))
 
 /-- Apply compaction independently inside each accepted session segment. A
 header is a hard semantic boundary: a replacement history in one segment cannot
@@ -2196,6 +2250,7 @@ private def codexActiveCompactionBoundary? (segment segmentStart : Nat)
       ((records.take lastIdx).countP (fun record =>
         ostr record "type" == some "turn_context"))),
     ("replacement_history_count", Json.num replacementCount),
+    ("retained_message_count", Json.num checkpoint.retainedMessages.size),
     ("boundary_record", compacted),
     ("excluded_records", Json.arr excluded.toArray)]
   pure (boundary, excluded.length)
@@ -2393,7 +2448,7 @@ private def buildCodexTranscript (mp : Json) (records : List Json)
   let carrierSession := codexCarrierSessionSelfIdentified mp
   let sourceArchive := parseCodexSourceArchive? mp
   let (kept, notes, controls, generatedControls, archived, boundaries) :=
-    adaptRecords records carrierSession
+    adaptRecords records carrierSession activeContext
   let sourceSessionPayload := sourceArchive.map (·.sourceSessionPayload) |>.getD mp
   let sourceIdentity := codexSourceIdentityJson sourceSessionPayload
   let headerEnv : EnvInfo := {
@@ -2427,6 +2482,9 @@ private def buildCodexTranscript (mp : Json) (records : List Json)
         ("session_timestamp", Json.str ((ostr mp "timestamp").getD "")),
         ("compaction_events", Json.num compactionRecords.size),
         ("raw_compaction_records", Json.arr compactionRecords),
+        ("retained_contexts", Json.arr (compactionRecords.filterMap (fun record => do
+          let payload ← oobj record "payload"
+          oobj payload "retained_context"))),
         ("active_context", Json.bool activeContext),
         ("carrier_session_self_identified", Json.bool carrierSession),
         ("raw_session_meta_payload", sourceSessionPayload),

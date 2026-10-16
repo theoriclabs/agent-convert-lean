@@ -20,3 +20,18 @@ private def checkpointImportsAgree (source : String) : Bool :=
 example : checkpointImportsAgree (include_str "0.144.1/compacted-rollout.jsonl") = true := by native_decide
 example : checkpointImportsAgree (include_str "0.153.0/compacted-rollout.jsonl") = true := by native_decide
 example : checkpointImportsAgree (include_str "0.162.1/compacted-rollout.jsonl") = true := by native_decide
+
+private def retainedDialogueImported : Bool :=
+  match importCodexCliActive (include_str "0.162.1/compacted-rollout.jsonl") with
+  | .error _ => false
+  | .ok t =>
+      t.entries.size == 6 &&
+      t.entries[0]?.any (fun e => (match e.payload with | .userMsg [.text text] => text == "RETAINED-USER Build the task viewer." | _ => false) &&
+        e.origin.rawId == some "msg_01" && e.time == .absent) &&
+      t.entries[1]?.any (fun e => (match e.payload with | .assistantMsg [.text text] => text == "RETAINED-ASSISTANT The task viewer renders correctly." | _ => false) &&
+        e.origin.rawId == some "msg_03") &&
+      t.entries[2]?.any (fun e => (match e.payload with | .userMsg [.text text] => text == "RETAINED-USER Deploy only to the synthetic preview." | _ => false) &&
+        e.origin.rawId == some "msg_02") &&
+      (t.entries.filter (fun e => match e.payload with | .userMsg _ => true | _ => false)).size == 2
+
+example : retainedDialogueImported = true := by native_decide

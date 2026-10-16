@@ -35,6 +35,31 @@ try {
   assert.equal(malformedCount(imported), 0, 'unsigned 0.162 checkpoint must be accepted');
   assert.equal(imported.entries.filter(e => e.payload.type === 'compaction').length, 1);
   assert.deepEqual(imported.origin.extras.raw_compaction_records, [checkpoint]);
+  assert.deepEqual(imported.origin.extras.retained_contexts, [checkpoint.payload.retained_context]);
+  const retained = convert(rows, 'claude');
+  const dialogue = retained.artifact.filter(r => ['user', 'assistant'].includes(r.type))
+    .flatMap(r => (Array.isArray(r.message.content) ? r.message.content : [])
+      .filter(b => b.type === 'text').map(b => b.text));
+  assert.deepEqual(dialogue.slice(0, 3), [
+    'RETAINED-USER Build the task viewer.',
+    'RETAINED-ASSISTANT The task viewer renders correctly.',
+    'RETAINED-USER Deploy only to the synthetic preview.',
+  ]);
+  assert.equal(dialogue.some(t => t.includes('OLD-PRECOMPACTION')), false);
+  assert.deepEqual(retained.summary.retainedContexts, [checkpoint.payload.retained_context]);
+  assert.equal(retained.summary.activeContextCompactionBoundaries[0].retainedMessageCount, 3);
+  for (const mutate of [
+    p => { p.retained_context.user_messages[0].order = 'first'; },
+    p => { p.retained_context.user_messages[0].order = 2; },
+    p => { p.retained_context.user_messages[0].message_id = 'msg_03'; },
+    p => { delete p.retained_context.user_messages[0].text; },
+    p => { p.retained_context.assistant_messages = null; },
+  ]) {
+    const changed = structuredClone(rows);
+    mutate(changed.find(r => r.type === 'compacted').payload);
+    assert.equal(malformedCount(archive(changed)), 1);
+    convert(changed, 'claude', 2);
+  }
 
   for (const invalid of [null, [{}], [{ type: 'compaction', encrypted_content: '' }]]) {
     const changed = structuredClone(rows);
