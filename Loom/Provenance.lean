@@ -75,6 +75,11 @@ inductive ErrorSignal where
   | unrecorded
   deriving Repr, DecidableEq
 
+/-- A target's authoritative failure flag may use recorded status, never a guess. -/
+def ErrorSignal.failureFlag : ErrorSignal → Bool
+  | .native value | .structured value _ => value
+  | .heuristic _ _ | .unrecorded => false
+
 /-- Where a datum came from in the source artifact.
 
 `extras` carries source fields the importer recognized but did not model —

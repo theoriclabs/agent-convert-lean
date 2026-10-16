@@ -1,4 +1,5 @@
 import Loom
+import LoomConvert.Wire
 
 /-!
 # LoomConvert.OpenCode
@@ -87,6 +88,8 @@ private def canonicalTool : String → Option CanonicalTool
   | "task" | "subtask" => some .agentSpawn
   | "apply_patch" | "applypatch" => some .applyPatch
   | _ => none
+
+def openCodeErrorBool : ErrorSignal → Bool := ErrorSignal.failureFlag
 
 private def timeToCarrier : Time → Json
   | .recorded ⟨ms⟩ => Json.mkObj [("kind", .str "recorded"), ("ms", .num ms)]
@@ -345,6 +348,17 @@ def importOpenCode (text : String) : Except String Transcript := do
                 blocks := []
                 let content ← toolResultContent (partCtx ++ ".state") state
                 let signal := ErrorSignal.native (status == "error")
+                let signal ← match agentConvertMetadata? part >>= (fun metadata =>
+                    if (metadata.getObjVal? "protocol" >>= Json.getStr?).toOption ==
+                        some "agent-convert.opencode.v1" then
+                      (metadata.getObjVal? "errorSignal").toOption
+                    else none) with
+                  | none => pure signal
+                  | some raw => do
+                      let original ← errorSignalFromWireJson (partCtx ++ ".errorSignal") raw
+                      if openCodeErrorBool original != (status == "error") then
+                        ocError partCtx "error provenance contradicts native tool status"
+                      else pure original
                 entries := entries.push (mkOpenCodeEntry entries
                   (.envMsg [.toolResult (.resolved callEntry callBlock) content signal])
                   time none (partCtx ++ ".state") part)
@@ -573,9 +587,7 @@ private def assistantBlockPart (t : Transcript) (sessionId messageId : String)
         | none => Json.mkObj [
             ("status", .str "pending"), ("input", args), ("raw", .str args.compress)]
         | some result =>
-            let failed := match result.error with
-              | .native value | .structured value _ | .heuristic value _ => value
-              | .unrecorded => false
+            let failed := openCodeErrorBool result.error
             if failed then Json.mkObj [
               ("status", .str "error"), ("input", args),
               ("error", .str (contentOutput result.content)),
@@ -586,8 +598,12 @@ private def assistantBlockPart (t : Transcript) (sessionId messageId : String)
               ("metadata", Json.mkObj []),
               ("time", Json.mkObj [("start", .num started), ("end", .num started)]),
               ("attachments", .arr (contentAttachments sessionId messageId partId result.content))]
-      Json.mkObj (ocPartBase sessionId messageId partId "tool" ++ [
+      let part := Json.mkObj (ocPartBase sessionId messageId partId "tool" ++ [
         ("callID", .str callId), ("tool", .str name.raw), ("state", state)])
+      match resultFor? t entryIndex blockIndex with
+      | some result => addSourceMetadata part entry [
+          ("errorSignal", errorSignalToWireJson result.error)]
+      | none => part
   | .unmodeled _ raw => raw
 
 private def messageInfoBase (sessionId messageId role : String) (created : Nat) : List (String × Json) := [

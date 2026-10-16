@@ -508,11 +508,13 @@ private def piEntryJson (origin : Origin) (fields : List (String × Json)) : Jso
   | some raw => overlayPiEntry raw fields
   | none => Json.mkObj fields
 
+def piErrorBool : ErrorSignal → Bool := ErrorSignal.failureFlag
+
 private def piErrorExport (error : ErrorSignal) : Bool × List (String × Json) :=
   match error with
   | .native value => (value, [])
   | .heuristic value heuristic =>
-      (value, [("toolError", Json.mkObj [
+      (piErrorBool error, [("toolError", Json.mkObj [
         ("state", Json.str "heuristic"), ("value", Json.bool value),
         ("method", Json.str heuristic)])])
   | .structured value source =>
@@ -2291,12 +2293,12 @@ private def piToolErrorSignal (ctx : String) (message : Json)
   match state with
   | "inferred" =>
       let value ← piRequireBool ctx toolError "value"
-      if value != nativeValue then
+      if nativeValue && !value then
         piSchemaError ctx "Loom inferred tool-error carrier disagrees with required isError"
       else pure (.heuristic value (← piRequireString ctx toolError "heuristic"))
   | "heuristic" | "structured" =>
       let value ← piRequireBool ctx toolError "value"
-      if value != nativeValue then
+      if (if state == "heuristic" then nativeValue && !value else value != nativeValue) then
         piSchemaError ctx "Loom derived tool-error carrier disagrees with required isError"
       else if state == "heuristic" then
         pure (.heuristic value (← piRequireString ctx toolError "method"))

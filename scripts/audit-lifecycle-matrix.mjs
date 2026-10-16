@@ -787,9 +787,16 @@ function parsePiRows(rows, allowTargetCarriers, context) {
       `${context}: malformed native Pi toolResult`);
       const id = rawId(message.toolCallId);
       const link = resolvePrior(state, id, message.toolName, "Pi toolResult", true);
+      let error = nativeError(message.isError);
+      if (allowTargetCarriers && message.loomPi?.version === 1 && message.loomPi.toolError) {
+        error = parsePiCarrierError(message.loomPi.toolError);
+        invariant(error, `${context}: malformed Pi error provenance`);
+        const expectedFlag = ["heuristic", "unrecorded"].includes(error.provenance) ? false : error.value;
+        invariant(message.isError === expectedFlag, `${context}: Pi error provenance contradicts flag`);
+      }
       state.events.push(rawResult(`native-result:${rowIndex}`, id,
         message.content.map((block, index) => parsePiUserBlock(block,
-          `${context}: result block ${index}`)), nativeError(message.isError), link));
+          `${context}: result block ${index}`)), error, link));
       state.semanticIndex++;
     } else {
       state.semanticIndex++;

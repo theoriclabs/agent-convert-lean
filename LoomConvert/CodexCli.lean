@@ -413,7 +413,7 @@ private def toolOutputText (content : List UserBlock) : String :=
 
 /-- Whole chunks are parsed as JSON; quoted JSON inside printed output is never
 status evidence. A failure at any recorded layer wins over outer-runner success. -/
-private def codexToolOutputErrorSignal (content : List UserBlock)
+def codexToolOutputErrorSignal (content : List UserBlock)
     (commands : Array Json := #[]) : ErrorSignal := Id.run do
   let mut signals : List (Bool × String) := []
   for record in commands do

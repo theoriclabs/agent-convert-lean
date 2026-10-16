@@ -33,7 +33,49 @@ def hasNonMainThreads (t : Transcript) : Bool :=
     | ThreadKind.main => false
     | _ => true)
 
+/-- The header describes the outer runner. A recorded inner failure takes
+precedence, so `Script completed` alone never contradicts a nonzero inner exit. -/
+def contradictoryErrorFlag (flag : Bool) (content : List UserBlock)
+    (signal : ErrorSignal) (commands : Array Lean.Json := #[]) : Bool :=
+  flag && ((match signal with | .heuristic _ _ => true | _ => false) ||
+    match codexToolOutputErrorSignal content commands with
+    | .structured false _ => true
+    | _ => false)
+
+private def continuationErrorFlag (target : String) : ErrorSignal → Bool :=
+  match target with
+  | "claude" => errorBool
+  | "pi" => piErrorBool
+  | "opencode" => openCodeErrorBool
+  | _ => ErrorSignal.failureFlag
+
+def contradictoryErrorBlocker? (target : String) (t : Transcript) : Option String :=
+  if target == "loom" then none else Id.run do
+    for (entry, index) in t.entries.toList.zipIdx do
+      if let .envMsg blocks := entry.payload then
+        let commands := (entry.origin.extras >>= fun extras =>
+          (extras.getObjVal? "codex_command_completions" >>= Lean.Json.getArr?).toOption).getD #[]
+        for block in blocks do
+          if let .toolResult call content signal := block then
+            if contradictoryErrorFlag (continuationErrorFlag target signal) content signal commands then
+              let id := (callRefToolUseId t call).getD "<unresolved>"
+              let evidence := match signal with
+                | .heuristic _ method => s!"heuristic '{method}' cannot assert a native error"
+                | _ => s!"{reprStr (codexToolOutputErrorSignal content commands)} records success"
+              return some s!"contradictory error flag at entry {index}, tool-use id '{id}': {evidence}"
+    return none
+
+example : contradictoryErrorFlag true [.text "Script completed\nOutput:\nok"]
+    (.native true) = true := by native_decide
+example : contradictoryErrorFlag true [.text "Script completed\nOutput:\n",
+    .text "{\"exit_code\":9}"] (.structured true "exit_code") = false := by native_decide
+example : contradictoryErrorFlag true [.text "printed timeout"]
+    (.heuristic true "guess") = true := by native_decide
+example : contradictoryErrorFlag false [.text "printed timeout"]
+    (.heuristic true "guess") = false := by native_decide
+
 def targetValidityBlocker? (toFmt : String) (t : Transcript) : Option String :=
+  (contradictoryErrorBlocker? toFmt t).orElse (fun _ =>
   let failure? := match toFmt with
     | "pi" => match piExportPreflight t with
       | .ok _ => none
@@ -47,7 +89,7 @@ def targetValidityBlocker? (toFmt : String) (t : Transcript) : Option String :=
       | .error error => some error
     | "opencode" => (openCodeTargetExportPrerequisiteFailures t).head?
     | _ => none
-  failure?.map (fun error => s!"target '{toFmt}' validity preflight failed: {error}")
+  failure?.map (fun error => s!"target '{toFmt}' validity preflight failed: {error}"))
 
 /-- Losses that the current executable refuses rather than silently flattening.
 Stable/default flat-export scope is mainline-only: even targets whose broader

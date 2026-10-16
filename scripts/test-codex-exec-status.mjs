@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Recorded synthetic outputs only. Never execute commands from the fixture.
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,10 +16,10 @@ let sequence = 0;
 function convert(rows, target = 'claude', raw = false) {
   const input = join(scratch, `source-${sequence}.jsonl`);
   const output = join(scratch, `claude-${sequence++}.jsonl`);
-  writeFileSync(input, rows.map(JSON.stringify).join('\n') + '\n');
+  writeFileSync(input, Array.isArray(rows) ? rows.map(JSON.stringify).join('\n') + '\n' : JSON.stringify(rows));
   const run = spawnSync(loom, ['convert', input, target, output, '--no-subagents'], { encoding: 'utf8' });
   assert.equal(run.status, 0, run.stderr);
-  if (target === 'loom') return JSON.parse(readFileSync(output, 'utf8'));
+  if (target === 'loom' || target === 'opencode') return JSON.parse(readFileSync(output, 'utf8'));
   const records = readFileSync(output, 'utf8').trim().split('\n').map(JSON.parse);
   if (raw) return records;
   return records
@@ -114,6 +114,28 @@ try {
     assert.equal(rejected.status, 2);
     assert.match(rejected.stderr, /contradicts the emitted native error flag/);
   }
+  const contradictory = convert(fixture, 'loom');
+  const contradicted = contradictory.entries.flatMap(e => e.payload.blocks || [])
+    .find(b => b.type === 'toolResult');
+  contradicted.error = { kind: 'native', isError: 'true' };
+  const badInput = join(scratch, 'contradictory.loom.json');
+  writeFileSync(badInput, JSON.stringify(contradictory));
+  for (const target of ['claude', 'pi', 'codex', 'cursor-agent', 'opencode']) {
+    const output = join(scratch, `contradictory-${target}`);
+    const rejected = spawnSync(loom, ['convert', badInput, target, output, '--no-subagents'], { encoding: 'utf8' });
+    assert.equal(rejected.status, 3, `${target}: ${rejected.stderr}`);
+    assert.match(rejected.stderr, /contradictory error flag at entry .*call_ok/);
+    assert.equal(existsSync(output), false);
+  }
+  assert.deepEqual(convert(contradictory, 'loom').entries, contradictory.entries, 'archive remains exempt');
+  const guessed = structuredClone(fixture);
+  guessed[3].payload.output = [{ type: 'input_text', text: 'Command timed out after 30 seconds' }];
+  const pi = convert(guessed, 'pi', true);
+  assert.equal(pi.find(r => r.message?.role === 'toolResult').message.isError, false);
+  assert.deepEqual(signal(pi), signal(guessed));
+  const opencode = convert(guessed, 'opencode');
+  assert.equal(opencode.messages.flatMap(m => m.parts).find(p => p.callID === 'call_ok').state.status, 'completed');
+  assert.deepEqual(signal(opencode), signal(guessed));
   console.log('Codex error headers: successful printed content cannot set a native error flag.');
 } finally {
   rmSync(scratch, { recursive: true, force: true });

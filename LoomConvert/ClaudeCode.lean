@@ -643,9 +643,7 @@ private def cErrorSignalJson : ErrorSignal → Json
 
 /-- Only recorded or structured status can assert a native error. Heuristic
 values remain reversible metadata on the native tool-result record. -/
-def errorBool : ErrorSignal → Bool
-  | .native value | .structured value _ => value
-  | .heuristic _ _ | .unrecorded => false
+def errorBool : ErrorSignal → Bool := ErrorSignal.failureFlag
 
 example : errorBool (.heuristic true "codexOutputIndicatesError (codexAdapter.ts:75)") =
     false := by decide

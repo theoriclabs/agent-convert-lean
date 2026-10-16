@@ -7,6 +7,11 @@ lands; move them into a dated version section when publishing a release.
 
 ### Fixed
 
+- Refuse contradictory continuation error flags before publication, naming the
+  source entry, call id, and successful status evidence. Inner command failures
+  remain valid under an outer successful runner. Pi and OpenCode now preserve
+  heuristic errors as metadata without asserting native failure
+  ([#15](https://github.com/theoriclabs/agent-convert-lean/issues/15)).
 - Keep heuristic tool-error guesses out of Claude’s native `is_error` flag.
   Preserve structured, heuristic, and unknown signals in validated record metadata
   so native history retains exact error provenance across repeated conversions

@@ -55,6 +55,8 @@ exempt from this guard.
 The IR and archive/carrier codecs distinguish native error flags, structured
 status evidence, heuristic guesses, and unrecorded status. Legacy `inferred`
 records decode as heuristic evidence; new records use `structured` or `heuristic`.
+Continuation export refuses native failure flags contradicted by recorded
+success. Nonzero inner command exits take precedence over outer-runner success.
 
 ## How each target represents history
 
@@ -64,7 +66,7 @@ records decode as heuristic evidence; new records use `structured` or `heuristic
 | Codex CLI | Native `function_call` / `function_call_output`; compatible imported custom-tool records | JSONL file; register/install as a new Codex session to resume | Full error provenance is preserved in metadata. Text-result pairs are supported; ambiguous IDs, incomplete lifecycles, and unsupported content can still fall back or refuse. File generation alone is not a tested resume. |
 | Pi | Native `toolCall` / tool-result messages for eligible history | JSONL file; load with Pi's session workflow | Canonical identity and error provenance travel in metadata. Flat selected conversation; target history mode and content constraints still apply. |
 | Cursor Agent | Native `tool_use` where eligible; no native tool-result channel in the supported transcript schema | Transcript file only | Results and unsupported content may survive only as carriers, not native history. Local transcript-to-resume installation is not established by this exporter; historical validation recorded a negative result. |
-| OpenCode | Assistant `tool` part combines a call with `pending`, `completed`, or `error` state | JSON file, then `opencode import <file>` | Flat output. Result text blocks are joined; the exporter does not preserve all source error provenance or block boundaries. No fresh live-continuation claim is made here. |
+| OpenCode | Assistant `tool` part combines a call with `pending`, `completed`, or `error` state | JSON file, then `opencode import <file>` | Flat output. Result text blocks are joined; error provenance travels in metadata, while result block boundaries can still normalize. No fresh live-continuation claim is made here. |
 | Loom | Typed calls, results, positional links, error provenance, and threads | Portable JSON archive | Preserves the serialized IR; not a target model context and not proof that acquisition captured every source fact. |
 
 Codex, Pi, and OpenCode default to the main conversation. Explicitly including
