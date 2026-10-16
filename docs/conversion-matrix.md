@@ -47,6 +47,12 @@ subject to validation and is not necessarily a byte-for-byte file copy.
 `gais` is also accepted as an explicit source alias for `google-ai-studio`.
 Bare-ID discovery covers Claude Code, Codex, and Pi; use paths for other sources.
 
+Codex `item_completed` events that exactly mirror adjacent dialogue are retained
+in entry provenance without duplicating conversation. Unambiguous same-turn
+`exec` command completions supply structured result status. Other reviewed
+non-dialogue completions attach to neighboring entries; unmatched conversation
+and unknown future event kinds remain explicit events.
+
 Continuation exports require at least one native user text turn in the active
 window. `--allow-empty-dialogue` permits deliberate tool-only archives and is
 recorded as `allowEmptyDialogue` in `--json` output. The `loom` archive target is

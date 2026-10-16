@@ -7,6 +7,11 @@ lands; move them into a dated version section when publishing a release.
 
 ### Fixed
 
+- Consume Codex `item_completed` mirrors and command completions without extra
+  conversation entries. Keep exact events and source positions on typed entries,
+  attach other reviewed item kinds to nearby entries, and retain unmatched or
+  future conversation events explicitly
+  ([#24](https://github.com/theoriclabs/agent-convert-lean/issues/24)).
 - Block avoidable tool-history prose before continuation publication. Independent
   native-shape checks cover Claude and sidecars; serialized-output checks cover
   continuation targets while preserving literal source quotes, duplicate-id

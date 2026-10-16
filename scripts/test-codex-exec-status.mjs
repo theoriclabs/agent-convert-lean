@@ -84,6 +84,7 @@ try {
   assert.deepEqual(resultEntry.origin.extras.codex_command_completions, [commandEvent('turn-one')]);
   for (const mutation of [
     rs => { rs[4].payload.turn_id = 'different-turn'; },
+    rs => { rs[3].payload.name = 'unrelated_custom_tool'; },
     rs => { rs.splice(4, 0, { type: 'response_item', payload: {
       type: 'custom_tool_call', call_id: 'overlapping', name: 'exec', input: 'print(1)' } }); },
     rs => { rs.splice(2, 1); },

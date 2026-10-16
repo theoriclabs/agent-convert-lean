@@ -210,7 +210,7 @@ these are Loom-only enrichments (verified by `codexRichFixture`). -/
 private def isCodexTextType (bt : String) : Bool :=
   bt == "input_text" || bt == "output_text" || bt == "text"
 
-/-- The event vocabulary observed through Codex 0.144. Used only by the
+/-- The event vocabulary observed through Codex 0.162. Used only by the
 TS-parity input filter: known events may follow the reference converter's
 documented drop, while a future event kind must continue into the open-world
 fallback rather than disappearing before `adaptRecords` can preserve it. -/
@@ -221,7 +221,7 @@ private def isKnownCodexEventType : String -> Bool
   | "agent_reasoning" | "context_compacted" | "web_search_end"
   | "sub_agent_activity" | "turn_aborted" | "thread_settings_applied"
   | "thread_rolled_back" | "mcp_tool_call_end" | "view_image_tool_call"
-  | "item_completed" | "error" | "thread_name_updated"
+  | "item_completed" | "item_started" | "error" | "thread_name_updated"
   | "collab_waiting_end" | "collab_agent_spawn_end"
   | "exited_review_mode" | "entered_review_mode" => true
   | _ => false
@@ -435,12 +435,13 @@ def codexToolOutputErrorSignal (content : List UserBlock)
   | some (failed, source) => return .structured failed source
   | none => return header
 
-/-- Positional association is valid only with one pending outer call and an
-established matching turn. Concurrent calls and cross-turn events remain raw. -/
-private def codexCommandCompletionIndex (records : List Json) : List (Nat × Array Json) := Id.run do
+/-- Positional association is valid only inside one pending custom `exec` call
+with an established matching turn. Other pending tools still make attribution
+ambiguous; a background command cannot change an unrelated tool's status. -/
+private def codexCommandCompletionIndex (records : List Json) : List (Nat × Array (Nat × Json)) := Id.run do
   let mut turn : Option String := none
-  let mut pending : List (String × Option String × Array Json) := []
-  let mut results : List (Nat × Array Json) := []
+  let mut pending : List (String × Option String × Array (Nat × Json)) := []
+  let mut results : List (Nat × Array (Nat × Json)) := []
   for (record, index) in records.zipIdx do
     let p := (oobj record "payload").getD Json.null
     let kind := ostr p "type"
@@ -451,7 +452,9 @@ private def codexCommandCompletionIndex (records : List Json) : List (Nat × Arr
     if ostr record "type" == some "response_item" then
       if kind == some "custom_tool_call" || kind == some "function_call" then
         if let some callId := ostr p "call_id" then
-          pending := pending ++ [(callId, turn, #[])]
+          let commandTurn := if kind == some "custom_tool_call" && ostr p "name" == some "exec"
+            then turn else none
+          pending := pending ++ [(callId, commandTurn, #[])]
       else if kind == some "custom_tool_call_output" || kind == some "function_call_output" then
         if let some callId := ostr p "call_id" then
           let candidates := pending.filter (fun entry => entry.1 == callId)
@@ -463,7 +466,7 @@ private def codexCommandCompletionIndex (records : List Json) : List (Nat × Arr
         (oobj p "item" >>= fun item => ostr item "type") == some "CommandExecution" then
       if let [(callId, callTurn, commands)] := pending then
         if callTurn.isSome && callTurn == ostr p "turn_id" then
-          pending := [(callId, callTurn, commands.push record)]
+          pending := [(callId, callTurn, commands.push (index, record))]
   return results
 
 example : codexToolOutputErrorSignal [.text "Script failed\nOutput:\nerror"] =
@@ -1052,6 +1055,8 @@ private structure Kept where
   nativeToolRaw : Option Json := none
   retainedMessage : Option Json := none
   commandCompletions : Array Json := #[]
+  commandCompletionIndices : Array Nat := #[]
+  itemCompletions : Array Json := #[]
 
 /-- Build an `ImportNote` carrying a record-index locator. -/
 private def mkNote (k : AssumptionKind) (i : Nat) (d : String) : ImportNote :=
@@ -1702,6 +1707,108 @@ private def optionalCodexEncryptedContent? (payload : Json) : Option (Option Str
   | some (Json.str encrypted) => some (some encrypted)
   | _ => none
 
+private def codexCompletedTextArray? (value : Json) : Option String := do
+  let items ← value.getArr?.toOption
+  let texts ← items.toList.mapM (fun item => match item with
+    | .str text => some text
+    | _ => do
+        let kind ← ostr item "type"
+        guard (isCodexTextType kind || kind == "summary_text")
+        ostr item "text")
+  pure (String.intercalate "" texts)
+
+private def codexCompletedMirror (event response : Json) : Bool := Id.run do
+  if ostr response "type" != some "response_item" then return false
+  let p := (oobj response "payload").getD .null
+  let eventPayload := (oobj event "payload").getD .null
+  let item := (oobj eventPayload "item").getD .null
+  let responseTurn := (ostr p "turn_id").orElse (fun _ =>
+    oobj p "internal_chat_message_metadata_passthrough" >>= fun metadata => ostr metadata "turn_id")
+  if responseTurn.isSome && (ostr eventPayload "turn_id").isSome &&
+      responseTurn != ostr eventPayload "turn_id" then return false
+  let kind := ostr item "type"
+  if kind == some "UserMessage" || kind == some "AgentMessage" then
+    if ostr p "type" != some "message" ||
+        ostr p "role" != some (if kind == some "UserMessage" then "user" else "assistant") then return false
+    let eventText := oobj item "content" >>= codexCompletedTextArray?
+    let responseText := oobj p "content" >>= codexCompletedTextArray?
+    return eventText.any (fun text => !text.isEmpty && responseText == some text)
+  else if kind == some "Reasoning" && ostr p "type" == some "reasoning" then
+    let eventText := oobj item "summary_text" >>= codexCompletedTextArray?
+    let responseText := (codexReasoningSummary? p).map (String.intercalate "")
+    let raw := match oobj item "raw_content" with
+      | none => some ""
+      | some value => codexCompletedTextArray? value
+    return raw == some "" && eventText.any (fun text => !text.isEmpty && responseText == some text)
+  else return false
+
+private def codexCompletionNeighbor (record : Json) (activeContext : Bool) : Bool :=
+  if ostr record "type" == some "compacted" then
+    (codexCheckpoint? record).any (fun checkpoint => !activeContext || !checkpoint.retainedMessages.isEmpty)
+  else if ostr record "type" != some "response_item" then false else
+    match oobj record "payload" with
+    | some payload@(.obj _) =>
+      if ostr payload "type" == some "message" then
+        let role := ostr payload "role"
+        match oarr payload "content" with
+        | some content =>
+          (role == some "assistant" || role == some "user") && !content.isEmpty &&
+          (role != some "user" || !(splitCodexUserContent content).2.isEmpty) &&
+          (codexCompletedTextArray? (.arr content)).all (fun text => !text.isEmpty)
+        | none => false
+      else if ostr payload "type" == some "reasoning" then
+        (codexReasoningSummary? payload).any (fun summary => !summary.isEmpty) ||
+          (ostr payload "encrypted_content").isSome
+      else true
+    | _ => false
+
+private inductive CodexCompletionKind where
+  | mirror | command | neighbor
+
+/-- Linear nearest-neighbor planning. Exact adjacent mirrors and correlated
+commands are consumed; other reviewed event kinds remain raw annotations.
+Unmatched conversation events and unknown future item types remain standalone. -/
+private def codexCompletionPlan (records : List Json)
+    (commands : List (Nat × Array (Nat × Json))) (activeContext : Bool) :
+    Array (Option CodexCompletionKind) × Array (Array Json) := Id.run do
+  let rows := records.toArray
+  let mut kinds := Array.replicate rows.size (none : Option CodexCompletionKind)
+  let mut attached := Array.replicate rows.size (#[] : Array Json)
+  let mut previous := Array.replicate rows.size (none : Option Nat)
+  let mut following := previous
+  let mut nearest : Option Nat := none
+  for (record, index) in records.zipIdx do
+    if ostr record "type" == some "session_meta" then nearest := none
+    previous := previous.set! index nearest
+    if codexCompletionNeighbor record activeContext then nearest := some index
+  nearest := none
+  for (record, index) in records.zipIdx.reverse do
+    if ostr record "type" == some "session_meta" then nearest := none
+    following := following.set! index nearest
+    if codexCompletionNeighbor record activeContext then nearest := some index
+  for (_, events) in commands do
+    for (index, _) in events do kinds := kinds.set! index (some .command)
+  for (record, index) in records.zipIdx do
+    let payload := (oobj record "payload").getD .null
+    if ostr record "type" == some "event_msg" && ostr payload "type" == some "item_completed" &&
+        ((kinds[index]?).getD none).isNone then
+      let adjacent := (if index == 0 then [] else [index - 1]) ++ [index + 1]
+      let mirror := adjacent.find? (fun other => rows[other]?.any (codexCompletedMirror record))
+      let itemKind := oobj payload "item" >>= fun item => ostr item "type"
+      let neighbor := if ["ContextCompaction", "FileChange", "McpToolCall", "Extension", "ImageView"].any
+          (fun kind => itemKind == some kind) then
+          match (previous[index]?).getD none, (following[index]?).getD none with
+          | some before, some after => some (if index - before <= after - index then before else after)
+          | some before, none => some before
+          | none, some after => some after
+          | none, none => none
+        else none
+      if let some target := mirror.orElse (fun _ => neighbor) then
+        kinds := kinds.set! index (some (if mirror.isSome then .mirror else .neighbor))
+        attached := attached.modify target (fun events => events.push (Json.mkObj [
+          ("recordIndex", Json.num index), ("record", record)]))
+  return (kinds, attached)
+
 /-- Fold the post-`session_meta` records into a kept list + the import-note
 trace, applying the cross-channel dedup. Pure: argument-JSON parse failures are
 absorbed (matching the TS try/catch), so no `Except` is needed here. -/
@@ -1720,12 +1827,14 @@ private def adaptRecords (records : List Json) (carrierSessionSelfIdentified : B
   let mut idx : Nat := 0                         -- record index (post-header), for note locs
   let recordArray := records.toArray
   let commandIndex := codexCommandCompletionIndex records
+  let (completionKinds, completionAttachments) := codexCompletionPlan records commandIndex activeContext
   for j in records do
     let j := if carrierSessionSelfIdentified then codexRestoreMappedCallId j else j
     let ty := (ostr j "type").getD ""
     let p := (oobj j "payload").getD Json.null
     let ts := ostr j "timestamp"
-    let commands := (commandIndex.find? (fun pair => pair.1 == idx)).map (·.2) |>.getD #[]
+    let indexedCommands := (commandIndex.find? (fun pair => pair.1 == idx)).map (·.2) |>.getD #[]
+    let commands := indexedCommands.map (·.2)
     let keptBefore := kept.size
     let timeProvenance := if carrierSessionSelfIdentified then
         parseCodexTimeProvenance? j
@@ -1955,7 +2064,7 @@ private def adaptRecords (records : List Json) (carrierSessionSelfIdentified : B
             kept := kept.push { (mkKept (.ktool (.byId segment callId) content err
               (some ("codex.unresolved.function_call_output", p)))
               ts .environment "" none) with
-                envelopeEligible := true, nativeToolRaw := some j, commandCompletions := commands }
+                envelopeEligible := true, nativeToolRaw := some j, commandCompletions := commands, commandCompletionIndices := indexedCommands.map (·.1) }
         | _, _ =>
             kept := kept.push (mkKept (.kenv [
               .unmodeled "codex.malformed.function_call_output" p])
@@ -2091,7 +2200,7 @@ private def adaptRecords (records : List Json) (carrierSessionSelfIdentified : B
               ("custom_tool_call_output error status: " ++ errorSignalProvenance err))
             kept := kept.push { (mkKept (.ktool (.byId segment callId) content err
               (some ("codex.unresolved.custom_tool_call_output", p)))
-              ts .environment "" none) with nativeToolRaw := some j, commandCompletions := commands }
+              ts .environment "" none) with nativeToolRaw := some j, commandCompletions := commands, commandCompletionIndices := indexedCommands.map (·.1) }
         | _, _ =>
             kept := kept.push (mkKept (.kenv [
               .unmodeled "codex.malformed.custom_tool_call_output" p])
@@ -2114,7 +2223,16 @@ private def adaptRecords (records : List Json) (carrierSessionSelfIdentified : B
         "Codex event_msg has no object payload; complete record retained outside dialogue")
     else if ty == "event_msg" then
       let pt := (ostr p "type").getD ""
-      if pt == "user_message" || pt == "agent_message" then
+      if pt == "item_completed" && ((completionKinds[idx]?).getD none).isSome then
+        match (completionKinds[idx]?).getD none with
+        | some .mirror => notes := notes.push (mkNote .dedupDropped idx
+            "item_completed text mirrors an adjacent response_item; raw event retained on that entry")
+        | some .command => notes := notes.push (mkNote (.other "codex-command-completion-consumed") idx
+            "CommandExecution completion consumed by its unique same-turn tool result")
+        | some .neighbor => notes := notes.push (mkNote (.other "codex-item-completion-provenance") idx
+            "item_completed retained as raw provenance on the nearest typed entry")
+        | none => pure ()
+      else if pt == "user_message" || pt == "agent_message" then
         let role : Role := if pt == "user_message" then .user else .assistant
         match ostr p "message" with
         | none =>
@@ -2168,6 +2286,21 @@ private def adaptRecords (records : List Json) (carrierSessionSelfIdentified : B
       archived := archived.push j
       notes := notes.push (mkNote (.other "codex-unknown-record") idx
         s!"Unknown Codex top-level record type '{ty}' retained outside dialogue")
+    let itemCompletions := (completionAttachments[idx]?).getD #[]
+    if !itemCompletions.isEmpty then
+      let mirroredPrevious := if ty == "response_item" && ostr p "type" == some "message" then
+        let role := ostr p "role"
+        (oobj p "content" >>= codexCompletedTextArray?).any (fun text =>
+          !text.isEmpty && (role == some "user" || role == some "assistant") &&
+          prevSameText kept (if role == some "user" then .user else .assistant) text)
+        else false
+      if kept.size > keptBefore || mirroredPrevious then
+        kept := kept.modify (kept.size - 1) (fun entry =>
+          { entry with itemCompletions := entry.itemCompletions ++ itemCompletions })
+      else
+        archived := archived ++ itemCompletions.filterMap (fun value => oobj value "record")
+        notes := notes.push (mkNote (.other "codex-item-completion-archived") idx
+          "Completion annotation target was non-dialogue; exact event retained in transcript provenance")
     if kept.size > keptBefore then
       kept := kept.modify (kept.size - 1) (fun entry =>
         if entry.retainedMessage.isSome then entry
@@ -2313,7 +2446,9 @@ private def buildEntries (kept : Array Kept) : Array Entry :=
         | some raw => [(codexNativeToolRawRecordKey, raw)]
         | none => []) ++
       (if k.commandCompletions.isEmpty then [] else
-        [("codex_command_completions", Json.arr k.commandCompletions)]) ++
+        [("codex_command_completions", Json.arr k.commandCompletions),
+         ("codex_command_completion_indices", Json.arr (k.commandCompletionIndices.map (fun index => Json.num (Lean.JsonNumber.fromNat index))))]) ++
+      (if k.itemCompletions.isEmpty then [] else [("codex_item_completed", Json.arr k.itemCompletions)]) ++
       (match k.retainedMessage with
         | some raw => [("codex_retained_message", raw)] ++
             ["order", "turn_id", "revision"].filterMap (fun key => (oobj raw key).map (key, ·))

@@ -12,8 +12,8 @@ The format's defining quirk is **duality**: user/agent utterances are
 emitted twice — once as a `response_item.message` and once as an `event_msg`
 — but the ordering is **role-asymmetric** (user: response_item→event_msg;
 assistant: event_msg→response_item), which breaks the adapter's dedup for
-assistant turns (see claim L2 and defect D13). Tool failures carry no
-structured flag; error status is *inferred* from output text.
+assistant turns (see claim L2 and defect D13). Recent runners record status headers, exit-code chunks, and CommandExecution
+completion events; legacy text-only outputs retain explicitly heuristic status.
 
 Evidence base: `utils/src/pi/codexAdapter.ts` + a full census of the local
 corpus — **425 files, cli_version 0.84.0–0.142.4, ~700k records**, censused
@@ -68,6 +68,10 @@ inductive EventMsgKind where
   | userMessage         -- 13,580
   | patchApplyEnd       -- 13,056
   | contextCompacted    -- 882
+  | itemCompleted       -- 0.162: mirrored content or attached raw/command provenance
+  | itemStarted
+  | threadSettingsApplied
+  | turnAborted
   | other (label : String)  -- guardian_assessment, error, web_search_end, turn_aborted, thread_rolled_back, …
   deriving Repr, DecidableEq
 
@@ -77,7 +81,7 @@ def disposition : RecordKind → Disposition
   | .responseItem =>
       .conditional "per payload.type (see ResponseItemKind); message role developer→assistant in piview but →user in convert path (the two directions DISAGREE)"
   | .eventMsg =>
-      .conditional "user/agent_message deduped CROSS-CHANNEL + channel-guarded (dropped only when it repeats the previous entry from the OTHER channel: response_item↔event_msg) — works BOTH directions since the D13 fix (codexAdapter.ts); all other subtypes dropped"
+      .conditional "user/agent_message deduped CROSS-CHANNEL + channel-guarded (dropped only when it repeats the previous entry from the OTHER channel: response_item↔event_msg) — works BOTH directions since the D13 fix (codexAdapter.ts); 0.162 item_completed text mirrors are deduplicated with exact raw entry provenance; correlated command completions supply structured result status; other reviewed item kinds attach to the nearest typed entry"
   | .turnContext => .droppedDeliberately "per-turn config; candidate for MetaEvent.custom"
   | .compacted =>
       .conditional "piview adapter ignores it entirely (compaction invisible); convert path default splices replacement_history as synthetic entries, --keep-pre-compaction-history maps each to a branch_summary; raw events preserved in codexExtras for round-trip"
@@ -97,7 +101,7 @@ def supports : Concept → Support
       "reasoning items exist but ~98% are empty-summary + encrypted_content; dropped unless --keep-encrypted-reasoning (was optimistically `native`)"
   | .toolLifecycle   => .native  -- function_call/function_call_output + custom_tool_call with call_ids
   | .errorSignaling  => .approximate
-      "no structured flag; inferred from output text (codexOutputIndicatesError, codexAdapter.ts:75)"
+      "native status and structured runner/command evidence in recent releases; heuristic fallback remains explicit for legacy text-only output"
   | .compaction      => .native
       -- CORRECTED (was approximate 'extent unrecorded'): `compacted`
       -- carries full replacement_history; the piview adapter just drops it.

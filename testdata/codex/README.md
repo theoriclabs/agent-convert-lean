@@ -24,3 +24,9 @@ native Claude result flags without executing any recorded command.
 `0.162.1/notes-tool.jsonl` contains a synthetic namespaced notes call and an
 encrypted result. `scripts/test-claude-notes-history.mjs` checks raw-name native
 history and exact source-namespace metadata without executing source tools.
+
+`0.162.1/item-completed.jsonl` covers exact user/assistant event mirrors and
+structured command completions. `scripts/test-codex-item-completed.mjs` checks
+deduplication, source-record retention, and conservative handling of unmatched,
+cross-turn, and future event shapes. Command evidence attaches only to an
+unambiguous enclosing `exec` call in the same recorded turn.
