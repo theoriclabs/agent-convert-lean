@@ -74,6 +74,12 @@ fallbacks report `projectCompactionSummary`: the text and typed metadata are
 retained, but native compaction coordinates are not fabricated. Old explicitly
 historical carriers remain inert. Summary metadata must match the visible text.
 
+Claude splits mixed messages at representable/archive boundaries. Ordinary
+text and completed native tool pairs remain in conversation; unsupported
+blocks and unfinished calls retain their exact payloads in separate inert
+records. Call references, parent links, active selection, and compaction
+coverage follow the split. Later conversions keep those archives inert.
+
 Foreign reasoning becomes labeled assistant text in Claude. Opaque reasoning
 and encrypted compaction payloads stay in record metadata, with a readable
 availability label; they never populate Claude's `thinking.signature`. The

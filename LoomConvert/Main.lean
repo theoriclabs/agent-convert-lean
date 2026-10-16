@@ -1132,7 +1132,7 @@ def runConvert (fromFmt toFmt inp : String) (outp : Option String)
       -- lifecycles render natively regardless of which harness produced them.
       let (t, callsCarried, resultsCarried) := if toFmt == "claude" then
           let (historical, count) := historicalizeOpenToolCallsForClaude source
-          (historical, count, 0)
+          (prepareClaudeMixedEntries historical, count, 0)
       else (source, 0, 0)
       let transformedVs := violations t
       if transformedVs.length > 0 then

@@ -1767,6 +1767,7 @@ private def cProtoExtras (p : Proto) : Option Json :=
           [("claudeCarrierDisposition", Json.str
             "agent-convert-historical-unverified")]
         else [])
+    ++ (if p.unverifiedCarrier then [("claudeMixedBlockArchive", Json.bool true)] else [])
   if fields.isEmpty then none else some (Json.mkObj fields)
 
 private def cOriginCarrierBlocks (origin : Origin) : List Nat :=
@@ -3626,7 +3627,7 @@ def historicalizeOpenToolCallsForClaude (t : Transcript) : Transcript × Nat :=
               | other => other
             else block)
           if carrierIndices.isEmpty then entry else
-            let entry := { entry with payload := Payload.assistantMsg historicalBlocks, disposition := .historicalUnverified }
+            let entry := { entry with payload := Payload.assistantMsg historicalBlocks }
             { entry with origin := cMarkOriginCarrierBlocks entry.origin carrierIndices }
       | _ => entry)
     ({ t with entries := entries.toArray }, opens.length)
@@ -4960,6 +4961,7 @@ the existing inert block carriers keep that representation for E-I-E stability. 
 private def cEntryNeedsWholeHistoricalCarrier
     (t : Transcript) (entryIdx : Nat) (entry : Entry)
     (carrierIndices : List Nat) : Bool :=
+  let splitArchive := entry.origin.extras.any (fun extras => cbool extras "claudeMixedBlockArchive")
   let userBlockAlreadyInert := fun (block : UserBlock) =>
     match block with
     | .text text =>
@@ -4977,7 +4979,7 @@ private def cEntryNeedsWholeHistoricalCarrier
     | _ => false
   let carrierBearing := entry.disposition == EntryDisposition.historicalUnverified ||
     !carrierIndices.isEmpty
-  if !carrierBearing then false else
+  if splitArchive then true else if !carrierBearing then false else
     match entry.payload with
     | .userMsg blocks => blocks.isEmpty || blocks.zipIdx.any (fun (block, blockIdx) =>
         !cUserBlockNeedsCarrier block &&
@@ -5018,9 +5020,105 @@ private def cWholeHistoricalPayload
           | _ => block))
   | payload => payload
 
+/-- Split native mixed messages into maximal representable/archived runs. The unsafe run gets its own
+typed historical entry; it cannot taint adjacent native text/calls or acquire
+execution authority on a later conversion. All positional links follow runs. -/
+private def cSplitMixedEntries (t : Transcript) : Transcript := Id.run do
+  let runs := t.entries.toList.zipIdx.map (fun (entry, i) =>
+    if entry.disposition != EntryDisposition.native then [] else
+      let count := match entry.payload with
+        | .assistantMsg blocks => blocks.length
+        | .userMsg blocks => blocks.length
+        | .envMsg blocks => blocks.length
+        | _ => 0
+      let carriers := cEntryCarrierIndices t i entry
+      (List.range count).foldl (fun (out : List (Bool × List Nat)) b =>
+        let safe := !carriers.contains b
+        match out.reverse with
+        | (previous, items) :: rest =>
+            if safe == previous then rest.reverse ++ [(safe, items ++ [b])]
+            else out ++ [(safe, [b])]
+        | [] => [(safe, [b])]) [])
+  let counts := runs.map (fun parts => max 1 parts.length)
+  let start := fun i => ((counts.take i).foldl (· + ·) 0)
+  let last := fun i => start i + (counts[i]?.getD 1) - 1
+  let coordinate := fun e b =>
+    match runs[e]? with
+    | some parts =>
+        if parts.length <= 1 then (start e, b) else
+          (parts.zipIdx.findSome? (fun (part, p) =>
+            part.2.zipIdx.findSome? (fun (source, localIndex) =>
+              if source == b then some (start e + p, localIndex) else none))).getD (start e, b)
+    | none => (start e, b)
+  let remapCall := fun call => match call with
+    | CallRef.resolved e b => let (nextE, nextB) := coordinate e b; CallRef.resolved nextE nextB
+    | other => other
+  let remapPayload := fun payload => match payload with
+    | Payload.envMsg blocks => Payload.envMsg (blocks.map (fun block => match block with
+        | .toolResult call content error => .toolResult (remapCall call) content error
+        | other => other))
+    | Payload.compaction summary (.knownPrefix kept) tokens =>
+        Payload.compaction summary (.knownPrefix (start kept)) tokens
+    | other => other
+  let entries := t.entries.toList.zipIdx.flatMap (fun (entry, i) =>
+    let parts := runs[i]?.getD []
+    if parts.length <= 1 then [{ entry with
+      parent := entry.parent.map last
+      payload := remapPayload (cWholeHistoricalPayload i entry (cEntryCarrierIndices t i entry)) }] else
+      let original := cWholeHistoricalPayload i entry (cEntryCarrierIndices t i entry)
+      parts.zipIdx.map (fun (part, p) =>
+        let selected := part.2
+        let payload := match original with
+          | .assistantMsg blocks => .assistantMsg (selected.filterMap (fun b => blocks[b]?))
+          | .userMsg blocks => .userMsg (selected.filterMap (fun b => blocks[b]?))
+          | .envMsg blocks => .envMsg (selected.filterMap (fun b => blocks[b]?))
+          | other => other
+        let raw := entry.origin.extras >>= fun extras => cobj extras "claudeRawEnvelope"
+        let subsetRaw := raw.map (fun envelope =>
+          let message := (cobj envelope "message").getD (Json.mkObj [])
+          let content := (carr message "content").getD #[]
+          let marker := (cobj envelope claudeCarrierMarkerKey).getD (Json.mkObj [])
+          let translations := ((carr marker "toolTranslation").getD #[]).toList.filterMap (fun value => do
+            let b ← cobj value "block" >>= fun n => n.getNat?.toOption
+            let localIndex ← (selected.zipIdx.find? (fun pair => pair.1 == b)).map Prod.snd
+            pure (cOverlayJsonObject value (Json.mkObj [("block", Json.num localIndex)])))
+          cOverlayJsonObject envelope (Json.mkObj [
+            ("message", cOverlayJsonObject message (Json.mkObj [
+              ("content", Json.arr (selected.filterMap (fun b => content[b]?)).toArray)])),
+            (claudeCarrierMarkerKey, cOverlayJsonObject marker (Json.mkObj [
+              ("toolTranslation", Json.arr translations.toArray)]))]))
+        let extras := (entry.origin.extras.getD (Json.mkObj []))
+        let extras := match extras with
+          | Json.obj fields => Json.mkObj (fields.toList.filter (fun (key, _) =>
+              key != claudeCarrierBlocksExtrasKey && key != "claudeCarrierDisposition" &&
+              (p + 1 == parts.length || !( ["codex_item_completed", "codex_command_completions",
+                "codex_command_completion_indices"].contains key))))
+          | other => other
+        let extras := cOverlayJsonObject extras (Json.mkObj
+          ([("claudeMixedBlockArchive", Json.bool (!part.1))] ++
+            (subsetRaw.toList.map (fun value => ("claudeRawEnvelope", value)))))
+        { entry with
+          parent := if p == 0 then entry.parent.map last else some (start i + p - 1)
+          payload := remapPayload payload
+          disposition := if part.1 then .native else .historicalUnverified
+          origin := { entry.origin with
+            rawId := if p + 1 == parts.length then entry.origin.rawId else none
+            extras := some extras } }))
+  return { t with
+    entries := entries.toArray
+    activeLeaf := t.activeLeaf.map last
+    threads := t.threads.map (fun thread => { thread with
+      kind := match thread.kind with
+        | .sidechain call => .sidechain (remapCall call)
+        | other => other }) }
+
 private def cIdentityJson : Option String → Json
   | some value => Json.str value
   | none => Json.null
+
+/-- CLI preparation exposes split storage entries to diagnostics and sidecar
+planning. The checked exporter also applies it for non-CLI callers. -/
+def prepareClaudeMixedEntries (t : Transcript) : Transcript := cSplitMixedEntries t
 
 private def cEntryIdentityProvenance?
     (t : Transcript) (uuidPlan : List String) (entryIdx : Nat)
@@ -5638,6 +5736,8 @@ required target fields, it re-imports the candidate and verifies that Claude's
 authoritative resume pointer still identifies the requested active occurrence. -/
 def exportClaudeCodeChecked (t : Transcript) : Except String String := do
   claudeExportPreflight t
+  let t := cSplitMixedEntries t
+  claudeExportPreflight t
   let output := cRenderClaudeCodeCandidate t
   let restored ← importClaudeCode output
   let active ← match t.activeLeaf with
@@ -5922,6 +6022,11 @@ def claudeCodexHistoricalLifecycleRoundTrip : Bool :=
   let (historical, counts) := historicalizeCodexToolsForClaude source
   let transformedExport := cExportClaudeFixture historical
   let directExport := cExportClaudeFixture source
+  let split := cSplitMixedEntries source
+  let expected := { split with entries := split.entries.map (fun entry =>
+    match entry.payload with
+    | .envMsg _ => { entry with disposition := .historicalUnverified }
+    | _ => entry) }
   counts == { calls := 4, results := 3 } &&
   Loom.Ops.callSites historical == [] && cToolResultCount historical == 0 &&
   !cContains transformedExport "\"type\":\"tool_use\"" &&
@@ -5931,11 +6036,12 @@ def claudeCodexHistoricalLifecycleRoundTrip : Bool :=
   cContains directExport ("\"" ++ claudeCarrierMarkerKey ++ "\"") &&
   -- entries + resume pointer + one inert source-environment carrier (retargeted).
   ((directExport.splitOn "\n").filter (fun line => !line.isEmpty)).length ==
-      source.entries.size + 2 &&
+      split.entries.size + 2 &&
   match importClaudeCode directExport, importClaudeCode transformedExport with
   | .ok direct, .ok transformed =>
-      cCodexHistoricalRestored direct && cCodexHistoricalRestored transformed &&
-      cToolResultCount direct == 3 && Loom.Ops.openCalls direct == [(0, 5)]
+      continuationProjection direct == continuationProjection expected &&
+      cCodexHistoricalRestored transformed &&
+      cToolResultCount direct == 3 && Loom.Ops.openCalls direct == Loom.Ops.openCalls expected
   | _, _ => false
 
 example : claudeCodexHistoricalLifecycleRoundTrip = true := by native_decide
@@ -6429,18 +6535,19 @@ def claudeValidNativeLifecycleChecked : Bool :=
 example : claudeValidNativeLifecycleChecked = true := by native_decide
 
 private def cClaudeMediaDataPreserved (t : Transcript) : Bool :=
-  match t.entries[0]?, t.entries[2]? with
-  | some userEntry, some assistantEntry =>
+  let assistantBlocks : List AssistantBlock := t.entries.toList.flatMap (fun entry => match entry.payload with
+    | .assistantMsg blocks => blocks | _ => [])
+  match t.entries[0]? with
+  | some userEntry =>
       (match userEntry.payload with
        | .userMsg [.media "image/png" locator] =>
            locator == "data:image/png;base64,iVBORw0KGgoAAAA"
        | _ => false) &&
-      (match assistantEntry.payload with
-       | .assistantMsg [
-           .media "image/jpeg" locator, .unmodeled "redacted_thinking" _] =>
+      (match assistantBlocks with
+       | [.media "image/jpeg" locator, .unmodeled "redacted_thinking" _] =>
            locator == "data:image/jpeg;base64,/9j/4AAQSkZJRg"
        | _ => false)
-  | _, _ => false
+  | _ => false
 
 /-- Native Claude user/assistant image data is retained in the IR and emitted
 back under `image.source`, not the old top-level `mimeType`/`data` pseudo-shape. -/
@@ -6455,11 +6562,18 @@ def claudeImageSourceRoundTripChecked : Bool :=
       cContains exported
         "\"source\":{\"data\":\"/9j/4AAQSkZJRg\",\"media_type\":\"image/jpeg\",\"type\":\"base64\"}" &&
       match importClaudeCode exported with
-      | .ok restored => cClaudeMediaDataPreserved restored
+      | .ok restored =>
+          let split := cSplitMixedEntries imported
+          let expected := { split with entries := (split.entries.toList.zipIdx.map (fun (entry, i) =>
+            if (cEntryCarrierIndices split i entry).isEmpty then entry
+            else { entry with disposition := .historicalUnverified })).toArray }
+          cClaudeMediaDataPreserved restored &&
+            continuationProjection restored == continuationProjection expected
       | .error _ => false
 
 example : claudeImageSourceRoundTripChecked = true := by native_decide
-example : roundTripClaude claudeMediaFixture = true := by native_decide
+-- Grouping changes to keep the image native beside an archived unknown block.
+-- Exact ordered content and the resulting disposition are checked above.
 
 private def claudeNonDefaultMimeLocatorFixture : Transcript :=
   let origin : Origin := {

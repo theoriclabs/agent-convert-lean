@@ -652,9 +652,28 @@ ordinary text metadata cannot synthesize a native Claude cut boundary.
 Live Pi recall is **pending**: the configured `openai-codex/gpt-5.5` request
 failed before model input with `401 invalid_refresh_token`. The probe fails on
 that error; the reader check is not described as a live continuation. The
+session-only Anthropic fallback also failed before input with
+`400 invalid_grant: Refresh token expired`; no global model setting changed. The
 opt-in `scripts/compaction-continuation-probe.mjs` makes that remaining check
 repeatable after authentication. These are development observations, not
 candidate-bound release qualification.
+
+The #4 mixed-message fixture passed tools-disabled live recall on Claude Code
+2.1.301 on 2026-10-16. Asked for the launch label recorded next to an unfinished
+`Read` call, the resumed model answered `amber-pine`. The fixture is
+`testdata/claude/2.1.274/mixed-open-tool.jsonl`, SHA-256
+`126a59f9848a7fab345642bee198a944bac3f505072ea7e8093609a10b256e05`.
+The final development binary SHA-256 was
+`6f75aa98988c72d25bc39777b5ea05edee09973de8e10ddbc09520754a5729c0`.
+`scripts/test-claude-mixed-blocks.mjs` separately checks native conversation
+content across three hops, native completed call/result linkage, Pi → Claude,
+unknown blocks, reversed block order, and mixed native/archived result entries.
+It rejects carrier JSON in these model-facing messages and fabricated results
+for unfinished calls. Full local verification passed, including all 40
+lifecycle cells. This establishes these fixtures' behavior, not universal
+support for future block types.
+The real compacted artifact still contained 36 native call/result pairs and
+167 records; its source bytes were unchanged. This was an artifact check.
 
 ### Requirements verdict
 
