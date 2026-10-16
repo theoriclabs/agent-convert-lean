@@ -63,7 +63,16 @@ The opt-in `scripts/continuation-probe.mjs` gate checks current-request and
 last-result recall in a signed-in Claude harness. All three versioned Codex
 compaction fixtures passed on Claude Code 2.1.301 on 2026-10-16; exact replies
 and limits are in `REQUIREMENTS_EVIDENCE.md`. Other harnesses are not covered by
-this live probe.
+this live probe. The separate opt-in `scripts/compaction-continuation-probe.mjs`
+checks summary-only fact recall in the configured Pi model.
+
+Native compaction summaries remain model context in Claude and Pi. Claude
+restores a recorded native boundary and summary when available; otherwise it
+uses a labeled user summary. Pi keeps valid native checkpoints and uses a
+`custom_message` summary when coverage or token count is unknown. These
+fallbacks report `projectCompactionSummary`: the text and typed metadata are
+retained, but native compaction coordinates are not fabricated. Old explicitly
+historical carriers remain inert. Summary metadata must match the visible text.
 
 Foreign reasoning becomes labeled assistant text in Claude. Opaque reasoning
 and encrypted compaction payloads stay in record metadata, with a readable

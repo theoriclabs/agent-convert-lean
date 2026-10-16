@@ -1029,6 +1029,34 @@ private def cCompactionCarrierMarker
      | some value => [("timeProvenance", value)]
      | none => []))
 
+/-- This stamp describes text already present in the model input. Unlike the
+old system carrier, it never promotes an invisible archive into conversation. -/
+private def cParseContextCompaction? (j : Json) : Option ClaudeCompactionCarrier := do
+  guard (cstr j "type" == some "user")
+  let message ← cobj j "message"
+  guard (cstr message "role" == some "user")
+  let marker ← cobj j claudeCarrierMarkerKey
+  guard (cstr marker "protocol" == some claudeCarrierProtocol)
+  let record ← cobj marker "contextSummary"
+  let synthetic := Json.mkObj [("type", Json.str "system"),
+    ("subtype", Json.str "agent_convert_compaction"),
+    (claudeCarrierMarkerKey, Json.mkObj [
+      ("protocol", Json.str claudeCarrierProtocol), ("compaction", record)])]
+  let parsed ← cParseCompactionCarrier? synthetic
+  let expected := if cbool j "isCompactSummary" then parsed.summary
+    else "[Conversation summary]\n" ++ parsed.summary
+  guard (cstr message "content" == some expected)
+  pure parsed
+
+private def cContextCompactionMarker (summary : String) (coverage : CompactionCoverage)
+    (tokensBefore : Option Nat) (sourceEnvelope sourceBoundary identity time : Option Json) : Json :=
+  let old := cCompactionCarrierMarker summary coverage tokensBefore
+    sourceEnvelope sourceBoundary identity time
+  match old with
+  | Json.obj fields => Json.mkObj (fields.toList.map (fun (key, value) =>
+      (if key == "compaction" then "contextSummary" else key, value)))
+  | other => other
+
 private def cNullableStringJson : Option String → Json
   | some value => Json.str value
   | none => Json.null
@@ -1545,6 +1573,7 @@ private structure Proto where
   carrierBlocks : List Nat := []
   rawEnvelope   : Option Json := none
   rawCompactionBoundary : Option Json := none
+  contextSummaryNative : Option Bool := none
   identityProvenance : Option Json := none
   unverifiedCarrier : Bool := false
   timeOverride : Option Time := none
@@ -1727,6 +1756,9 @@ private def cProtoExtras (p : Proto) : Option Json :=
         | none => [])
     ++ (match p.rawCompactionBoundary with
         | some raw => [("claudeRawCompactionBoundary", raw)]
+        | none => [])
+    ++ (match p.contextSummaryNative with
+        | some native => [("claudeContextSummaryNative", Json.bool native)]
         | none => [])
     ++ (match p.identityProvenance with
         | some identity => [("claudeIdentityProvenance", identity)]
@@ -2230,7 +2262,14 @@ private def stepLine (byUuid : List (String × Json)) (acc : Acc) (j : Json) : A
         tmap := acc.tmap ++ additions,
         omap := acc.omap ++ occurrenceAdditions }
   | none, none, some "user" =>
-      if let some peer := cPeerMessage? j then
+      if let some summary := cParseContextCompaction? j then
+        let proto := mkProto uuid parentUuid ts
+            (.compaction summary.summary summary.coverage summary.tokensBefore)
+            (rawEnvelope := summary.sourceEnvelope)
+            (rawCompactionBoundary := summary.sourceBoundary)
+        { acc with protos := acc.protos.push { proto with
+            contextSummaryNative := some (cbool j "isCompactSummary") } }
+      else if let some peer := cPeerMessage? j then
         { acc with protos := acc.protos.push (mkProto uuid parentUuid ts
             (Payload.otherMsg "peer" [UserBlock.text (cPeerMessageText peer)])
             (rawEnvelope := some raw)) }
@@ -2596,11 +2635,15 @@ private def cValidateConversationCarrierMarker
       else pure ()
       let recognizedPurpose :=
         ["contentBlocks", "provenance", "identityProvenance", "timeProvenance",
-          "toolCanonical", "toolTranslation", "toolResultErrors", "unavailableOutput", "reasoning"].any
+          "toolCanonical", "toolTranslation", "toolResultErrors", "unavailableOutput", "reasoning", "contextSummary"].any
           (fun key => (marker.getObjVal? key).toOption.isSome)
       if !recognizedPurpose then
         cSchemaError line claudeCarrierMarkerKey
           "has no recognized conversation-carrier payload"
+      else pure ()
+      if (cobj marker "contextSummary").isSome && (cParseContextCompaction? record).isNone then
+        cSchemaError line (claudeCarrierMarkerKey ++ ".contextSummary")
+          "must match the model-facing user summary"
       else pure ()
       match marker.getObjVal? "toolCanonical" with
       | .error _ => pure ()
@@ -4171,7 +4214,9 @@ foreign/unsigned reasoning→labeled text plus exact provenance, `.toolCall`→`
 tool_use_id,is_error,content}` — the `tool_use_id` recovered from the `CallRef`'s
 target `toolCall`, so a re-import re-resolves the same positional `CallRef`.
 Unmodeled blocks in every role and any lifecycle that cannot be proven closed,
-unique, and schema-valid are emitted only as marked inert text carriers. A compaction is likewise a marked `system` carrier, never a user turn.
+unique, and schema-valid are emitted only as marked inert text carriers.
+Native compaction summaries remain model context; explicitly historical
+compaction carriers remain inert system records.
 
 `uuid` preserves a source raw ID only when it is a valid, transcript-unique
 UUID. Every valid explicit UUID is reserved before deterministic synthesis, so
@@ -5159,6 +5204,36 @@ private def cNonemptyString? : Option String → Option String
   | some text => if text.isEmpty then none else some text
   | none => none
 
+private def cNativeCompactionBoundary? (entry : Entry) : Option Json := do
+  guard (entry.disposition == EntryDisposition.native)
+  guard (entry.origin.format == Format.claudeCode)
+  guard ((entry.origin.extras >>= fun extras =>
+    cobj extras "claudeContextSummaryNative") != some (Json.bool false))
+  let .compaction _ .unknownPrefix _ := entry.payload | none
+  let boundary ← entry.origin.extras >>= fun extras =>
+    cobj extras "claudeRawCompactionBoundary"
+  guard (cCompactionBoundary boundary)
+  guard ((cstr boundary "logicalParentUuid").any claudeUuidValid)
+  pure boundary
+
+private def cCompactionBoundaryUuidPlan (t : Transcript) (uuids : List String) : List (Option String) := Id.run do
+  let mut used := uuids
+  let mut counter := 1
+  let mut out := []
+  for entry in t.entries.toList do
+    if let some boundary := cNativeCompactionBoundary? entry then
+      let preferred := (cstr boundary "uuid").filter (fun id =>
+        claudeUuidValid id && !used.contains id)
+      let (id, next) := match preferred with
+        | some id => (id, counter)
+        | none => cFreshGeneratedClaudeUuid
+            (cClaudeTargetSessionId t ++ "|compaction") uuids used counter
+      used := id :: used
+      counter := next
+      out := out ++ [some id]
+    else out := out ++ [none]
+  return out
+
 private def cClaudeEntryTimestamp? (t : Transcript) (e : Entry) : Option String :=
   match e.time with
   | .recorded timestamp => some (epochMsToIso8601 timestamp)
@@ -5240,12 +5315,17 @@ private def cClaudeEntryToJson
     | Payload.compaction summary coverage tokensBefore =>
         let sourceBoundary := e.origin.extras.bind (fun extras =>
           cNonNull (cobj extras "claudeRawCompactionBoundary"))
-        Json.mkObj ([("type", Json.str "system"),
-            ("subtype", Json.str "agent_convert_compaction")] ++ stamp ++ [
-          ("content", Json.str
-            "Historical compaction summary retained by agent-convert; not user dialogue"),
-          (claudeCarrierMarkerKey, cCompactionCarrierMarker summary coverage tokensBefore
-            provenanceRaw sourceBoundary identityProvenance timeProvenance)])
+        let boundaryId := ((cCompactionBoundaryUuidPlan t uuidPlan)[i]?).join
+        let fields := [("type", Json.str "user")] ++ stamp ++ [
+          ("message", Json.mkObj [("role", Json.str "user"),
+            ("content", Json.str (if boundaryId.isSome then summary
+              else "[Conversation summary]\n" ++ summary))]),
+          (claudeCarrierMarkerKey, cContextCompactionMarker summary coverage tokensBefore
+            provenanceRaw sourceBoundary identityProvenance timeProvenance)]
+        match boundaryId with
+        | some id => cOverlayJsonObject (Json.mkObj fields) (Json.mkObj [
+            ("parentUuid", Json.str id), ("isCompactSummary", Json.bool true)])
+        | none => Json.mkObj fields
     | payload@(.event _) =>
         Json.mkObj ([
           ("type", Json.str "system"), ("subtype", Json.str "agent_convert_inert")]
@@ -5503,10 +5583,21 @@ private def cRenderClaudeCodeCandidate (t : Transcript) : String :=
       some (Json.mkObj [
         ("uuid", (cobj record "uuid").getD Json.null),
         ("parentUuid", (cobj record "parentUuid").getD Json.null)]) else none)
-  let entryLines := physical.map (fun record =>
-    (cOverlayJsonObject record (Json.mkObj [
+  let boundaryIds := cCompactionBoundaryUuidPlan t uuidPlan
+  let entryLines := physical.flatMap (fun record =>
+    let projected := cOverlayJsonObject record (Json.mkObj [
       ("parentUuid", cNullableStringJson
-        (cEventAncestor (n + 1) eventRecords (cstr record "parentUuid")))])).compress)
+        (cEventAncestor (n + 1) eventRecords (cstr record "parentUuid")))])
+    let boundary := t.entries.toList.zipIdx.findSome? (fun (entry, i) => do
+      guard (uuidPlan[i]? == cstr record "uuid")
+      let raw ← cNativeCompactionBoundary? entry
+      let id ← (boundaryIds[i]?).join
+      pure (cOverlayJsonObject raw (Json.mkObj [
+        ("uuid", Json.str id), ("parentUuid", Json.null),
+        ("sessionId", Json.str (cClaudeTargetSessionId t)),
+        ("cwd", (cobj record "cwd").getD Json.null),
+        ("timestamp", (cobj record "timestamp").getD Json.null)])))
+    (boundary.toList ++ [projected]).map Json.compress)
   let originalPointer := cExportLastPrompt? t uuidPlan
   let activeEvent := originalPointer.bind (fun pointer =>
     eventRecords.find? (fun event => cstr event "uuid" == cstr pointer "leafUuid"))
@@ -6548,11 +6639,13 @@ def claudeCompactionBoundaryChecked : Bool :=
       let exported := exportClaudeCode imported
       cCompactionShape imported &&
       match cParseClaudeJsonLines exported, importClaudeCode exported with
-      | .ok [record, pointer], .ok restored =>
-          cstr record "type" == some "system" &&
-          cstr record "subtype" == some "agent_convert_compaction" &&
+      | .ok [boundary, record, pointer], .ok restored =>
+          cCompactionBoundary boundary &&
+          cstr record "type" == some "user" && cbool record "isCompactSummary" &&
+          cstr record "parentUuid" == cstr boundary "uuid" &&
+          (cobj record "message" >>= fun message => cstr message "content") == some "summary text" &&
           (cobj record claudeCarrierMarkerKey >>= fun marker =>
-            cobj marker "compaction" >>= fun carrier => cstr carrier "summary") ==
+            cobj marker "contextSummary" >>= fun carrier => cstr carrier "summary") ==
               some "summary text" &&
           cstr pointer "type" == some "last-prompt" &&
           cstr pointer "leafUuid" == cstr record "uuid" &&

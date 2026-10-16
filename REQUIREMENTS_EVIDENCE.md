@@ -633,6 +633,29 @@ The real compacted artifact separately retained 36 native pairs and 41 opaque
 reasoning records, with zero malformed checkpoints and an unchanged source.
 No private-session live continuation is claimed by this observation.
 
+The #3 synthetic compaction fixture passed live Claude → Claude recall on
+Claude Code 2.1.301 on 2026-10-16. Its database and migration codename occur
+only in the summary. The tools-disabled reply was:
+
+> We chose PostgreSQL as the database, and the migration codename is violet-river.
+
+The fixture is `testdata/claude/2.1.274/compaction-summary.jsonl`, SHA-256
+`50cb1fda8eef6b9bc6d5931a2cb8cf9b1ed2895160627d2a696c9ec6a82b23ec`;
+development converter SHA-256
+`ec43907d5f814bfa21a5f074ad5645bfa028504408be726939ae4b71c2e28785`.
+The installed session was deleted and the source remained unchanged. Pi 0.84.2's
+actual `buildSessionContext` and `convertToLlm` reader path retained that exact
+summary for both projected Claude → Pi and native Pi checkpoints. Repeated
+same-format and cross-format checks retained typed coverage and token counts;
+ordinary text metadata cannot synthesize a native Claude cut boundary.
+
+Live Pi recall is **pending**: the configured `openai-codex/gpt-5.5` request
+failed before model input with `401 invalid_refresh_token`. The probe fails on
+that error; the reader check is not described as a live continuation. The
+opt-in `scripts/compaction-continuation-probe.mjs` makes that remaining check
+repeatable after authentication. These are development observations, not
+candidate-bound release qualification.
+
 ### Requirements verdict
 
 The requirements case describes an experimental developer-preview candidate

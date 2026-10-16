@@ -84,3 +84,21 @@ and requires existing authentication, so ordinary CI runs only its offline
 negative checks. Retain synthetic receipts and record observed transcripts in
 `REQUIREMENTS_EVIDENCE.md`; do not commit private session contents. Each
 release needs its own candidate-bound receipts.
+
+Check a fact present only in a compaction summary as well:
+
+```sh
+LOOM_BIN=/path/to/release/loom node scripts/continuation-probe.mjs testdata/claude/2.1.274/compaction-summary.jsonl claude --expect PostgreSQL --expect violet-river --prompt 'Which database and migration codename did we choose? Reply in one sentence from the existing conversation.' --report /tmp/probe-claude-summary.json
+LOOM_BIN=/path/to/release/loom node scripts/compaction-continuation-probe.mjs /tmp/probe-pi-summary.json
+```
+
+The Pi probe uses the configured provider/model, disables tools and project
+customizations, and resumes a converted synthetic fixture in a temporary
+directory. It never installs or overwrites an existing conversation. Optional
+`PI_PROBE_PROVIDER` and `PI_PROBE_MODEL` variables select a model for this test
+only. Authentication errors fail the check. To inspect Pi's actual model input
+without a model request, set `PI_PACKAGE_ROOT` to the installed Pi package root
+and run `node scripts/test-compaction-context.mjs`; it calls the installed
+`buildSessionContext` and `convertToLlm` implementations on both native and
+projected summaries. The ordinary CI test covers artifact shape, repeated
+conversion, typed coverage, and malformed metadata without that dependency.

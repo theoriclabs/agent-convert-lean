@@ -1015,6 +1015,8 @@ inductive Obligation where
   | dropRecordedTime
   /-- Transcript has compaction summaries the target cannot represent. -/
   | dropCompaction
+  /-- Summary stays in model context; native compaction coordinates are absent. -/
+  | projectCompactionSummary
   | dropMedia
   | dropUnmodeled
   | dropToolResults
@@ -1124,6 +1126,7 @@ not reach a merely lossy artifact. -/
 def obligationImpactFor (tgt : Format) (t : Transcript) :
     Obligation -> ObligationImpact
   | .synthesizeEntryIds | .synthesizeTimestamps => .fulfillment
+  | .projectCompactionSummary => .reportOnly
   | .dropSourceIdentity =>
       if hasExplicitTargetSessionIdentity tgt t ||
           obligationForcedByTargetLimits tgt .dropSourceIdentity then .reportOnly
@@ -1210,7 +1213,7 @@ def obligations (tgt : Format) (t : Transcript) : List Obligation := Id.run do
       (hasBranches t && !preservesParentAndActiveLeaf tgt) then
     out := out.push .linearizeBranches
   -- These checks describe shipped exporters, not only the format matrix. Pi
-  -- has a native form, Claude has a typed carrier, and Codex accepts either an
+  -- and Claude preserve summaries in model context, and Codex accepts either an
   -- exact native checkpoint or a typed historical carrier. Cursor has no native
   -- compaction form.
   if hasCompaction nativeSurface then
@@ -1220,6 +1223,22 @@ def obligations (tgt : Format) (t : Transcript) : List Obligation := Id.run do
       if !codexTargetCompactionsValid t then out := out.push .dropCompaction
     else
       out := out.push .dropCompaction
+    if nativeSurface.entries.toList.any (fun entry => match entry.payload with
+        | .compaction _ coverage tokens =>
+            if tgt == Format.pi then
+              match coverage, tokens with
+              | .knownPrefix _, some _ => false
+              | _, _ => true
+            else if tgt == Format.claudeCode then
+              !(entry.origin.format == Format.claudeCode &&
+                coverage == CompactionCoverage.unknownPrefix &&
+                (entry.origin.extras >>= fun extras =>
+                  jsonObject? extras "claudeContextSummaryNative") != some (Lean.Json.bool false) &&
+                (entry.origin.extras >>= fun extras =>
+                  jsonObject? extras "claudeRawCompactionBoundary").isSome)
+            else false
+        | _ => false) then
+      out := out.push .projectCompactionSummary
   if hasEvents nativeSurface then
     if tgt = Format.pi || tgt = Format.claudeCode || tgt = Format.openCode then
       pure ()

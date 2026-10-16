@@ -1597,6 +1597,15 @@ private def entryToJsonLinesWithPlan (t : Transcript) (idPlan : List (List Strin
          (match tokensBefore with
           | some tokens => [("tokensBefore", Json.num tokens)]
           | none => [("tokensBefore", Json.null)]))
+      let contextSummary := fun (raw : Option Json) =>
+        overlayJsonFields (raw.getD (Json.mkObj []))
+          ["type", "customType", "content", "display", "details", "data"]
+          (firstBase ++ [("type", Json.str "custom_message"),
+            ("customType", Json.str "loom.pi.compaction-summary"),
+            ("content", Json.str ("[Conversation summary]\n" ++ summary)),
+            ("display", Json.bool true),
+            ("details", Json.mkObj [("version", Json.num piCarrierVersion),
+              ("compaction", carrierValue)])])
       match rawEntry with
       | some raw =>
           if piCarrierEntryKind? raw == some "compaction" then
@@ -1613,14 +1622,14 @@ private def entryToJsonLinesWithPlan (t : Transcript) (idPlan : List (List Strin
                     ("firstKeptEntryId", Json.str
                       (piEntryFirstId idPlan firstKept)),
                     ("tokensBefore", Json.num tokens)])]
-            | _, _ => [piCustomCarrierEntry firstBase "compaction" carrierValue]
+            | _, _ => [contextSummary (some raw)]
       | none =>
           match coverage, tokensBefore with
           | .knownPrefix firstKept, some tokens => [Json.mkObj (firstBase ++ [
               ("type", Json.str "compaction"), ("summary", Json.str summary),
               ("firstKeptEntryId", Json.str (piEntryFirstId idPlan firstKept)),
               ("tokensBefore", Json.num tokens)])]
-          | _, _ => [piCustomCarrierEntry firstBase "compaction" carrierValue]
+          | _, _ => [contextSummary none]
   | .event event =>
       [metaEventJson t e.origin firstBase event]
 
@@ -2861,7 +2870,22 @@ private def parseEntry (line : Nat) (j : Json) : Except String RawEntry := do
       let content ← piRequireField ctx j "content"
       let blocks ← piParseUserContent s!"{ctx}.content" content
       let _ ← piRequireBool ctx j "display"
-      if customType == "loom.pi.other-message" then
+      if customType == "loom.pi.compaction-summary" then
+        let details ← piRequireObject ctx j "details"
+        let version ← piRequireNat ctx details "version"
+        if version != piCarrierVersion then
+          piSchemaError ctx "unsupported context-summary version"
+        else pure ()
+        let value ← piRequireObject ctx details "compaction"
+        let summary ← piRequireString ctx value "summary"
+        if content != Json.str ("[Conversation summary]\n" ++ summary) then
+          piSchemaError ctx "compaction metadata must match model-facing summary"
+        else pure ()
+        let firstKeptEntryId ← piOptionalNullableString ctx value "firstKeptEntryId"
+        let tokensBefore ← piOptionalNullableNat ctx value "tokensBefore"
+        pure { (base (.compaction summary .unknownPrefix tokensBefore)) with
+          firstKeptEntryId, tokensBefore }
+      else if customType == "loom.pi.other-message" then
         let details ← piRequireObject ctx j "details"
         let version ← piRequireNat s!"{ctx}.details" details "version"
         if version != piCarrierVersion then
@@ -5690,7 +5714,14 @@ private def piCompactionMutationTranscript : Transcript := {
 private def piCompactionCarrierWithEnvelope (output : String) : Option String := do
   let lines := piTestJsonLines output
   let carrier ← lines[2]?
-  guard (piCarrierEntryKind? carrier == some "compaction")
+  -- Exercise legacy inert-carrier mutation explicitly. New native summaries
+  -- now use custom_message so that Pi includes them in model context.
+  let value ← oobj carrier "details" >>= fun details => oobj details "compaction"
+  let carrier := overlayJsonFields carrier
+    ["type", "customType", "content", "display", "details", "data"] [
+      ("type", Json.str "custom"), ("customType", Json.str "loom.pi.carrier"),
+      ("data", Json.mkObj [("version", Json.num piCarrierVersion),
+        ("kind", Json.str "compaction"), ("value", value)])]
   let data ← oobj carrier "data"
   let extendedData := overlayJsonFields data ["dataExtension"] [
     ("dataExtension", Json.mkObj [

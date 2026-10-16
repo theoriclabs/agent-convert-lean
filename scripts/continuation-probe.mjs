@@ -47,15 +47,16 @@ export function main(args = process.argv.slice(2)) {
   assert.ok(sourceArg && target, 'Usage: continuation-probe.mjs <source> claude --expect <word> [--expect-outcome <word>] [--report <path>] [--keep]');
   assert.equal(target, 'claude', `Live continuation probing for ${target} is not implemented; no session was installed`);
   const expected = [], expectedOutcome = [];
-  let keep = false, reportPath;
+  let keep = false, reportPath, probePrompt = prompt;
   for (let i = 0; i < options.length; i++) {
     const flag = options[i];
     if (flag === '--keep') { keep = true; continue; }
-    assert.ok(['--expect', '--expect-outcome', '--report'].includes(flag), `Unknown option: ${flag}`);
+    assert.ok(['--expect', '--expect-outcome', '--report', '--prompt'].includes(flag), `Unknown option: ${flag}`);
     const value = options[++i];
     assert.ok(value && !value.startsWith('--'), `${flag} needs a value`);
     if (flag === '--expect') expected.push(value);
     else if (flag === '--expect-outcome') expectedOutcome.push(value);
+    else if (flag === '--prompt') probePrompt = value;
     else reportPath = resolve(value);
   }
   assert.ok(expected.length, 'Provide --expect with a distinctive keyword from the current source request');
@@ -89,13 +90,13 @@ export function main(args = process.argv.slice(2)) {
     target, harnessVersion, sessionId, source, sourceSha256: digest(sourceBytes),
     converterSha256: digest(readFileSync(loom)), converter,
     convertedSha256: digest(converted), sourceOutcome, expected, expectedOutcome,
-    sourceSummary, conversion, prompt, toolsDisabled: true, passed: false, kept: keep };
+    sourceSummary, conversion, prompt: probePrompt, toolsDisabled: true, passed: false, kept: keep };
   reportPath ||= join(scratch, 'receipt.json');
   try {
     const probe = spawnSync(harness, ['-p', '--resume', sessionId, '--fork-session',
       '--no-session-persistence', '--safe-mode', '--tools', '', '--disable-slash-commands',
       '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--output-format', 'json',
-      '--max-budget-usd', '2', prompt],
+      '--max-budget-usd', '2', probePrompt],
     { cwd: scratch, encoding: 'utf8', timeout: 180000, maxBuffer: 16 * 1024 * 1024 });
     writeFileSync(join(scratch, 'probe.stdout'), probe.stdout || '');
     writeFileSync(join(scratch, 'probe.stderr'), probe.stderr || '');

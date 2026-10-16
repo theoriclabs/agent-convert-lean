@@ -1630,7 +1630,11 @@ def reversibleRepresentationMatrix : List (String × Bool) := [
       dangerousClaudeServerResultTranscript [.historicalUnverified]),
   ("claude-pi-compaction", !semanticBlocked "claude" piCompactionTranscript &&
     projectionRoundTripsThroughWithDispositions "claude" piCompactionTranscript
-      [.historicalUnverified]),
+      [.native] &&
+    (Loom.Ops.obligations .claudeCode piCompactionTranscript).contains
+      .projectCompactionSummary &&
+    Loom.Ops.obligationIsReportOnlyFor .claudeCode piCompactionTranscript
+      .projectCompactionSummary),
   ("pi-safe-unknown", !semanticBlocked "pi" safePiUnknownTranscript &&
     projectionRoundTripsThroughWithDispositions "pi" safePiUnknownTranscript
       [.historicalUnverified]),

@@ -607,6 +607,7 @@ private def exportObligationJson (target : Format) (t : Transcript)
     | .synthesizeTimestamps => [("kind", Lean.Json.str "synthesizeTimestamps")]
     | .dropRecordedTime => [("kind", Lean.Json.str "dropRecordedTime")]
     | .dropCompaction => [("kind", Lean.Json.str "dropCompaction")]
+    | .projectCompactionSummary => [("kind", Lean.Json.str "projectCompactionSummary")]
     | .dropMedia => [("kind", Lean.Json.str "dropMedia")]
     | .dropUnmodeled => [("kind", Lean.Json.str "dropUnmodeled")]
     | .dropToolResults => [("kind", Lean.Json.str "dropToolResults")]
