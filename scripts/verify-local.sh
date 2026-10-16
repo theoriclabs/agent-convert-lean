@@ -32,6 +32,7 @@ node scripts/test-cursor-native-history.mjs
 node scripts/test-codex-call-ids.mjs
 node scripts/test-claude-exec-history.mjs
 node scripts/test-codex-checkpoints.mjs
+node scripts/test-codex-exec-status.mjs
 python3 scripts/test-claude-task-notifications.py
 python3 scripts/test-cursor-ide-transcript.py
 

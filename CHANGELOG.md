@@ -7,6 +7,9 @@ lands; move them into a dated version section when publishing a release.
 
 ### Fixed
 
+- Restrict Codex error inference to runner headers. Successful output that prints
+  timeout limits, quoted failures, or exit-status text stays successful
+  ([#11](https://github.com/theoriclabs/agent-convert-lean/issues/11)).
 - Warn when unknown Codex checkpoint fields contain unconsumed message-shaped
   content. Include field names, counts, source locations, and samples in JSON
   diagnostics, and name the fields in no-dialogue export refusals

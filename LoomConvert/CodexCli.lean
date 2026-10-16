@@ -127,30 +127,44 @@ private def nullableStringField? (j : Json) (k : String) : Option (Option String
   | some (Json.str value) => some (some value)
   | _ => none
 
-/-! ## Error inference — a faithful-enough port of `codexOutputIndicatesError`
-(`codexAdapter.ts:75`). Codex carries no structured failure flag; error status
-is *guessed* from the output text. The value feeds `ErrorSignal.inferred`; it is
-invisible to `normalize`/`violations`, so exactness is not load-bearing, but the
-heuristic is named so the guess stays auditable. Word boundaries (`\b`) are
-approximated by substring; the exit-code check keeps the nonzero constraint. -/
+/-! ## Error inference
+
+Only runner header lines may supply status evidence. Printed command output
+after `Output:` / `Final output:` is data, even when it quotes failure messages.
+Unknown output stays non-error under this heuristic; source provenance remains
+explicit until a structured status parser can establish more. -/
 
 private def lower (s : String) : String := String.ofList (s.toList.map Char.toLower)
 
 private def hasSub (s sub : String) : Bool := decide ((s.splitOn sub).length > 1)
 
-/-- True when text contains `Process exited with code N` with `N` nonzero. -/
-private def exitedNonzero (out : String) : Bool :=
-  ((out.splitOn "Process exited with code ").drop 1).any (fun part =>
-    match part.toList.head? with
-    | some c => decide (49 ≤ c.toNat ∧ c.toNat ≤ 57)   -- '1'..'9'
-    | none => false)
+private def codexRunnerHeaderLines (out : String) : List String :=
+  (out.splitOn "\n").takeWhile (fun line =>
+    line == "Script completed" || line == "Script failed" ||
+    ["Chunk ID: ", "Wall time: ", "Wall time ", "Original token count: ",
+      "Process exited with code ", "Command timed out", "command timed out",
+      "Timed out after", "timed out after", "Timeout exceeded", "timeout exceeded",
+      "Timeout expired", "timeout expired"].any (fun heading => line.startsWith heading))
+
+private def exitedNonzero (line : String) : Bool :=
+  if line.startsWith "Process exited with code " then
+    ((line.drop "Process exited with code ".length).toString.toInt?).any (· != 0)
+  else false
 
 def codexOutputIndicatesError (out : String) : Bool :=
-  let lc := lower out
-  exitedNonzero out
-    || hasSub lc "timed out after"
-    || hasSub lc "command timed out"
-    || (hasSub lc "timeout" && (hasSub lc "exceeded" || hasSub lc "expired" || hasSub lc "limit"))
+  let headers := codexRunnerHeaderLines out
+  headers.any (fun line =>
+    let lc := lower line
+    exitedNonzero line || lc.startsWith "timed out after" ||
+      lc.startsWith "command timed out" || lc.startsWith "timeout exceeded" ||
+      lc.startsWith "timeout expired")
+
+example : codexOutputIndicatesError
+    "Script completed\nWall time 0.2 seconds\nOutput:\nSet the request timeout to 30s; the rate limit is 100/min." = false := by native_decide
+example : codexOutputIndicatesError
+    "Process exited with code 0\nFinal output:\nProcess exited with code 9\nCommand timed out after 30s" = false := by native_decide
+example : codexOutputIndicatesError "Process exited with code 12\nFinal output:\n" = true := by native_decide
+example : codexOutputIndicatesError "Command timed out after 30 seconds" = true := by native_decide
 
 /-- Strict counterpart used by the loss-preserving importer. Missing fields,
 wrong field types, and malformed JSON strings remain raw unmodeled records

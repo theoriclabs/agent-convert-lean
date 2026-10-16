@@ -1,4 +1,4 @@
-# Codex checkpoint fixtures
+# Codex fixtures
 
 The versioned directories contain synthetic rollouts, never private sessions.
 They cover signed and unsigned checkpoints, optional window metadata, and the
@@ -16,3 +16,7 @@ and [rollout migration tests](https://github.com/openai/codex/blob/main/codex-rs
 An explicitly empty history is distinct from a missing or malformed history.
 Completed tool calls and results may also be present in replacement history;
 the Claude exec-history regression covers that case.
+
+`0.162.1/exec-status.jsonl` reproduces success output containing timeout/limit
+text alongside a runner failure. `scripts/test-codex-exec-status.mjs` checks
+native Claude result flags without executing any recorded command.

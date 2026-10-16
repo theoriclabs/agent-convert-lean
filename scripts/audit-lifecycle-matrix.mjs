@@ -1003,11 +1003,14 @@ function parseClaudeRows(rows, allowTargetCarriers, context) {
 function codexOutputIndicatesError(blocks) {
   const text = blocks.filter((block) => block.kind === "text")
     .map((block) => block.text).join("");
-  const lower = text.toLowerCase();
-  return /Process exited with code [1-9]/.test(text) ||
-    lower.includes("timed out after") || lower.includes("command timed out") ||
-    (lower.includes("timeout") && ["exceeded", "expired", "limit"]
-      .some((part) => lower.includes(part)));
+  for (const line of text.split('\n')) {
+    if (/^(?:Output:|Final output:)/.test(line)) break;
+    const exit = /^Process exited with code (-?\d+)$/.exec(line);
+    if (exit && Number(exit[1]) !== 0) return true;
+    if (/^(?:command timed out|timed out after|timeout exceeded|timeout expired)/i.test(line)) return true;
+    if (!/^(?:Script (?:completed|failed)$|Chunk ID: |Wall time[: ]|Original token count: |Process exited with code )/.test(line)) break;
+  }
+  return false;
 }
 
 function parseCodexOutput(value, context) {
