@@ -16,6 +16,11 @@ lands; move them into a dated version section when publishing a release.
 
 ### Fixed
 
+- Refuse OpenCode export when a failed tool result contains images or files,
+  with the exact entry/block location. The native error state cannot carry
+  attachments; successful results retain their media and text-only failures
+  remain supported (#7).
+
 - Preserve OpenCode message and part order beyond entry 9 with fixed-width
   sequence IDs. Keep compaction requests before their summaries and imported
   history before newly appended native turns (#6).

@@ -481,6 +481,8 @@ def openCodeTargetExportPrerequisiteFailures (t : Transcript) : List String := I
               | _ => failures := failures ++ [s!"entry {entryIndex}, block {blockIndex}: result does not reference a tool call"]
               if !resultContentExportable content then
                 failures := failures ++ [s!"entry {entryIndex}, block {blockIndex}: unmodeled tool-result content"]
+              if openCodeErrorBool signal && content.any (fun | .media _ _ => true | _ => false) then
+                failures := failures ++ [s!"entry {entryIndex}, block {blockIndex}: OpenCode error tool state cannot carry image/file attachments; refusing to discard failed tool-result media"]
               if signal == .unrecorded then
                 failures := failures ++ [s!"entry {entryIndex}, block {blockIndex}: OpenCode requires a known terminal tool status"]
           | .toolResult (.unresolved _ _) _ _ =>

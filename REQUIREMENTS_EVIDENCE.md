@@ -697,6 +697,16 @@ No real user store or external provider was used. Set `OPENCODE_BIN` to the
 pinned binary to repeat the isolated check; ordinary verification checks the
 artifact ordering. The #5 isolated-store checks also passed with these IDs.
 
+The #7 media-loss regression passed 24 combinations of result content and
+error provenance on 2026-10-16. `scripts/test-opencode-result-media.mjs` covers
+text with images/files, media-only results, and text-only failures. Native and
+structured failures with media stop before publication, naming the entry and
+block and the unsupported error-state attachments. Successful and heuristic
+results retain exact attachment MIME types and URLs through the actual
+OpenCode 1.1.34 importer/exporter in a temporary store; text-only errors retain
+their native failure state. This is explicit refusal of unsupported failed
+media, not a claim that OpenCode error states now support attachments.
+
 ### Requirements verdict
 
 The requirements case describes an experimental developer-preview candidate
