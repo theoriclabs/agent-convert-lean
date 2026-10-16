@@ -16,6 +16,10 @@ lands; move them into a dated version section when publishing a release.
 
 ### Fixed
 
+- Preserve OpenCode message and part order beyond entry 9 with fixed-width
+  sequence IDs. Keep compaction requests before their summaries and imported
+  history before newly appended native turns (#6).
+
 - Give foreign OpenCode exports stable source-specific session IDs and scope
   all message, part, metadata, and attachment IDs to the selected target session.
   Refuse invalid explicit session IDs instead of using a shared fallback (#5).

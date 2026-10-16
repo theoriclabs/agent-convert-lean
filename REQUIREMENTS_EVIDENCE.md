@@ -683,7 +683,19 @@ tool-result attachment. `scripts/test-opencode-store.mjs` checks disjoint part
 keys and rejects malformed explicit IDs before publication. Set `OPENCODE_BIN`
 to the pinned binary to repeat the isolated target check; the ordinary local
 suite checks artifacts only. This is a storage test without provider execution;
-the chronological-order correction is tracked separately in #6.
+the chronological-order correction is checked separately below.
+
+The #6 OpenCode order check passed the actual 1.1.34 store and model-request
+path on 2026-10-16. `scripts/test-opencode-order.mjs` imports 14 ordinary
+messages, including messages with 13 text parts, both with and without a
+compaction boundary. The target preserves stored order and sends the expected
+ordered active context; compacted-away messages are absent. OpenCode then
+creates a native user/assistant turn after all imported history. A loopback
+synthetic responder captures the request and supplies the assistant text;
+this verifies target serialization and appending, not a live model's recall.
+No real user store or external provider was used. Set `OPENCODE_BIN` to the
+pinned binary to repeat the isolated check; ordinary verification checks the
+artifact ordering. The #5 isolated-store checks also passed with these IDs.
 
 ### Requirements verdict
 

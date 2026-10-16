@@ -505,6 +505,21 @@ private def resultFor? (t : Transcript) (entry block : Nat) : Option OCResult :=
         | _ => none
     | _ => none
 
+/-- OpenCode sorts storage keys, not timestamps or export-array positions.
+Reserve the all-zero native time prefix for imported history: native ascending
+IDs have a nonzero counter, so later native messages/parts sort after this
+prefix even when the target's 48-bit clock encoding wraps. The fixed-width
+sequence orders imported rows; the complete target scope prevents collisions. -/
+private def sequenceHex (ordinal : Nat) : String :=
+  let digits := Nat.toDigits 16 ordinal
+  String.ofList (List.replicate (16 - digits.length) '0' ++ digits)
+
+private def messageIdFor (sessionId : String) (ordinal : Nat) : String :=
+  "msg_000000000000" ++ sequenceHex ordinal ++ "_" ++ sessionId
+
+private def partIdFor (messageId : String) (ordinal : Nat) : String :=
+  "prt_000000000000" ++ sequenceHex ordinal ++ "_" ++ messageId
+
 private def exportTimestamp (base : Nat) (entry : Entry) (ordinal : Nat) : Nat :=
   match entry.time with
   | .recorded ⟨ms⟩ | .interpolated ⟨ms⟩ _ => ms
@@ -548,14 +563,14 @@ private def partSupportsMetadata (part : Json) : Bool :=
   | _ => false
 
 private def attachEntryMetadata (sessionId messageId : String) (entry : Entry)
-    (entryIndex : Nat) (parts : Array Json) : Array Json :=
+    (parts : Array Json) : Array Json :=
   match parts[0]? with
   | some first =>
       if partSupportsMetadata first then
         parts.set! 0 (addSourceMetadata first entry)
       else
         let carrier := Json.mkObj [
-          ("id", .str s!"prt_loom_{sessionId}_{entryIndex}_meta"),
+          ("id", .str (partIdFor messageId 0)),
           ("sessionID", .str sessionId), ("messageID", .str messageId),
           ("type", .str "text"), ("text", .str ""),
           ("synthetic", .bool true), ("ignored", .bool true)]
@@ -580,31 +595,31 @@ private def contentAttachments (sessionId messageId baseId : String)
   (content.filterMap (fun
     | .media mime url => some (mime, url)
     | _ => none)).zipIdx.map (fun ((mime, url), index) =>
-      attachmentJson sessionId messageId s!"{baseId}_att_{index}" mime url) |>.toArray
+      attachmentJson sessionId messageId s!"{baseId}_att_{sequenceHex index}" mime url) |>.toArray
 
 private def userBlockPart (sessionId messageId : String)
-    (entryIndex blockIndex : Nat) : UserBlock → Json
+    (blockIndex : Nat) : UserBlock → Json
   | .text value => Json.mkObj (ocPartBase sessionId messageId
-      s!"prt_loom_{sessionId}_{entryIndex}_{blockIndex}" "text" ++ [("text", .str value)])
+      (partIdFor messageId (blockIndex + 1)) "text" ++ [("text", .str value)])
   | .media mime url => attachmentJson sessionId messageId
-      s!"prt_loom_{sessionId}_{entryIndex}_{blockIndex}" mime url
+      (partIdFor messageId (blockIndex + 1)) mime url
   | .unmodeled _ raw => raw
 
 private def assistantBlockPart (t : Transcript) (sessionId messageId : String)
     (entry : Entry) (entryIndex blockIndex created : Nat) : AssistantBlock → Json
   | .text value => Json.mkObj (ocPartBase sessionId messageId
-      s!"prt_loom_{sessionId}_{entryIndex}_{blockIndex}" "text" ++ [("text", .str value)])
+      (partIdFor messageId (blockIndex + 1)) "text" ++ [("text", .str value)])
   | .thinking value signature =>
       let raw := Json.mkObj (ocPartBase sessionId messageId
-        s!"prt_loom_{sessionId}_{entryIndex}_{blockIndex}" "reasoning" ++ [
+        (partIdFor messageId (blockIndex + 1)) "reasoning" ++ [
           ("text", .str value), ("time", Json.mkObj [("start", .num created)])])
       match signature with
       | some sig => addSourceMetadata raw entry [("reasoningSignature", .str sig)]
       | none => raw
   | .media mime url => attachmentJson sessionId messageId
-      s!"prt_loom_{sessionId}_{entryIndex}_{blockIndex}" mime url
+      (partIdFor messageId (blockIndex + 1)) mime url
   | .toolCall name args rawId =>
-      let partId := s!"prt_loom_{sessionId}_{entryIndex}_{blockIndex}"
+      let partId := (partIdFor messageId (blockIndex + 1))
       let callId := match rawId with
         | some value => if value.isEmpty then s!"call_loom_{entryIndex}_{blockIndex}" else value
         | none => s!"call_loom_{entryIndex}_{blockIndex}"
@@ -661,8 +676,8 @@ private def mkAssistantInfo (sessionId messageId parentId provider model agent c
     ("finish", .str "stop")])
 
 private def eventMessage (sessionId messageId provider model agent : String)
-    (entry : Entry) (entryIndex created : Nat) (event : MetaEvent) : Json :=
-  let part := Json.mkObj (ocPartBase sessionId messageId s!"prt_loom_{sessionId}_{entryIndex}_0" "text" ++ [
+    (entry : Entry) (created : Nat) (event : MetaEvent) : Json :=
+  let part := Json.mkObj (ocPartBase sessionId messageId (partIdFor messageId 1) "text" ++ [
     ("text", .str ""), ("synthetic", .bool true), ("ignored", .bool true)])
   let part := addSourceMetadata part entry [("kind", .str "event"), ("event", eventToCarrier event)]
   Json.mkObj [
@@ -683,18 +698,18 @@ def exportOpenCodeChecked (t : Transcript) : Except String String := do
     (fun timestamp => timestamp.ms) |>.getD 0
   let agent := "build"
   let mut messages : Array Json := #[]
-  let mut lastMessageId := s!"msg_loom_{sessionId}_root"
+  let mut lastMessageId := messageIdFor sessionId 0
   let mut usedInstructions := false
   for (entry, entryIndex) in t.entries.toList.zipIdx do
     let created := exportTimestamp targetBase entry entryIndex
-    let messageId := s!"msg_loom_{sessionId}_{entryIndex}"
+    let messageId := messageIdFor sessionId (entryIndex * 2 + 1)
     match entry.payload with
     | .userMsg blocks =>
         let mut parts := (blocks.zipIdx.map (fun (block, blockIndex) =>
-          userBlockPart sessionId messageId entryIndex blockIndex block)).toArray
+          userBlockPart sessionId messageId blockIndex block)).toArray
         if parts.isEmpty then
-          parts := #[Json.mkObj (ocPartBase sessionId messageId s!"prt_loom_{sessionId}_{entryIndex}_0" "text" ++ [("text", .str "")])]
-        parts := attachEntryMetadata sessionId messageId entry entryIndex parts
+          parts := #[Json.mkObj (ocPartBase sessionId messageId (partIdFor messageId 1) "text" ++ [("text", .str "")])]
+        parts := attachEntryMetadata sessionId messageId entry parts
         let system := if usedInstructions then none else t.env.instructions
         if system.isSome then usedInstructions := true
         messages := messages.push (Json.mkObj [
@@ -705,29 +720,29 @@ def exportOpenCodeChecked (t : Transcript) : Except String String := do
         let mut parts := (blocks.zipIdx.map (fun (block, blockIndex) =>
           assistantBlockPart t sessionId messageId entry entryIndex blockIndex created block)).toArray
         if parts.isEmpty then
-          parts := #[Json.mkObj (ocPartBase sessionId messageId s!"prt_loom_{sessionId}_{entryIndex}_0" "text" ++ [("text", .str "")])]
-        parts := attachEntryMetadata sessionId messageId entry entryIndex parts
+          parts := #[Json.mkObj (ocPartBase sessionId messageId (partIdFor messageId 1) "text" ++ [("text", .str "")])]
+        parts := attachEntryMetadata sessionId messageId entry parts
         messages := messages.push (Json.mkObj [
           ("info", mkAssistantInfo sessionId messageId lastMessageId provider model agent cwd created),
           ("parts", .arr parts)])
         lastMessageId := messageId
     | .envMsg _ => pure ()
     | .compaction summary _ _ =>
-        let requestId := s!"msg_loom_{sessionId}_{entryIndex}_compact"
+        let requestId := messageIdFor sessionId (entryIndex * 2)
         let requestPart := Json.mkObj (ocPartBase sessionId requestId
-          s!"prt_loom_{sessionId}_{entryIndex}_compact" "compaction" ++ [("auto", .bool false)])
+          (partIdFor requestId 1) "compaction" ++ [("auto", .bool false)])
         messages := messages.push (Json.mkObj [
           ("info", mkUserInfo sessionId requestId provider model agent created),
           ("parts", .arr #[requestPart])])
         let summaryPart := addSourceMetadata (Json.mkObj (ocPartBase sessionId messageId
-          s!"prt_loom_{sessionId}_{entryIndex}_0" "text" ++ [("text", .str summary)])) entry
+          (partIdFor messageId 1) "text" ++ [("text", .str summary)])) entry
         messages := messages.push (Json.mkObj [
           ("info", mkAssistantInfo sessionId messageId requestId provider model agent cwd created true),
           ("parts", .arr #[summaryPart])])
         lastMessageId := messageId
     | .event event =>
         messages := messages.push (eventMessage sessionId messageId provider model agent
-          entry entryIndex created event)
+          entry created event)
         lastMessageId := messageId
     | .otherMsg _ _ => pure ()
   let created := t.entries[0]?.map (fun entry => exportTimestamp targetBase entry 0) |>.getD targetBase
