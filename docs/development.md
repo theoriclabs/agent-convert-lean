@@ -62,10 +62,10 @@ checks. It is not the local development entry point. The viewer has its own
 
 ## Validation gaps and remaining structure work
 
-The full `lake build LoomRequirements` gate passes and is included in local
-verification. The lifecycle audit's identity validator still uses an exact key whitelist
-that rejects the CLI's additive `compilerVersion` and `capabilities` fields;
-its self-tests passing does not mean its 8-by-5 product audit passes.
+The full `lake build LoomRequirements` gate and the lifecycle audit's 8-by-5
+conversion matrix pass and are included in local verification. The matrix also
+runs its mutation self-tests. These are artifact checks; they do not replace
+authenticated continuation probes or cover formats absent from that fixture set.
 
 The largest remaining modules are the Codex, Claude, and Pi adapters. They mix
 parsing, target emission, helpers, and regression fixtures. `Parity.lean` and

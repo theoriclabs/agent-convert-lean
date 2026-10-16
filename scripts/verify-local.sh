@@ -35,7 +35,9 @@ python3 scripts/test-cursor-ide-transcript.py
 echo "== audit harness self-tests =="
 node scripts/audit-corpora.self-test.mjs
 node scripts/audit-codex-claude.self-test.mjs
-node scripts/audit-lifecycle-matrix.self-test.mjs
+node scripts/audit-lifecycle-matrix.mjs --loom "$LOOM_BIN" \
+  --scratch "$scratch/lifecycle-input" --output "$scratch/lifecycle-output" \
+  --report "$scratch/lifecycle-report.json"
 
 echo "== route and release metadata =="
 node scripts/check-conversion-matrix.mjs

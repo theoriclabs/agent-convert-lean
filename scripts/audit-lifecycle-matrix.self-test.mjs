@@ -401,6 +401,11 @@ const developmentIdentity = {
 };
 positive("complete development core identity",
   validateCandidateIdentity(clone(developmentIdentity), false) !== null);
+positive("current identity with compiler and capability metadata",
+  validateCandidateIdentity({ ...clone(developmentIdentity), compilerVersion: "4.33.0",
+    capabilities: ["claude.semantic-tool-translation.v1"] }, false) !== null);
+positive("current identity with an empty capability set",
+  validateCandidateIdentity({ ...clone(developmentIdentity), capabilities: [] }, false) !== null);
 const immutableIdentity = clone(developmentIdentity);
 immutableIdentity.coreRevision = "a".repeat(40);
 positive("immutable release core identity",
@@ -429,6 +434,12 @@ identityMutation("missing identity wire schema", (value) => {
 identityMutation("duplicate identity wire schema", (value) => {
   value.wireSchemas.push("loom.transcript.v0");
 });
+identityMutation("empty compiler version", (value) => { value.compilerVersion = ""; });
+identityMutation("non-string compiler version", (value) => { value.compilerVersion = 433; });
+identityMutation("non-array capabilities", (value) => { value.capabilities = "native"; });
+identityMutation("empty capability", (value) => { value.capabilities = [""]; });
+identityMutation("non-string capability", (value) => { value.capabilities = [1]; });
+identityMutation("duplicate capability", (value) => { value.capabilities = ["native", "native"]; });
 
 positive("closed manifest baseline", validateManifest(clone(manifest)) !== null);
 

@@ -163,10 +163,10 @@
       "name": "claude",
       "extension": ".jsonl",
       "launch": {
-        "kind": "claude-2.1.216",
+        "kind": "claude-2.1.251",
         "cwdPrefix": "/tmp/agent-convert-lifecycle-matrix",
         "timestamp": "2026-07-21T12:34:56.000Z",
-        "harnessVersion": "2.1.216"
+        "harnessVersion": "2.1.251"
       }
     },
     {

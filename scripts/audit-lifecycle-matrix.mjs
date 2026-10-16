@@ -81,10 +81,10 @@ const CLOSED_TARGET_LAUNCHES = deepFreeze(ownObject([
     assistantHistory: "carrier",
   }],
   ["claude", {
-    kind: "claude-2.1.216",
+    kind: "claude-2.1.251",
     cwdPrefix: "/tmp/agent-convert-lifecycle-matrix",
     timestamp: "2026-07-21T12:34:56.000Z",
-    harnessVersion: "2.1.216",
+    harnessVersion: "2.1.251",
   }],
   ["codex", {
     kind: "codex-0.144.1",
@@ -2070,7 +2070,7 @@ function validateClaudeTargetEnvelope(rows, expected, context) {
   invariant(previousUuid !== null && lastPrompt.leafUuid === previousUuid,
     `${context}: last-prompt does not select the final emitted record`);
   return {
-    schema: "claude-jsonl-2.1.216+agent-convert-carriers-v1",
+    schema: "claude-jsonl-2.1.251+agent-convert-carriers-v1",
     records: rows.length,
     targetSessionId: lastPrompt.sessionId,
     targetCwd: expected.cwd,
@@ -3237,9 +3237,10 @@ function assertFileBinding(expected, context) {
 }
 
 export function validateCandidateIdentity(identity, requireImmutable = false) {
-  invariant(exactKeys(identity, ["coreRevision", "engine", "engineVersion",
+  invariant(exactOptionalKeys(identity, ["coreRevision", "engine", "engineVersion",
     "protocolVersion", "sourcePath", "sourceRepository", "targetTriple",
-    "wireSchemas"]), "Loom version response must expose the complete core identity contract");
+    "wireSchemas"], ["compilerVersion", "capabilities"]),
+  "Loom version response must expose the complete core identity contract");
   invariant(identity.engine === "lean" && nonemptyString(identity.engineVersion) &&
     nonemptyString(identity.coreRevision) && identity.protocolVersion === "loom.cli.v1" &&
     identity.sourceRepository === "https://github.com/theoriclabs/agent-convert-lean" &&
@@ -3249,6 +3250,12 @@ export function validateCandidateIdentity(identity, requireImmutable = false) {
     new Set(identity.wireSchemas).size === identity.wireSchemas.length &&
     identity.wireSchemas.includes("loom.transcript.v0"),
   "Loom version response has an invalid core identity contract");
+  invariant(!hasOwn(identity, "compilerVersion") || nonemptyString(identity.compilerVersion),
+    "Loom compilerVersion must be a nonempty string when present");
+  invariant(!hasOwn(identity, "capabilities") ||
+    (Array.isArray(identity.capabilities) && identity.capabilities.every(nonemptyString) &&
+      new Set(identity.capabilities).size === identity.capabilities.length),
+    "Loom capabilities must be an array of unique nonempty strings when present");
   if (requireImmutable) {
     invariant(/^[0-9a-f]{40}$/.test(identity.coreRevision),
       `immutable release audit requires a 40-hex coreRevision, got ${identity.coreRevision}`);

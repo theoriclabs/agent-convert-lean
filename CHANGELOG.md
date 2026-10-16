@@ -10,6 +10,9 @@ lands; move them into a dated version section when publishing a release.
 - Repair all three failing requirements proofs: align the Claude validation
   version, follow it in refusal checks, and verify native tool translation with
   exact source-call provenance. Include `LoomRequirements` in local verification.
+- Repair lifecycle-audit identity validation for compiler/capability metadata
+  and update its Claude target version. All 40 conversion cells now pass;
+  local verification runs the full matrix, including its mutation self-tests.
 
 ## [0.2.0-preview.4] - 2026-10-15
 
