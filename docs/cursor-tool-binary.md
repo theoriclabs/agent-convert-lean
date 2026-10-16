@@ -38,6 +38,63 @@ truncation flags remain facts, not a promise that all original output exists.
 Summaries, current filesystem contents, and newly executed tools are never
 substituted for a historical result.
 
+## IDE transcript exports
+
+Cursor IDE also writes `~/.cursor/projects/<project>/agent-transcripts/<id>/<id>.jsonl`.
+These files use the text/`tool_use` shape Loom calls `cursor-agent`. The installed
+IDE's transcript writer emits text and calls but omits results and call IDs.
+Treating that file as the complete source therefore loses recorded executions,
+even when all outputs remain in the IDE store.
+
+`LoomConvert/CursorIdeTranscript.lean` adds path-aware acquisition. For a native
+root or subagent path, it queries only that session's `composerData:<id>` and
+active bubbles in the local `state.vscdb`. It verifies the stored composer ID,
+visible messages and their positions among calls, and the complete ordered
+call sequence before attaching results. Known IDE tool/argument renamings are
+normalized for matching; unsupported shapes or stale branches refuse recovery.
+No substring or global call-ID join is used. Duplicate IDs retain occurrence
+ownership through positional links.
+
+The export's text, tool names, and arguments remain intact. Missing call IDs
+are restored from the matched saved calls, and results retain their recorded
+content and error state. Recovery evidence lives in provenance. A provisional
+`loading` result is not promoted to completed history. Calls are never rerun.
+Recognized `turn_ended` bookkeeping rows move to exact control metadata so they
+do not block a native-history export. Unknown event kinds remain in the IR and
+retain the existing export refusal rules.
+
+```sh
+loom convert ~/.cursor/projects/<project>/agent-transcripts/<id>/<id>.jsonl codex output.jsonl
+
+# Use a read-only database snapshot instead of the default local store:
+LOOM_CURSOR_IDE_DB=/path/to/state.vscdb loom convert <native-transcript-path> loom archive.json
+```
+
+The default lookup covers the standard macOS and Linux Cursor IDE store paths;
+`LOOM_CURSOR_IDE_DB` supplies other locations. Reading requires `sqlite3`.
+An absent store or composer produces an explicit recovery-unavailable note and
+conversion warning. A failed database read or mismatched conversation refuses
+the import before writing output.
+
+An arbitrary copied file's name is insufficient identity evidence, so it never
+triggers a database lookup. For a copied/Markdown export, acquire the saved
+conversation explicitly instead:
+
+```sh
+loom cursor-ide <state.vscdb> <composer-id> loom source.loom.json
+loom convert source.loom.json codex output.jsonl
+```
+
+`python3 scripts/test-cursor-ide-transcript.py` builds its own SQLite database
+and exercises result recovery, same-bubble binary decoding, repeated IDs,
+empty/error/provisional outputs, stale-source rejection, and native Codex and
+Claude records. It also checks that inputs are unchanged and a recorded shell
+command is not executed. These checks establish acquisition and artifact
+behavior, not a new live-harness continuation result. The existing binary
+schema limits still apply, and the `cursor-agent` **target** still cannot store
+native results. Use Loom to archive the recovered history or a supported
+continuation target to retain native call/result pairs.
+
 ## Codex representation
 
 Recovered pairs use native `function_call` / `function_call_output` records.

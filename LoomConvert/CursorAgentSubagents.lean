@@ -1,5 +1,6 @@
 import LoomConvert.ClaudeSubagents
 import LoomConvert.CursorAgent
+import LoomConvert.CursorIdeTranscript
 
 /-!
 # LoomConvert.CursorAgentSubagents — cursor-agent sub-agent stitching (D16)
@@ -115,7 +116,8 @@ def findAnchorCursor (main : Transcript) (childOrdinal : Nat) : Option CallRef :
 
 /-- Import a cursor-agent CLI session AND stitch in its externalized sub-agents.
 
-(1) import the root session with its path identity (`importCursorAgentAtPath`);
+(1) acquire the root session with its path identity and any verified IDE results
+(`importCursorTranscriptAtPath`);
 (2) locate the sibling
 `subagents/` dir (same parent dir as the root file) and glob `*.jsonl`, sorted by
 filename for deterministic thread indices; (3) import each child (itself
@@ -124,11 +126,11 @@ for native files, assign an explicit positional `CallRef` via `findAnchorCursor`
 (the i-th child ↔ the i-th main-thread spawn call); (4) the checked stitch adds
 each as a `sidechain` (anchored) or `detached` thread with the child's entries
 appended and re-based. Sessions with no `subagents/` dir return the root
-transcript unchanged (identical to `importCursorAgent`). -/
+transcript unchanged after path-aware acquisition. -/
 def importCursorAgentSessionWithSubagents (sessionFile : System.FilePath) :
     IO (Except String Transcript) := do
   let mainText ← IO.FS.readFile sessionFile
-  match importCursorAgentAtPath sessionFile mainText with
+  match ← importCursorTranscriptAtPath sessionFile mainText with
   | .error e => pure (.error e)
   | .ok main => do
     -- The `subagents/` dir sits beside the root file (NOT `<stem>/subagents`).
@@ -139,7 +141,8 @@ def importCursorAgentSessionWithSubagents (sessionFile : System.FilePath) :
       let childFiles := (dents.filter (fun (de : IO.FS.DirEntry) =>
         de.fileName.endsWith ".jsonl")).qsort
           (fun (a b : IO.FS.DirEntry) => decide (a.fileName < b.fileName))
-      -- Precompute positional spawn coordinates once; no native raw id exists.
+      -- Precompute spawn coordinates after result insertion has rebased entries.
+      -- The native child export still lacks a parent-call back-pointer.
       let spawnRefs := cursorSpawnCallRefs main
       let mut children : Array SubagentChild := #[]
       let mut failures : List String := []
@@ -160,7 +163,10 @@ def importCursorAgentSessionWithSubagents (sessionFile : System.FilePath) :
             | none => match metadata.toolUseId with
               | some _ => none
               | none => positionalRef.map (fun ref => ThreadKind.sidechain ref)
-          match importCursorAgentAtPath de.path childText with
+          let importedChild ← if nativePositional then
+              importCursorTranscriptAtPath de.path childText
+            else pure (importCursorAgentAtPath de.path childText)
+          match importedChild with
           | .error err =>
               failures := failures ++ [s!"{agentId}: {err}"]
           | .ok child =>

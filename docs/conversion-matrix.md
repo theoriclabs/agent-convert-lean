@@ -1,6 +1,6 @@
 # Conversion matrix
 
-Last reviewed: 2026-09-07. This describes the current checkout, not every vendor
+Last reviewed: 2026-10-15. This describes the current checkout, not every vendor
 version or a guarantee that every transcript converts without limitations.
 
 ## Routes
@@ -37,7 +37,7 @@ subject to validation and is not necessarily a byte-for-byte file copy.
 | Claude Code | Session JSONL or resolvable session ID | Supported subagent sidecars are separate files. Generated task notifications are archived using `isMeta` or explicit system-origin metadata, including recent records without `isMeta`; literal user XML stays in conversation. |
 | Codex CLI | Rollout JSONL or resolvable session ID | Harness targets receive the latest active compaction context plus subsequent history; `loom` archives the full stream. |
 | Pi | Session JSONL or resolvable session ID | Branches must be selected or preserved in an appropriate output. |
-| Cursor Agent | Agent transcript JSONL | Observed source format has tool calls but no tool-result records; conversion cannot recover results from this file alone. |
+| Cursor Agent / IDE transcript export | Agent transcript JSONL | The file omits tool results. For native `agent-transcripts/<session>/<session>.jsonl` paths, Loom checks the same IDE composer and recovers recorded results when messages and ordered calls agree. Standalone files alone cannot supply missing results. |
 | OpenCode | JSON from `opencode export <id>` | Not the live database; use the supported interchange document. |
 | Cursor IDE | `state.vscdb` plus composer ID, or extracted `{composer,bubbles}` JSON | Use the rich store, not an incomplete text/Agent export. Binary recovery currently covers grep, edit, and conversation search; unsupported recovery remains explicit. |
 | Hermes | Session JSON with `messages[]` | Source has no per-message timestamps or recorded tool-error flag; do not invent them. |
@@ -82,6 +82,9 @@ loom convert <session-id-or-file> <target> <new-output-path>
 # Rich Cursor IDE acquisition, followed by a harness conversion:
 loom cursor-ide <state.vscdb> <composer-id> loom source.loom.json
 loom convert source.loom.json codex converted.codex.jsonl
+
+# Native IDE JSONL exports also recover from the matching local store:
+loom convert ~/.cursor/projects/<project>/agent-transcripts/<id>/<id>.jsonl codex output.jsonl
 ```
 
 Keep originals and use new destinations. A native record represents a past
@@ -91,7 +94,7 @@ round-trips is not native-history fidelity. See [product intent](../INTENT.md).
 ## Verification and maintenance
 
 - **Routing inventory:** `importByFormat` and `exportByFormat` in
-  [Main.lean](../LoomConvert/Main.lean) define the nine sources and six targets.
+  [Formats.lean](../LoomConvert/Cli/Formats.lean) define the nine sources and six targets.
   `node scripts/check-conversion-matrix.mjs` checks this table against those
   dispatchers, including aliases. It does not claim semantic correctness.
 - **Adapter behavior:** [target capabilities](../LoomOps/Interop.lean) and
@@ -105,6 +108,11 @@ round-trips is not native-history fidelity. See [product intent](../INTENT.md).
   prior-result recall, failure recognition, and zero new calls. See
   [scope and reproduction](./cursor-tool-binary.md). Do not extrapolate this
   result to every matrix cell or every Cursor binary schema.
+- **IDE transcript acquisition:** `python3 scripts/test-cursor-ide-transcript.py`
+  exercises a synthetic SQLite store, exact result/ID recovery, stale-source
+  refusal, and native Codex/Claude records. These are artifact checks, not a
+  new authenticated model-continuation claim. See
+  [matching rules and limits](./cursor-tool-binary.md#ide-transcript-exports).
 - **Codex call-ID limits:** `node scripts/test-codex-call-ids.mjs` checks
   boundary lengths, alias collisions, source-ID restoration, and repair of old
   rollouts. The long-ID synthetic continuation and `--run --compact` probe

@@ -4,10 +4,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const root = new URL('../', import.meta.url);
-const main = readFileSync(new URL('LoomConvert/Main.lean', root), 'utf8');
+const formats = readFileSync(new URL('LoomConvert/Cli/Formats.lean', root), 'utf8');
 const matrix = readFileSync(new URL('docs/conversion-matrix.md', root), 'utf8');
 function dispatchNames(name) {
-  const body = main.split(`def ${name} `)[1]?.split('\n/--')[0];
+  const body = formats.split(`def ${name} `)[1]?.split('\n/--')[0];
   assert.ok(body, `Cannot find ${name}`);
   const names = body.split('\n').filter(line => /^\s*\|\s*"/.test(line))
     .flatMap(line => [...line.split('=>')[0].matchAll(/"([^"]+)"/g)].map(m => m[1]));

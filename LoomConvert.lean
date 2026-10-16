@@ -8,6 +8,7 @@ import LoomConvert.Hermes
 import LoomConvert.GoogleAiStudio
 import LoomConvert.OpenCode
 import LoomConvert.CursorIdeActuator
+import LoomConvert.CursorIdeTranscript
 import LoomConvert.ClaudeSubagents
 import LoomConvert.CursorAgentSubagents
 import LoomConvert.Wire

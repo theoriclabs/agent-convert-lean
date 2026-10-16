@@ -23,6 +23,7 @@ the product libraries never import the requirements package. -/
 @[default_target]
 lean_lib LoomRequirements
 
-/-- `lake exe loom convert <from> <to> <input> [output]` — the CLI. -/
+/-- `lake exe loom convert <session-id-or-file> <target> [output]` — the CLI.
+The explicit `<from> <to> <input> [output]` protocol remains supported. -/
 lean_exe loom where
   root := `LoomConvert.Main

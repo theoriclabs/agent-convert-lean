@@ -48,15 +48,17 @@ private def workspaceForComposer (headers : Lean.Json) (composerId : String) : L
 /-- Read a Cursor IDE composer thread + its bubbles from a `state.vscdb` into
 the JSON shape `importCursorIde` consumes: `{composer, bubbles:[...]}`, bubbles
 ordered per the composer's `fullConversationHeadersOnly`. -/
-def readCursorIdeStore (dbPath composerId : String) : IO (Except String String) := do
+def readCursorIdeStore? (dbPath composerId : String) : IO (Except String (Option String)) := do
   let composerKey := sqlString s!"composerData:{composerId}"
   match ← runSqlite dbPath s!"SELECT value FROM cursorDiskKV WHERE key={composerKey}" with
   | .error e => pure (.error e)
   | .ok composerStr =>
-    if composerStr.isEmpty then pure (.error s!"composer {composerId} not found") else
+    if composerStr.isEmpty then pure (.ok none) else
     match Lean.Json.parse composerStr with
     | .error e => pure (.error s!"composer JSON parse: {e}")
     | .ok cj => do
+      if (cj.getObjVal? "composerId" >>= Lean.Json.getStr?).toOption != some composerId then
+        return .error "Cursor store composer identity does not match the requested session"
       let bubbleIds : List String :=
         match (cj.getObjVal? "fullConversationHeadersOnly" >>= Lean.Json.getArr?).toOption with
         | some arr => arr.toList.filterMap (fun h => (h.getObjVal? "bubbleId" >>= Lean.Json.getStr?).toOption)
@@ -82,7 +84,16 @@ def readCursorIdeStore (dbPath composerId : String) : IO (Except String String) 
       let json := "{\"composer\":" ++ composerStr
         ++ ",\"workspaceIdentifier\":" ++ workspaceIdentifier.compress
         ++ ",\"bubbles\":[" ++ String.intercalate "," bubbles.toList ++ "]}"
-      pure (.ok json)
+      pure (.ok (some json))
+
+/-- Required-composer variant for the explicit `cursor-ide` command. Optional
+lookup lets a native transcript probe its own composer without confusing an
+absent session with a failed or malformed store read. -/
+def readCursorIdeStore (dbPath composerId : String) : IO (Except String String) := do
+  match ← readCursorIdeStore? dbPath composerId with
+  | .error error => pure (.error error)
+  | .ok none => pure (.error s!"composer {composerId} not found")
+  | .ok (some text) => pure (.ok text)
 
 /-- End-to-end: read the store and import to the Loom IR (the shipped path for
 Cursor IDE — sqlite actuator + semantic core, pure Lean + one subprocess). -/

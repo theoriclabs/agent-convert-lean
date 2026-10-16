@@ -5,12 +5,31 @@ lands; move them into a dated version section when publishing a release.
 
 ## [Unreleased]
 
+## [0.2.0-preview.4] - 2026-10-15
+
 ### Added
+
+- Add the separate Loom viewer for browsing local agent sessions as chat threads.
+
+- Add `scripts/verify-local.sh` for the product build, smoke checks, filesystem
+  publication, wire contracts, native history, and audit self-tests without a
+  separate TypeScript host checkout. Document the module boundaries and isolate
+  CLI format dispatch and output publication in `LoomConvert/Cli/`.
 
 - Add a repository `SKILL.md` for session conversion and handoff, simplify the
   README quick start, and point the existing agent runbook to the skill.
 
 ### Fixed
+
+- Recover tool results omitted by Cursor IDE's native JSONL transcript exports
+  from the same saved composer. Check session identity, visible messages, tool
+  order, and arguments before restoring recorded results and missing call IDs.
+  Preserve the exported dialogue and arguments, refuse stale/mismatched sources,
+  and warn when no matching store is available. Target defaults and Claude
+  installation now use the same path-aware acquisition as conversion. Keep
+  `turn_ended` bookkeeping in exact control metadata rather than dialogue.
+- Replace the removed `String.trim` call in the CLI with `trimAscii.toString`
+  so the product builds with the locally selected Lean toolchain.
 
 - Import Claude Code peer lines (a subagent's hand-back or a teammate's message,
   relayed by the harness as a `user` row with `turnOrigin: "peer"`) as `peer`
@@ -33,6 +52,20 @@ lands; move them into a dated version section when publishing a release.
   when the boundary is off the selected path its own `compactMetadata` is
   preserved as an archived raw record rather than cross-linked, which is an
   honest degradation, not silent loss.
+
+### Validation and limits
+
+- Experimental prerelease. The macOS ARM64 release binary is built from the
+  tagged commit with the pinned Lean 4.33.0 toolchain. Native-history, Cursor
+  recovery, wire-contract, and filesystem-publication artifact checks pass.
+- Cursor recovery requires the matching saved IDE conversation. Results absent
+  from both the transcript and the database cannot be reconstructed. Recorded
+  calls are never rerun during import.
+- Live model continuation and the separate viewer build were not tested for
+  this release. The three pre-existing requirements failures in `CLAUDE.md`
+  remain; the full external integration gate was not run.
+- Binary downloads are macOS ARM64 only and are not notarized. This is not an
+  npm release or completion of the historical qualification process.
 
 ## [0.2.0-preview.3] - 2026-09-08
 
@@ -122,7 +155,8 @@ First public prerelease of the Lean session converter.
   must build from source with the pinned Lean toolchain. Cursor IDE extraction
   requires `sqlite3`; the optional MCP server requires Node.js.
 
-[Unreleased]: https://github.com/theoriclabs/agent-convert-lean/compare/v0.2.0-preview.3...HEAD
+[Unreleased]: https://github.com/theoriclabs/agent-convert-lean/compare/v0.2.0-preview.4...HEAD
+[0.2.0-preview.4]: https://github.com/theoriclabs/agent-convert-lean/releases/tag/v0.2.0-preview.4
 [0.2.0-preview.3]: https://github.com/theoriclabs/agent-convert-lean/releases/tag/v0.2.0-preview.3
 [0.2.0-preview.2]: https://github.com/theoriclabs/agent-convert-lean/compare/v0.2.0-preview.1...v0.2.0-preview.2
 [0.2.0-preview.1]: https://github.com/theoriclabs/agent-convert-lean/releases/tag/v0.2.0-preview.1

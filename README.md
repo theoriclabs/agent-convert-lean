@@ -36,6 +36,11 @@ Targets: `claude`, `codex`, `pi`, `cursor-agent`, `opencode`, `loom`.
 Also imports Cursor IDE, Hermes, and Google AI Studio. Source acquisition and
 target handoff details are in the [conversion matrix](./docs/conversion-matrix.md).
 
+For Cursor IDE's native `agent-transcripts/.../*.jsonl` exports, Loom recovers
+omitted tool results from the matching local IDE conversation after verifying
+the messages and calls. See [Cursor export recovery](./docs/cursor-tool-binary.md#ide-transcript-exports)
+for copied exports, database snapshots, and matching limits.
+
 ## Use with an agent
 
 Give your agent [SKILL.md](./SKILL.md), or paste:
@@ -58,5 +63,11 @@ For agent tool access, see the [MCP server](./mcp/README.md).
 To browse every local session as a chat thread, run the [viewer](./viewer/README.md).
 For changes and design goals, see the [changelog](./CHANGELOG.md) and
 [product intent](./INTENT.md).
+
+## Development
+
+Run `scripts/verify-local.sh` for the product build and local regressions.
+See [the development guide](./docs/development.md) for module boundaries,
+external integration checks, and known validation gaps.
 
 MIT licensed. See [`LICENSE`](./LICENSE).

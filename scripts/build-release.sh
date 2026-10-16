@@ -983,7 +983,7 @@ const validateIdentity = (raw, label, requiredRevision) => {
   if (value.engine !== "lean") mismatches.push(`engine=${JSON.stringify(value.engine)}`);
   // The candidate must match this release; a pinned prior generation may be
   // older. Its exact identity and bytes are checked again during rollback.
-  if (requiredRevision !== null && value.engineVersion !== "0.2.0-preview.3") {
+  if (requiredRevision !== null && value.engineVersion !== "0.2.0-preview.4") {
     mismatches.push(`engineVersion=${JSON.stringify(value.engineVersion)}`);
   } else if (typeof value.engineVersion !== "string" ||
       !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(value.engineVersion)) {
@@ -1895,7 +1895,7 @@ make_fake_binary() {
   local behavior="${5:-normal}"
   local started_file="${6:-}"
   local continue_file="${7:-}"
-  local engine_version="${8:-0.2.0-preview.3}"
+  local engine_version="${8:-0.2.0-preview.4}"
   local identity_json
   if [[ "$duplicate" == "yes" ]]; then
     identity_json="{\"engine\":\"not-lean\",\"engine\":\"$engine\",\"engineVersion\":\"$engine_version\",\"protocolVersion\":\"loom.cli.v1\",\"coreRevision\":\"$revision\",\"sourceRepository\":\"https://github.com/theoriclabs/agent-convert-lean\",\"sourcePath\":\".\",\"targetTriple\":\"self-test-target\",\"wireSchemas\":[\"loom.transcript.v0\"]}"
