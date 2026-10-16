@@ -65,6 +65,15 @@ compaction fixtures passed on Claude Code 2.1.301 on 2026-10-16; exact replies
 and limits are in `REQUIREMENTS_EVIDENCE.md`. Other harnesses are not covered by
 this live probe.
 
+Foreign reasoning becomes labeled assistant text in Claude. Opaque reasoning
+and encrypted compaction payloads stay in record metadata, with a readable
+availability label; they never populate Claude's `thinking.signature`. The
+importer validates that the metadata matches the visible projection before
+restoring the original block. An unchanged signed block from a physical native
+Claude record can be forwarded; the converter does not cryptographically
+validate provider signatures. This follows Claude's requirement to return its
+own [thinking signatures unchanged](https://platform.claude.com/docs/en/build-with-claude/thinking#thinking-encryption).
+
 Claude exports batch events, archived controls, and archived records into one
 `agent-convert-provenance` header. Events retain their position and graph links
 for re-import, while physical conversation parents bypass them. Consumed Codex

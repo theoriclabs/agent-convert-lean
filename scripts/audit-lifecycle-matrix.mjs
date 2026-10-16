@@ -2030,11 +2030,36 @@ function validateClaudeTimeProvenance(value, context) {
 
 function validateClaudeMarker(marker, content, rowType, context) {
   invariant(exactOptionalKeys(marker, ["protocol"], ["contentBlocks", "identityProvenance",
-    "inertPayload", "provenance", "timeProvenance", "toolCanonical", "toolTranslation", "toolResultErrors", "unavailableOutput"]) &&
+    "inertPayload", "provenance", "timeProvenance", "toolCanonical", "toolTranslation", "toolResultErrors", "unavailableOutput", "reasoning"]) &&
     marker.protocol === CLAUDE_PROTOCOL, `${context}: invalid Claude marker`);
   invariant(rowType === "system" ? hasOwn(marker, "inertPayload") &&
     !hasOwn(marker, "contentBlocks") : !hasOwn(marker, "inertPayload"),
   `${context}: Claude marker fields disagree with the row type`);
+  if (hasOwn(marker, "reasoning")) {
+    invariant(rowType === "assistant" && Array.isArray(marker.reasoning) && marker.reasoning.length > 0 &&
+      new Set(marker.reasoning.map(value => value.block)).size === marker.reasoning.length,
+      `${context}: invalid reasoning locations`);
+    for (const retained of marker.reasoning) {
+      invariant(exactKeys(retained, ["block", "source"]) && Number.isSafeInteger(retained.block) &&
+        retained.block >= 0, `${context}: invalid reasoning provenance`);
+      validateClaudeHistoricalAssistantBlock(retained.source, `${context}.reasoning.source`);
+      const source = retained.source;
+      let text, label;
+      if (source.kind === "thinking") text = source.thinking;
+      else {
+        invariant(source.kind === "unmodeled" && typeof source.raw?.type === "string" &&
+          nonemptyString(source.raw?.encrypted_content), `${context}: invalid opaque reasoning`);
+        label = source.label;
+        const summary = source.raw.summary;
+        text = Array.isArray(summary) && summary.every(item => item?.type === "summary_text" && typeof item.text === "string")
+          ? summary.map(item => item.text).join("\n") : "";
+      }
+      const expected = text ? `[Prior reasoning]\n${text}`
+        : `[prior reasoning not retained as readable text${label === undefined ? "" : `: ${label}`}]`;
+      invariant(jsonEqual(content[retained.block], { type: "text", text: expected }),
+        `${context}: reasoning context disagrees with provenance`);
+    }
+  }
   if (hasOwn(marker, "unavailableOutput")) {
     invariant(Array.isArray(marker.unavailableOutput) && marker.unavailableOutput.length > 0 &&
       new Set(marker.unavailableOutput.map(v => `${v.block}:${v.contentIndex}`)).size === marker.unavailableOutput.length,

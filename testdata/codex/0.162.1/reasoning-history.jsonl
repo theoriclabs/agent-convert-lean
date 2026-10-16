@@ -1,0 +1,8 @@
+{"type":"session_meta","timestamp":"2026-10-16T00:00:00.000Z","payload":{"id":"92000000-0000-4000-8000-000000000002","timestamp":"2026-10-16T00:00:00.000Z","cwd":"/tmp/loom-synthetic-reasoning","cli_version":"0.162.1","originator":"codex-tui","source":"cli","model_provider":"openai"}}
+{"type":"response_item","timestamp":"2026-10-16T00:00:01.000Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Inspect the synthetic ledger and report its readiness."}]}}
+{"type":"response_item","timestamp":"2026-10-16T00:00:02.000Z","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"The synthetic ledger needs a readiness check."}],"encrypted_content":"synthetic-readable-ciphertext"}}
+{"type":"response_item","timestamp":"2026-10-16T00:00:03.000Z","payload":{"type":"reasoning","summary":[],"encrypted_content":"synthetic-opaque-ciphertext"}}
+{"type":"response_item","timestamp":"2026-10-16T00:00:04.000Z","payload":{"type":"compaction","encrypted_content":"synthetic-compaction-ciphertext","future_field":{"retained":true}}}
+{"type":"response_item","timestamp":"2026-10-16T00:00:05.000Z","payload":{"type":"function_call","name":"exec_command","call_id":"call_ledger","arguments":"{\"cmd\":\"printf ledger-ready\"}"}}
+{"type":"response_item","timestamp":"2026-10-16T00:00:06.000Z","payload":{"type":"function_call_output","call_id":"call_ledger","output":"Process exited with code 0\nledger-ready"}}
+{"type":"response_item","timestamp":"2026-10-16T00:00:07.000Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"The readiness check is complete."}]}}

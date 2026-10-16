@@ -5,6 +5,11 @@ lands; move them into a dated version section when publishing a release.
 
 ## [Unreleased]
 
+- Keep foreign reasoning readable in Claude without presenting foreign
+  ciphertext as a Claude thinking signature. Preserve exact opaque reasoning
+  in validated metadata and forward unchanged native Claude signatures only
+  when backed by their physical source block (#2).
+
 - Add an opt-in Claude continuation probe that checks the resumed model's
   current request and last tool outcome, with temporary sessions and retained
   hash-bound receipts; document the per-version release gate (#28).

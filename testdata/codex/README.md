@@ -25,6 +25,12 @@ native Claude result flags without executing any recorded command.
 encrypted result. `scripts/test-claude-notes-history.mjs` checks raw-name native
 history and exact source-namespace metadata without executing source tools.
 
+`0.162.1/reasoning-history.jsonl` includes readable and encrypted-only reasoning,
+an opaque compaction response item, and a completed tool pair.
+`scripts/test-claude-reasoning.mjs` checks that foreign signatures remain in
+validated metadata across repeated conversions, while readable summaries stay
+in conversation. Its optional live continuation uses the common probe script.
+
 `0.162.1/item-completed.jsonl` covers exact user/assistant event mirrors and
 structured command completions. `scripts/test-codex-item-completed.mjs` checks
 deduplication, source-record retention, and conservative handling of unmatched,

@@ -1069,6 +1069,48 @@ private def cParseHistoricalAssistantBlock? (j : Json) : Option AssistantBlock :
   | "unmodeled" => pure (.unmodeled (← cstr j "label") (← cobj j "raw"))
   | _ => none
 
+/-- Foreign reasoning is ordinary readable context, never provider-authenticated
+Claude thinking. Ciphertext is retained only in the record-level provenance. -/
+private def cCodexReasoningSummaryText? (raw : Json) : Option String :=
+  match carr raw "summary" with
+  | none => some ""
+  | some summary =>
+      (summary.toList.mapM (fun item => do
+        guard (cstr item "type" == some "summary_text")
+        cstr item "text")).map (String.intercalate "\n")
+
+private def cCodexReasoningEncryptedContent? (raw : Json) : Option String :=
+  match cstr raw "type", cobj raw "encrypted_content" with
+  | some _, some (Json.str value) => if value.isEmpty then none else some value
+  | _, _ => none
+
+private def cReasoningContextBlock? : AssistantBlock → Option Json
+  | .thinking text _ => some (Json.mkObj [("type", Json.str "text"),
+      ("text", Json.str (if text.isEmpty then "[prior reasoning not retained as readable text]"
+        else "[Prior reasoning]\n" ++ text))])
+  | .unmodeled label raw => do
+      let _ ← cCodexReasoningEncryptedContent? raw
+      let text := (cCodexReasoningSummaryText? raw).getD ""
+      pure (Json.mkObj [("type", Json.str "text"),
+        ("text", Json.str (if text.isEmpty then
+          "[prior reasoning not retained as readable text: " ++ label ++ "]"
+          else "[Prior reasoning]\n" ++ text))])
+  | _ => none
+
+private def cCarrierReasoning? (j : Json) : Option (List (Nat × AssistantBlock)) := do
+  let marker ← cobj j claudeCarrierMarkerKey
+  guard (cstr marker "protocol" == some claudeCarrierProtocol)
+  match cobj marker "reasoning" with
+  | none => pure []
+  | some (.arr values) => values.toList.mapM (fun value => do
+      let block ← cobj value "block" >>= (fun raw => raw.getNat?.toOption)
+      let source ← cobj value "source" >>= cParseHistoricalAssistantBlock?
+      guard (cReasoningContextBlock? source).isSome
+      guard (value == Json.mkObj [("block", Json.num block),
+        ("source", cHistoricalAssistantBlockJson source)])
+      pure (block, source))
+  | _ => none
+
 private def cHistoricalDirectCallRefJson : CallRef -> Json
   | .resolved entry block => Json.mkObj [
       ("kind", Json.str "resolved"), ("entry", Json.num entry),
@@ -2169,7 +2211,10 @@ private def stepLine (byUuid : List (String × Json)) (acc : Acc) (j : Json) : A
         cParseAssistantBlock (carrierIndices.contains sourceIdx)
           (cOccurrence entryIdx sourceIdx)
           (cCanonicalForBlock toolCanonical sourceIdx) b)
-      let blocks := parsed.map (·.block)
+      let reasoning := (cCarrierReasoning? j).getD []
+      let blocks := parsed.zipIdx.map (fun (parsed, index) =>
+        (reasoning.find? (fun retained => retained.1 == index)).map Prod.snd
+          |>.getD parsed.block)
       let idx := entryIdx
       let additions := blocks.zipIdx.filterMap (fun (blk, bi) =>
         match blk with
@@ -2551,7 +2596,7 @@ private def cValidateConversationCarrierMarker
       else pure ()
       let recognizedPurpose :=
         ["contentBlocks", "provenance", "identityProvenance", "timeProvenance",
-          "toolCanonical", "toolTranslation", "toolResultErrors", "unavailableOutput"].any
+          "toolCanonical", "toolTranslation", "toolResultErrors", "unavailableOutput", "reasoning"].any
           (fun key => (marker.getObjVal? key).toOption.isSome)
       if !recognizedPurpose then
         cSchemaError line claudeCarrierMarkerKey
@@ -2641,6 +2686,23 @@ private def cValidateConversationCarrierMarker
             if !agrees then
               cSchemaError line "toolResultErrors.errorSignal"
                 "contradicts the emitted native error flag"
+            else pure ())
+      match marker.getObjVal? "reasoning" with
+      | .error _ => pure ()
+      | .ok _ =>
+          let retained ← match cCarrierReasoning? record with
+            | some values => pure values
+            | none => cSchemaError line "reasoning" "must list exact block/source reasoning objects"
+          if kind != "assistant" || retained.isEmpty ||
+              cHasDuplicateNat (retained.map Prod.fst) then
+            cSchemaError line "reasoning" "must annotate unique assistant reasoning blocks"
+          else pure ()
+          retained.forM (fun (index, source) => do
+            let actual := match content with
+              | .arr blocks => blocks[index]?
+              | _ => none
+            if actual.isNone || actual != cReasoningContextBlock? source then
+              cSchemaError line "reasoning.source" "does not match its readable context block"
             else pure ())
       match marker.getObjVal? "unavailableOutput" with
       | .error _ => pure ()
@@ -4104,13 +4166,12 @@ disposition table exactly:
   `roleCoerced` note's inverse).
 
 Blocks invert `cParseAssistantBlock` / `parseToolResultContent` per role type:
-`.text`→`{type:text,text}`, `.thinking`→`{type:thinking,thinking,signature?}`,
-`.toolCall`→`{type:tool_use,id,name,input}`, `.toolResult`→`{type:tool_result,
+`.text`→`{type:text,text}`, unchanged native signed thinking→`{type:thinking,…}`,
+foreign/unsigned reasoning→labeled text plus exact provenance, `.toolCall`→`{type:tool_use,id,name,input}`, `.toolResult`→`{type:tool_result,
 tool_use_id,is_error,content}` — the `tool_use_id` recovered from the `CallRef`'s
 target `toolCall`, so a re-import re-resolves the same positional `CallRef`.
 Unmodeled blocks in every role and any lifecycle that cannot be proven closed,
-unique, schema-valid, and Claude-origin are emitted only as marked inert text
-carriers. A compaction is likewise a marked `system` carrier, never a user turn.
+unique, and schema-valid are emitted only as marked inert text carriers. A compaction is likewise a marked `system` carrier, never a user turn.
 
 `uuid` preserves a source raw ID only when it is a valid, transcript-unique
 UUID. Every valid explicit UUID is reserved before deterministic synthesis, so
@@ -4178,41 +4239,12 @@ private def cRawClaudeLifecycleBlock (raw : Json) : Bool :=
       kind.endsWith "_tool_use" || kind.endsWith "_tool_result"
   | none => false
 
-/-- Codex response_item payloads that carry an opaque `encrypted_content` ciphertext
-alongside a `type` tag — the shape used by Codex's `reasoning` items (`summary:
-[{"type":"summary_text","text":...}]`, `encrypted_content: <ciphertext>`) and, as
-of Codex CLI 0.145.0, also by a new `compaction` response_item this importer (built
-against the pinned 0.144.1) does not yet model. CodexCli.lean's importer keeps
-both as `.unmodeled <label> raw` (preserving the exact raw payload, including
-provider-internal extras, for lossless Codex round-trip) — for the ~98%-empty-
-summary reasoning case and for any not-yet-recognized Codex record, verbatim
-preservation is the correct import behavior. But recognizing the `type` +
-`encrypted_content` shape here lets *export* to Claude use Claude's own native
-opaque `thinking` block instead of dumping the raw ciphertext JSON as visible
-chat text: Claude Code already renders a signature-only thinking block sanely,
-has no reason to render raw Codex JSON, and no other format's unmodeled blocks
-carry this exact `type`+`encrypted_content` shape by coincidence. -/
-private def cCodexReasoningSummaryText? (raw : Json) : Option String :=
-  match carr raw "summary" with
-  | none => some ""
-  | some summary =>
-      (summary.toList.mapM (fun item => do
-        guard (cstr item "type" == some "summary_text")
-        cstr item "text")).map (String.intercalate "\n")
-
-private def cCodexReasoningEncryptedContent? (raw : Json) : Option String :=
-  match cstr raw "type", cobj raw "encrypted_content" with
-  | some _, some (Json.str value) => if value.isEmpty then none else some value
-  | _, _ => none
-
 /-- Conservative context-free block conversion. Tool calls require lifecycle
 context to prove closure and ID uniqueness, so this public helper carries them;
 `claudeEntryToJson` below emits native calls only after the full check. -/
 def claudeAssistantBlockToJson : AssistantBlock → Json
   | AssistantBlock.text s => Json.mkObj [("type", Json.str "text"), ("text", Json.str s)]
-  | AssistantBlock.thinking s sig =>
-      Json.mkObj ([("type", Json.str "thinking"), ("thinking", Json.str s)]
-        ++ (match sig with | some g => [("signature", Json.str g)] | none => []))
+  | block@(.thinking _ _) => (cReasoningContextBlock? block).get!
   | AssistantBlock.toolCall name args rid =>
       Json.mkObj [("type", Json.str "text"),
         ("text", Json.str (cHistoricalToolCallCarrierText name args rid none
@@ -4222,11 +4254,8 @@ def claudeAssistantBlockToJson : AssistantBlock → Json
         ("type", Json.str "text"),
         ("text", Json.str (claudeMediaCarrierText mime locator))])
   | AssistantBlock.unmodeled label raw =>
-      match cCodexReasoningEncryptedContent? raw with
-      | some encrypted =>
-          Json.mkObj [("type", Json.str "thinking"),
-            ("thinking", Json.str ((cCodexReasoningSummaryText? raw).getD "")),
-            ("signature", Json.str encrypted)]
+      match cReasoningContextBlock? (.unmodeled label raw) with
+      | some context => context
       | none =>
           Json.mkObj [("type", Json.str "text"),
             ("text", Json.str (claudeUnmodeledAssistantCarrierText label raw))]
@@ -4664,8 +4693,41 @@ private def cHistoricalCallReason
       | _ => "historical source lifecycle"
   | _ => "historical source lifecycle"
 
+/-- Only forward an unchanged signed block from a physical native Claude
+record. Origin tags alone, including tags after a foreign-reasoning round trip,
+do not authenticate signatures. Cryptographic validation belongs to Claude. -/
+private def cNativeClaudeThinkingAt
+    (t : Transcript) (entryIdx blockIdx : Nat) (text : String) (sig : Option String) : Bool :=
+  match t.entries[entryIdx]?, sig with
+  | some entry, some signature =>
+      entry.origin.format == .claudeCode && !signature.isEmpty &&
+      entry.disposition == .native && !(cEntryCarrierForced t entryIdx blockIdx) &&
+      match entry.origin.extras >>= (fun extras => cobj extras "claudeRawEnvelope")
+          >>= (fun raw => cobj raw "message") >>= (fun msg => carr msg "content")
+          >>= (fun blocks => blocks[blockIdx]?) with
+      | some raw => cstr raw "type" == some "thinking" &&
+          cstr raw "thinking" == some text && cstr raw "signature" == some signature
+      | none => false
+  | _, _ => false
+
+private def cEntryReasoning (t : Transcript) (entryIdx : Nat) (entry : Entry) : List Json :=
+  match entry.payload with
+  | .assistantMsg blocks => blocks.zipIdx.filterMap (fun (block, index) =>
+      let native := match block with
+        | .thinking text sig => cNativeClaudeThinkingAt t entryIdx index text sig
+        | _ => false
+      if !native && (cReasoningContextBlock? block).isSome then some (Json.mkObj [
+        ("block", Json.num index), ("source", cHistoricalAssistantBlockJson block)])
+      else none)
+  | _ => []
+
 private def cAssistantBlockToJsonAt
     (t : Transcript) (entryIdx blockIdx : Nat) : AssistantBlock → Json
+  | block@(.thinking text sig) =>
+      if cNativeClaudeThinkingAt t entryIdx blockIdx text sig then
+        Json.mkObj [("type", Json.str "thinking"), ("thinking", Json.str text),
+          ("signature", Json.str sig.get!)]
+      else claudeAssistantBlockToJson block
   | .toolCall name args rawId =>
       if cNativeClaudeCallAt t entryIdx blockIdx name args rawId then
         let target := (cClaudeTargetToolAt? t entryIdx name args).get!
@@ -4981,10 +5043,10 @@ private def cCarrierMarker
     (timeProvenance : Option Json := none)
     (toolCanonical : List (Nat × CanonicalTool) := [])
     (toolTranslation : List Json := []) (toolErrors : List Json := [])
-    (unavailableOutput : List Json := []) : Option Json :=
+    (unavailableOutput : List Json := []) (reasoning : List Json := []) : Option Json :=
   if indices.isEmpty && rawEnvelope.isNone && identityProvenance.isNone &&
       timeProvenance.isNone && toolCanonical.isEmpty && toolTranslation.isEmpty &&
-      toolErrors.isEmpty && unavailableOutput.isEmpty then none else
+      toolErrors.isEmpty && unavailableOutput.isEmpty && reasoning.isEmpty then none else
     some (Json.mkObj ([
       ("protocol", Json.str claudeCarrierProtocol)] ++
       (if indices.isEmpty then [] else [
@@ -4994,6 +5056,7 @@ private def cCarrierMarker
         ("toolCanonical", cToolCanonicalJson toolCanonical)]) ++
       (if toolTranslation.isEmpty then [] else [
         ("toolTranslation", Json.arr toolTranslation.toArray)]) ++
+      (if reasoning.isEmpty then [] else [("reasoning", Json.arr reasoning.toArray)]) ++
       (if unavailableOutput.isEmpty then [] else [
         ("unavailableOutput", Json.arr unavailableOutput.toArray)]) ++
       (if toolErrors.isEmpty then [] else [
@@ -5021,9 +5084,9 @@ private def cCarrierTopLevelStampWithRaw
     (timeProvenance : Option Json := none)
     (toolCanonical : List (Nat × CanonicalTool) := [])
     (toolTranslation : List Json := []) (toolErrors : List Json := [])
-    (unavailableOutput : List Json := []) : List (String × Json) :=
+    (unavailableOutput : List Json := []) (reasoning : List Json := []) : List (String × Json) :=
   match cCarrierMarker indices rawEnvelope identityProvenance timeProvenance
-      toolCanonical toolTranslation toolErrors unavailableOutput with
+      toolCanonical toolTranslation toolErrors unavailableOutput reasoning with
   | some marker => [(claudeCarrierMarkerKey, marker)]
   | none => []
 
@@ -5128,7 +5191,7 @@ private def cClaudeEntryToJson
     let ordinaryStamp := stamp ++
       cCarrierTopLevelStampWithRaw carrierIndices provenanceRaw
         identityProvenance timeProvenance toolCanonical toolTranslation (cEntryToolErrors t e)
-        (cEntryUnavailableOutput t e)
+        (cEntryUnavailableOutput t e) (cEntryReasoning t i e)
     if cEntryNeedsWholeHistoricalCarrier t i e carrierIndices then
       match e.payload with
       | Payload.compaction summary coverage tokensBefore =>

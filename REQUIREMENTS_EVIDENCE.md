@@ -617,6 +617,22 @@ for other target harnesses. The offline probe checks reject missing context,
 wrong request/outcome, and false failure claims. The release procedure requires
 new exact-binary receipts before publishing.
 
+The additional #2 reasoning/tool-history fixture passed the same probe on
+Claude Code 2.1.301 on 2026-10-16 with `--expect ledger --expect-outcome
+ledger-ready`. The observed reply was:
+
+> You asked me to inspect the synthetic ledger and report its readiness, and the last tool call (`printf ledger-ready`) exited with code 0 and printed "ledger-ready," though that command only echoed a fixed string and didn't actually inspect any ledger.
+
+The fixture is `testdata/codex/0.162.1/reasoning-history.jsonl`, SHA-256
+`fac8a26b258e84eca2ae01acaa8af17da95ead80db663882e48c29b50c21dc8b`;
+development converter SHA-256
+`b5916404a333d14952c9a3d0aa972f3800771e3f2e676c7137e74a572d6c9b38`.
+Artifact checks found no foreign native thinking blocks, retained all three
+reasoning payloads exactly through repeated hops, and preserved the tool pair.
+The real compacted artifact separately retained 36 native pairs and 41 opaque
+reasoning records, with zero malformed checkpoints and an unchanged source.
+No private-session live continuation is claimed by this observation.
+
 ### Requirements verdict
 
 The requirements case describes an experimental developer-preview candidate

@@ -43,6 +43,7 @@ node scripts/test-cursor-native-history.mjs
 node scripts/test-codex-call-ids.mjs
 node scripts/test-claude-exec-history.mjs
 node scripts/test-claude-notes-history.mjs
+node scripts/test-claude-reasoning.mjs
 node scripts/test-codex-checkpoints.mjs
 node scripts/check-codex-corpus.mjs
 node scripts/test-codex-exec-status.mjs
