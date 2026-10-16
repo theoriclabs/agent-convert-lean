@@ -174,9 +174,9 @@ with tempfile.TemporaryDirectory(prefix="loom-cursor-ide-export-") as directory:
     blocks = [b for r in claude for b in r.get("message", {}).get("content", []) if isinstance(b, dict)]
     assert sum(b["type"] == "tool_use" for b in blocks) == 4
     assert sum(b["type"] == "tool_result" for b in blocks) == 4
-    provenance = [r.get("_agent_convert", {}).get("transcriptProvenance", {}) for r in claude]
-    assert any(p.get("kind") == "record" and p.get("payload", {}).get("raw") == export_rows[-1]
-               for p in provenance), provenance
+    provenance = [record for r in claude for record in
+                  r.get("_agent_convert", {}).get("eventBatch", {}).get("records", [])]
+    assert any(p.get("raw") == export_rows[-1] for p in provenance), provenance
     assert not marker.exists(), "Import reran a historical command"
     assert digest(db) == native_db and digest(source) == original_source
 

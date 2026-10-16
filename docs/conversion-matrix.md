@@ -53,6 +53,14 @@ in entry provenance without duplicating conversation. Unambiguous same-turn
 non-dialogue completions attach to neighboring entries; unmatched conversation
 and unknown future event kinds remain explicit events.
 
+Claude exports batch events, archived controls, and archived records into one
+`agent-convert-provenance` header. Events retain their position and graph links
+for re-import, while physical conversation parents bypass them. Consumed Codex
+completion records also travel in this header. The JSON `inertByteShare` measures
+UTF-8 provenance bytes (including per-record converter metadata) divided by total
+output bytes; values above 0.10 produce a warning. Large provenance stays intact
+in the artifact, so a warning does not imply that records were discarded.
+
 Continuation exports require at least one native user text turn in the active
 window. `--allow-empty-dialogue` permits deliberate tool-only archives and is
 recorded as `allowEmptyDialogue` in `--json` output. The `loom` archive target is

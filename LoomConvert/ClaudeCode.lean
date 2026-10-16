@@ -1896,6 +1896,180 @@ private def cTranscriptSourceEnvCount (records : List Json) : Nat :=
     | some (.sourceEnv _ _) => true
     | _ => false)
 
+/-- Events are stored once, outside Claude's conversation graph. Entry events
+retain their original inert record; consumed Codex mirrors retain their exact
+source record and its owning entry. The ordinal is in the emitted record stream.
+Only inert events may be reinserted by this protocol. -/
+private def cEventBatch? (record : Json) : Option Json :=
+  cobj record claudeCarrierMarkerKey >>= fun marker => cNonNull (cobj marker "eventBatch")
+
+private def cValidateEventBatch? (batch : Json) : Option Unit := do
+  guard (cstr batch "carrier" == some "agent-convert.claude-events.v1")
+  let events ← carr batch "events"
+  for event in events do
+    let _ ← (event.getObjVal? "beforeEntry" >>= Json.getNat?).toOption
+    let record ← cobj event "record"
+    match ← cstr event "kind" with
+    | "entry" =>
+        match ← cParseInertPayloadCarrier? record with
+        | .event _ => pure ()
+        | _ => none
+    | "annotation" =>
+        guard ((cstr event "originKey").any (fun key =>
+          key == "codex_item_completed" || key == "codex_command_completions"))
+        let _ ← cstr event "entryUuid"
+        let _ ← match cobj event "sourceIndex" with
+          | some Json.null => some ()
+          | some value => value.getNat?.toOption.map (fun _ => ())
+          | none => none
+        match record with | .obj _ => pure () | _ => none
+    | _ => none
+  let links ← carr batch "parentLinks"
+  for link in links do
+    let _ ← cstr link "uuid"
+    let _ ← cstr link "parentUuid"
+  match cobj batch "leaf" with
+  | some Json.null => pure ()
+  | some leaf =>
+      let _ ← cstr leaf "eventUuid"
+      let _ ← cParseNullableStringField? leaf "physicalUuid"
+      let _ ← cstr leaf "sessionId"
+  | none => none
+  for control in ← carr batch "controls" do
+    let _ ← cParseArchivedControlJson? control
+  for record in ← carr batch "records" do
+    let _ ← cParseArchivedRecordJson? record
+
+private def cEventAncestor (fuel : Nat) (events : List Json)
+    (uuid : Option String) : Option String :=
+  match fuel, uuid with
+  | 0, _ => uuid
+  | _ + 1, none => none
+  | n + 1, some id =>
+      match events.find? (fun record => cstr record "uuid" == some id) with
+      | none => some id
+      | some record => cEventAncestor n events (cstr record "parentUuid")
+
+/-- Expand the inert batch for Loom's own importer only. The physical parent
+must agree with the collapsed event ancestry, so edited graph links cannot be
+silently replaced by stale provenance. An appended native turn keeps its own
+resume pointer. No tool calls or dialogue can be injected by an event batch. -/
+private def cExpandEventBatch (records : List Json) : Except String (List Json) := do
+  for record in records do
+    if (cEventBatch? record).isSome then
+      match cParseTranscriptProvenanceCarrier? record with
+      | some (.sourceEnv _ _) => pure ()
+      | _ => throw "malformed Claude event batch: batch must belong to the source-environment header"
+  let batches := records.filterMap cEventBatch?
+  if batches.length > 1 then
+    throw "malformed Claude event batch: multiple batches are ambiguous"
+  match batches with
+  | [] => pure records
+  | batch :: _ =>
+      if (cValidateEventBatch? batch).isNone then
+        throw "malformed Claude event batch"
+      let events := ((carr batch "events").getD #[]).toList
+      let entries := events.filter (fun event => cstr event "kind" == some "entry")
+      let rawEntries := entries.filterMap (fun event => cobj event "record")
+      let physical := records.filter (fun record => (cstr record "uuid").isSome)
+      if entries.any (fun event =>
+          ((event.getObjVal? "beforeEntry" >>= Json.getNat?).toOption.getD 0) > physical.length) then
+        throw "malformed Claude event batch: beforeEntry is out of range"
+      let ids := rawEntries.filterMap (fun record => cstr record "uuid")
+      if ids.length != rawEntries.length || ids.eraseDups.length != ids.length ||
+          physical.any (fun record => (cstr record "uuid").any ids.contains) then
+        throw "malformed Claude event batch: duplicate or missing event identity"
+      for event in events do
+        if cstr event "kind" == some "annotation" then
+          if !(physical.zipIdx.any (fun (record, i) =>
+              cstr record "uuid" == cstr event "entryUuid" &&
+              (event.getObjVal? "beforeEntry" >>= Json.getNat?).toOption == some i)) then
+            throw "malformed Claude event batch: annotation has no matching physical entry position"
+      let links := ((carr batch "parentLinks").getD #[]).toList
+      let linkIds := links.filterMap (fun link => cstr link "uuid")
+      if linkIds.eraseDups.length != linkIds.length then
+        throw "malformed Claude event batch: duplicate parent link"
+      for link in links do
+        let child ← match physical.find? (fun record => cstr record "uuid" == cstr link "uuid") with
+          | some child => pure child
+          | none => throw "malformed Claude event batch: parent link has no physical child"
+        if !(cstr link "parentUuid").any ids.contains ||
+            cstr child "parentUuid" != cEventAncestor (ids.length + 1) rawEntries (cstr link "parentUuid") then
+          throw "malformed Claude event batch: parent link disagrees with physical ancestry"
+      let mut expanded : List Json := []
+      let mut position := 0
+      for record in records do
+        if (cstr record "uuid").isSome then
+          expanded := expanded ++ (entries.filterMap (fun event =>
+            if (event.getObjVal? "beforeEntry" >>= Json.getNat?).toOption == some position
+            then cobj event "record" else none))
+          position := position + 1
+        let record := match links.find? (fun link => cstr link "uuid" == cstr record "uuid") with
+          | some link => cOverlayJsonObject record (Json.mkObj [
+              ("parentUuid", (cobj link "parentUuid").getD Json.null)])
+          | none => record
+        -- A resumed native turn points to the last physical conversation node.
+        -- Restore any trailing event between that node and the appended turn.
+        let record := match cNonNull (cobj batch "leaf") with
+          | some leaf =>
+              let trailingPosition := entries.findSome? (fun event => do
+                let raw ← cobj event "record"
+                guard (cstr raw "uuid" == cstr leaf "eventUuid")
+                (event.getObjVal? "beforeEntry" >>= Json.getNat?).toOption)
+              if (cstr record "uuid").isSome &&
+                  trailingPosition.any (fun index => position > index) &&
+                  cstr record "parentUuid" == cstr leaf "physicalUuid" then
+                cOverlayJsonObject record (Json.mkObj [
+                  ("parentUuid", (cobj leaf "eventUuid").getD Json.null)])
+              else record
+          | none => record
+        let record := match cobj batch "leaf" with
+          | some leaf =>
+              if cstr record "type" == some "last-prompt" &&
+                  cstr record "leafUuid" == cstr leaf "physicalUuid" &&
+                  cstr record "sessionId" == cstr leaf "sessionId" then
+                cOverlayJsonObject record (Json.mkObj [
+                  ("leafUuid", (cobj leaf "eventUuid").getD Json.null)])
+              else record
+          | none => record
+        expanded := expanded ++ [record]
+      expanded := expanded ++ (entries.filterMap (fun event =>
+        if (event.getObjVal? "beforeEntry" >>= Json.getNat?).toOption == some position
+        then cobj event "record" else none))
+      if let some leaf := cNonNull (cobj batch "leaf") then
+        if !(cstr leaf "eventUuid").any ids.contains then
+          throw "malformed Claude event batch: selected event is missing"
+        if cstr leaf "physicalUuid" != cEventAncestor (ids.length + 1) rawEntries (cstr leaf "eventUuid") then
+          throw "malformed Claude event batch: selected event disagrees with physical ancestry"
+        if cobj leaf "physicalUuid" == some Json.null then
+          if !physical.isEmpty then
+            throw "malformed Claude event batch: empty physical graph has records"
+          expanded := expanded ++ [Json.mkObj [
+            ("type", Json.str "last-prompt"),
+            ("sessionId", (cobj leaf "sessionId").getD Json.null),
+            ("leafUuid", (cobj leaf "eventUuid").getD Json.null)]]
+      pure expanded
+
+private def cRestoreEventAnnotations (records : List Json) (entries : List Entry) : List Entry :=
+  let events := records.flatMap (fun record =>
+    ((cEventBatch? record >>= fun batch => carr batch "events").getD #[]).toList)
+  entries.map (fun entry =>
+    let attached := events.filter (fun event =>
+      cstr event "kind" == some "annotation" && cstr event "entryUuid" == entry.origin.rawId)
+    let mirrors := attached.filterMap (fun event =>
+      if cstr event "originKey" == some "codex_item_completed" then
+        some (Json.mkObj [
+          ("recordIndex", (cobj event "sourceIndex").getD Json.null),
+          ("record", (cobj event "record").getD Json.null)]) else none)
+    let commands := attached.filter (fun event => cstr event "originKey" == some "codex_command_completions")
+    let fields := (if mirrors.isEmpty then [] else [("codex_item_completed", Json.arr mirrors.toArray)]) ++
+      (if commands.isEmpty then [] else [
+        ("codex_command_completions", Json.arr (commands.map (fun event => (cobj event "record").getD Json.null)).toArray),
+        ("codex_command_completion_indices", Json.arr (commands.map (fun event => (cobj event "sourceIndex").getD Json.null)).toArray)])
+    if fields.isEmpty then entry else
+      { entry with origin := { entry.origin with
+          extras := some (cOverlayJsonObject (entry.origin.extras.getD (Json.mkObj [])) (Json.mkObj fields)) } })
+
 private def cCompactionTokensBefore? (boundary : Json) : Option Nat := do
   let metadata ← cobj boundary "compactMetadata"
   (metadata.getObjVal? "preTokens" >>= Json.getNat?).toOption
@@ -3047,7 +3221,8 @@ leaf-walk (branch- and sidechain-aware), re-attributes tool results to
 `environment`, chains the kept lines sequentially, and emits an `Origin`
 (format `claudeCode`, `rawId := uuid`) per entry. -/
 def importClaudeCode (text : String) : Except String Transcript := do
-  let parsed ← cParseClaudeJsonLines text
+  let physical ← cParseClaudeJsonLines text
+  let parsed ← cExpandEventBatch physical
   let _ ← cValidateClaudeRecords parsed
   match parsed with
   | [] => .error "empty session"
@@ -3088,10 +3263,14 @@ def importClaudeCode (text : String) : Except String Transcript := do
       cstr record "sessionId" == sid && (cstr record "cwd").isSome)
     let cwd := stamped.bind (fun record => cstr record "cwd")
     let decodedProvenance := parsed.filterMap cParseTranscriptProvenanceCarrier?
-    let decodedControls := decodedProvenance.filterMap (fun
+    let batchControls := parsed.flatMap (fun record =>
+      ((cEventBatch? record >>= fun batch => carr batch "controls").getD #[]).toList.filterMap cParseArchivedControlJson?)
+    let batchRecords := parsed.flatMap (fun record =>
+      ((cEventBatch? record >>= fun batch => carr batch "records").getD #[]).toList.filterMap cParseArchivedRecordJson?)
+    let decodedControls := batchControls ++ decodedProvenance.filterMap (fun
       | .control value => some value
       | _ => none)
-    let decodedRecords := decodedProvenance.filterMap (fun
+    let decodedRecords := batchRecords ++ decodedProvenance.filterMap (fun
       | .record value => some value
       | _ => none)
     -- A single inert source-environment carrier (duplicates already refused by
@@ -3156,7 +3335,7 @@ def importClaudeCode (text : String) : Except String Transcript := do
     -- Sequential chaining: parent = previous kept entry (the TS `parentId` link),
     -- so `normalize` sees the same linear thread. Always strictly earlier (normal
     -- form), and it subsumes the multi-result-line re-chaining the map-lookup missed.
-    let entries := protos.zipIdx.map (fun (p, i) =>
+    let entries := cRestoreEventAnnotations parsed (protos.zipIdx.map (fun (p, i) =>
       ({ parent := if i == 0 then none else some (i - 1),
          thread := 0,
          time := p.timeOverride.getD
@@ -3166,7 +3345,7 @@ def importClaudeCode (text : String) : Except String Transcript := do
                      rawId := p.uuid,
                      extras := cProtoExtras p },
          disposition := if p.unverifiedCarrier || !p.carrierBlocks.isEmpty then
-           .historicalUnverified else .native } : Entry))
+           .historicalUnverified else .native } : Entry)))
     -- Re-attribution and control removal are separate, auditable judgments.
     -- Controls remain readable here but never acquire a conversational payload.
     let roleNotes : List ImportNote := protos.flatMap (fun p =>
@@ -5225,21 +5404,77 @@ under the structural projection `normalize`. -/
 private def cRenderClaudeCodeCandidate (t : Transcript) : String :=
   let n := t.entries.size
   let uuidPlan := cClaudeEntryUuidPlan t
-  let entryLines := (List.range n).filterMap (fun i =>
+  let rendered := (List.range n).filterMap (fun i =>
     (t.entries[i]?).map (fun (e : Entry) =>
-      (cClaudeEntryToJson t uuidPlan i e).compress))
-  let controlLines := (cTranscriptArchivedControls t).map (fun control =>
-    (cTranscriptProvenanceCarrier "control" (cArchivedControlJson control)).compress)
-  let recordLines := (cTranscriptArchivedRecords t).map (fun record =>
-    (cTranscriptProvenanceCarrier "record" (cArchivedRecordJson record)).compress)
-  -- A retargeted export preserves the complete source `EnvInfo` in one inert
-  -- carrier. A native session emits none, so native output stays byte-stable.
+      cClaudeEntryToJson t uuidPlan i e))
+  let isEvent := fun (record : Json) =>
+    match cParseInertPayloadCarrier? record with
+    | some (.event _) => true
+    | _ => false
+  let eventRecords := rendered.filter isEvent
+  let entryEvents := rendered.zipIdx.filterMap (fun (record, i) =>
+    if isEvent record then some (Json.mkObj [
+      ("kind", Json.str "entry"),
+      ("beforeEntry", Lean.toJson ((rendered.take i).countP (fun r => !isEvent r))),
+      ("record", record)]) else none)
+  let annotations := t.entries.toList.zipIdx.flatMap (fun (entry, i) =>
+    let before := (rendered.take i).countP (fun r => !isEvent r)
+    let uuid := (uuidPlan[i]?).getD ""
+    let item := fun key index raw => Json.mkObj [
+      ("kind", Json.str "annotation"), ("beforeEntry", Lean.toJson before),
+      ("entryUuid", Json.str uuid), ("originKey", Json.str key),
+      ("sourceIndex", index), ("record", raw)]
+    let extras := entry.origin.extras.getD Json.null
+    let mirrors := ((carr extras "codex_item_completed").getD #[]).toList.map (fun value =>
+      item "codex_item_completed" ((cobj value "recordIndex").getD Json.null)
+        ((cobj value "record").getD Json.null))
+    let indices := (carr extras "codex_command_completion_indices").getD #[]
+    let commands := ((carr extras "codex_command_completions").getD #[]).toList.zipIdx.map (fun (raw, j) =>
+      item "codex_command_completions" ((indices[j]?).getD Json.null) raw)
+    mirrors ++ commands)
+  let physical := rendered.filter (fun record => !isEvent record)
+  let links := physical.filterMap (fun record =>
+    if eventRecords.any (fun event => cstr event "uuid" == cstr record "parentUuid") then
+      some (Json.mkObj [
+        ("uuid", (cobj record "uuid").getD Json.null),
+        ("parentUuid", (cobj record "parentUuid").getD Json.null)]) else none)
+  let entryLines := physical.map (fun record =>
+    (cOverlayJsonObject record (Json.mkObj [
+      ("parentUuid", cNullableStringJson
+        (cEventAncestor (n + 1) eventRecords (cstr record "parentUuid")))])).compress)
+  let originalPointer := cExportLastPrompt? t uuidPlan
+  let activeEvent := originalPointer.bind (fun pointer =>
+    eventRecords.find? (fun event => cstr event "uuid" == cstr pointer "leafUuid"))
+  let physicalLeaf := originalPointer.bind (fun pointer =>
+    cEventAncestor (n + 1) eventRecords (cstr pointer "leafUuid"))
+  let leaf := match activeEvent with
+    | none => Json.null
+    | some event => Json.mkObj [
+        ("eventUuid", (cobj event "uuid").getD Json.null),
+        ("physicalUuid", cNullableStringJson physicalLeaf),
+        ("sessionId", Json.str (cClaudeTargetSessionId t))]
+  let controls := (cTranscriptArchivedControls t).map cArchivedControlJson
+  let records := (cTranscriptArchivedRecords t).map cArchivedRecordJson
+  let hasBatch := !(entryEvents ++ annotations ++ controls ++ records).isEmpty
+  let batch := Json.mkObj [
+    ("carrier", Json.str "agent-convert.claude-events.v1"),
+    ("events", Json.arr (entryEvents ++ annotations).toArray),
+    ("parentLinks", Json.arr links.toArray), ("leaf", leaf),
+    ("controls", Json.arr controls.toArray), ("records", Json.arr records.toArray)]
+  let header := cSourceEnvCarrierForExport t
+  let marker := match (cobj header claudeCarrierMarkerKey).getD (Json.mkObj []) with
+    | Json.obj fields => Json.mkObj (fields.toList.filter (fun (key, _) => key != "eventBatch"))
+    | other => other
+  let header := cOverlayJsonObject header (Json.mkObj [
+    (claudeCarrierMarkerKey, if hasBatch then
+      cOverlayJsonObject marker (Json.mkObj [("eventBatch", batch)]) else marker)])
   let sourceEnvLines :=
-    if cClaudeEnvIsPhysicalTarget t then []
-    else [(cSourceEnvCarrierForExport t).compress]
-  let pointerLines := (cExportLastPrompt? t uuidPlan).map (fun pointer =>
-    [pointer.compress]) |>.getD []
-  let lines := entryLines ++ controlLines ++ recordLines ++ sourceEnvLines ++ pointerLines
+    if cClaudeEnvIsPhysicalTarget t && !hasBatch then [] else [header.compress]
+  let pointerLines := match originalPointer, physicalLeaf with
+    | some pointer, some uuid => [(cOverlayJsonObject pointer
+        (Json.mkObj [("leafUuid", Json.str uuid)])).compress]
+    | _, _ => []
+  let lines := entryLines ++ sourceEnvLines ++ pointerLines
   if lines.isEmpty then "" else String.intercalate "\n" lines ++ "\n"
 
 /-- Checked Claude exporter. Besides validating all preferred timestamps and
@@ -6864,10 +7099,10 @@ private def cInertPayloadShape (transcript : Transcript) : Bool :=
 def claudeInertPayloadCarriersChecked : Bool :=
   let exported := cExportClaudeFixture claudeInertPayloadFixture
   match cParseClaudeJsonLines exported, importClaudeCode exported with
-  | .ok [other, event, sourceEnv, pointer], .ok restored =>
-      [other, event].all (fun record =>
-        cstr record "type" == some "system" &&
-        cstr record "subtype" == some "agent_convert_inert") &&
+  | .ok [other, sourceEnv, pointer], .ok restored =>
+      cstr other "type" == some "system" &&
+      cstr other "subtype" == some "agent_convert_inert" &&
+      (cEventBatch? sourceEnv >>= fun batch => carr batch "events").map Array.size == some 1 &&
       cstr sourceEnv "type" == some "agent-convert-provenance" &&
       (match cParseTranscriptProvenanceCarrier? sourceEnv with
        | some (.sourceEnv _ _) => true | _ => false) &&

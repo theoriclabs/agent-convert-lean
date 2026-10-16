@@ -961,6 +961,20 @@ function parseHistoricalEnvPayload(payload, sourceEntry, state) {
 }
 
 function parseClaudeRows(rows, allowTargetCarriers, context) {
+  if (allowTargetCarriers) {
+    const batch = rows.find(row => row.type === 'agent-convert-provenance')?._agent_convert?.eventBatch;
+    if (batch) {
+      const events = batch.events.filter(event => event.kind === 'entry');
+      let position = 0;
+      rows = rows.flatMap(row => {
+        if (!row.uuid) return [row];
+        const inserted = events.filter(event => event.beforeEntry === position).map(event => event.record);
+        position++;
+        return [...inserted, row];
+      });
+      rows.push(...events.filter(event => event.beforeEntry === position).map(event => event.record));
+    }
+  }
   const state = { events: [], calls: [], matched: new Set(), semanticIndex: 0 };
   for (const [rowIndex, row] of rows.entries()) {
     invariant(isObject(row), `${context}: row ${rowIndex + 1} must be an object`);
@@ -2114,6 +2128,69 @@ function validateClaudeMarker(marker, content, rowType, context) {
   }
 }
 
+function validateClaudeEventBatch(batch, rows, context) {
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  invariant(exactKeys(batch, ['carrier', 'events', 'parentLinks', 'leaf', 'controls', 'records']) &&
+    batch.carrier === 'agent-convert.claude-events.v1' &&
+    ['events', 'parentLinks', 'controls', 'records'].every(key => Array.isArray(batch[key])),
+  `${context}: invalid event batch`);
+  const physical = rows.filter(row => typeof row.uuid === 'string');
+  const events = [];
+  for (const event of batch.events) {
+    invariant(Number.isSafeInteger(event.beforeEntry) && event.beforeEntry >= 0 &&
+      event.beforeEntry <= physical.length, `${context}: invalid event position`);
+    if (event.kind === 'entry') {
+      invariant(exactKeys(event, ['beforeEntry', 'kind', 'record']) &&
+        event.record?.type === 'system' && event.record.subtype === 'agent_convert_inert' &&
+        uuidPattern.test(event.record.uuid || '') && event.record.content === null &&
+        event.record._agent_convert?.inertPayload?.payload?.kind === 'event',
+      `${context}: invalid batched entry event`);
+      validateClaudeMarker(event.record._agent_convert, [], 'system', `${context}.event`);
+      events.push(event.record);
+    } else {
+      invariant(event.kind === 'annotation' && exactKeys(event,
+        ['beforeEntry', 'kind', 'record', 'entryUuid', 'originKey', 'sourceIndex']) &&
+        physical[event.beforeEntry]?.uuid === event.entryUuid && isObject(event.record) &&
+        ['codex_item_completed', 'codex_command_completions'].includes(event.originKey) &&
+        (event.sourceIndex === null || Number.isSafeInteger(event.sourceIndex) && event.sourceIndex >= 0),
+      `${context}: invalid batched source annotation`);
+    }
+  }
+  const ids = new Set(events.map(event => event.uuid));
+  invariant(ids.size === events.length && physical.every(row => !ids.has(row.uuid)),
+    `${context}: duplicate batched event UUID`);
+  const ancestor = uuid => {
+    const seen = new Set();
+    while (ids.has(uuid)) {
+      invariant(!seen.has(uuid), `${context}: cyclic event ancestry`);
+      seen.add(uuid);
+      uuid = events.find(event => event.uuid === uuid).parentUuid;
+    }
+    return uuid;
+  };
+  const linkIds = new Set();
+  for (const link of batch.parentLinks) {
+    invariant(exactKeys(link, ['uuid', 'parentUuid']) && ids.has(link.parentUuid) &&
+      !linkIds.has(link.uuid) && physical.some(row => row.uuid === link.uuid &&
+        row.parentUuid === ancestor(link.parentUuid)), `${context}: invalid collapsed event parent`);
+    linkIds.add(link.uuid);
+  }
+  invariant(batch.leaf === null || exactKeys(batch.leaf, ['eventUuid', 'physicalUuid', 'sessionId']) &&
+    ids.has(batch.leaf.eventUuid) && batch.leaf.physicalUuid === ancestor(batch.leaf.eventUuid) &&
+    uuidPattern.test(batch.leaf.sessionId || ''), `${context}: invalid selected event`);
+  for (const control of batch.controls) {
+    invariant(exactOptionalKeys(control, ['kind', 'contentBlock', 'rendered', 'raw', 'record'], ['uuid', 'timestamp']) &&
+      Number.isSafeInteger(control.contentBlock) && control.contentBlock >= 0 &&
+      ['kind', 'rendered', 'raw'].every(key => typeof control[key] === 'string') && isObject(control.record),
+    `${context}: invalid archived control`);
+  }
+  for (const record of batch.records) {
+    invariant(exactOptionalKeys(record, ['kind', 'reason', 'raw'], ['uuid', 'role', 'timestamp']) &&
+      typeof record.kind === 'string' && typeof record.reason === 'string' && isObject(record.raw),
+    `${context}: invalid archived record`);
+  }
+}
+
 function validateClaudeTargetEnvelope(rows, expected, context) {
   invariant(rows.length >= 3, `${context}: Claude target is missing required records`);
   const provenance = rows.at(-2);
@@ -2121,7 +2198,7 @@ function validateClaudeTargetEnvelope(rows, expected, context) {
   invariant(exactKeys(provenance, ["_agent_convert", "type"]) &&
     provenance.type === "agent-convert-provenance", `${context}: missing provenance header`);
   const transcript = provenance._agent_convert;
-  invariant(exactKeys(transcript, ["protocol", "transcriptProvenance"]) &&
+  invariant(exactOptionalKeys(transcript, ["protocol", "transcriptProvenance"], ['eventBatch']) &&
     transcript.protocol === CLAUDE_PROTOCOL &&
     exactKeys(transcript.transcriptProvenance, ["carrier", "kind", "payload"]) &&
     transcript.transcriptProvenance.carrier ===
@@ -2134,6 +2211,7 @@ function validateClaudeTargetEnvelope(rows, expected, context) {
     ["cwd", "harnessVersion", "instructions", "model", "provider", "sessionId"]
       .every((key) => nullableString(sourceEnv[key])),
   `${context}: invalid Claude source environment header`);
+  if (hasOwn(transcript, 'eventBatch')) validateClaudeEventBatch(transcript.eventBatch, rows, context);
   invariant(exactKeys(lastPrompt, ["leafUuid", "sessionId", "type"]) &&
     lastPrompt.type === "last-prompt" &&
     lastPrompt.sessionId === expected.cell.targetSessionId && nonemptyString(lastPrompt.leafUuid),

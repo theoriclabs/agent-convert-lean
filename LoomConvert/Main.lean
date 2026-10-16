@@ -656,9 +656,30 @@ private def targetOptionString (t : Transcript) (key : String) : Option String :
     (extras.getObjVal? key >>= Lean.Json.getStr?).toOption.bind (fun value =>
       if value.isEmpty then none else some value)
 
+/-- Actual UTF-8 bytes occupied by inert records and converter provenance. The
+ratio includes metadata attached to conversation records, without counting the
+conversation text itself. `last-prompt` is native resume state, not provenance. -/
+private def claudeInertBytes (output : String) : Nat :=
+  (output.splitOn "\n").foldl (fun total line =>
+    match Lean.Json.parse line with
+    | .error _ => total
+    | .ok record =>
+        let kind := (record.getObjVal? "type" >>= Lean.Json.getStr?).toOption
+        if kind == some "agent-convert-provenance" ||
+            (kind == some "system" &&
+              ((record.getObjVal? "subtype" >>= Lean.Json.getStr?).toOption.getD "").startsWith "agent_convert_") then
+          total + line.utf8ByteSize + 1
+        else total + ((record.getObjVal? "_agent_convert").toOption.map
+          (fun marker => marker.compress.utf8ByteSize)).getD 0) 0
+
+private def reportInertBudget (toFmt output : String) : IO Unit := do
+  if toFmt == "claude" && claudeInertBytes output * 10 > output.utf8ByteSize then
+    IO.eprintln s!"warning: inert/provenance bytes exceed 10% of the Claude session ({claudeInertBytes output}/{output.utf8ByteSize} bytes); exact provenance is retained in the file"
+
 private def transcriptSummaryJson
     (fromFmt toFmt inp outp : String) (source emitted : Transcript)
-    (callsCarriedByTransform resultsCarriedByTransform : Nat) : Lean.Json :=
+    (callsCarriedByTransform resultsCarriedByTransform : Nat)
+    (output : Option String := none) : Lean.Json :=
   let messagesImported := transcriptMessageCount source
   let messagesWritten := if toFmt == "cursor-agent" then
     cursorAgentTargetRecordCount emitted else transcriptMessageCount emitted
@@ -732,6 +753,11 @@ private def transcriptSummaryJson
     ("targetTimestamp", (targetOptionString emitted "target_timestamp").map
       Lean.Json.str |>.getD Lean.Json.null),
     ("messagesWritten", Lean.Json.num messagesWritten),
+    ("inertByteShare", match output with
+      | some text => if toFmt == "claude" && text.utf8ByteSize > 0 then
+          Lean.toJson ((claudeInertBytes text).toFloat / text.utf8ByteSize.toFloat)
+        else Lean.Json.null
+      | none => Lean.Json.null),
     ("messagesImported", Lean.Json.num messagesImported),
     ("toolCallsImported", Lean.Json.num toolCallsImported),
     ("toolResultsImported", Lean.Json.num toolResultsImported),
@@ -1122,9 +1148,11 @@ def runConvert (fromFmt toFmt inp : String) (outp : Option String)
               | .ok success =>
                   for warning in success.warnings do
                     IO.eprintln s!"warning: {warning}"
+                  let mainOutput ← IO.FS.readFile o
+                  reportInertBudget toFmt mainOutput
                   if opts.json then
                     IO.println (transcriptSummaryJson fromFmt toFmt inp o source t
-                      callsCarried resultsCarried).compress
+                      callsCarried resultsCarried (some mainOutput)).compress
                   else do
                     reportExportObligations toFmt t
                     IO.println s!"wrote {o} + sidecar subagents ({t.entries.size} entries; subagents={subagentThreadCount t})"
@@ -1133,6 +1161,7 @@ def runConvert (fromFmt toFmt inp : String) (outp : Option String)
         match runPipeline fromFmt toFmt t with
         | .error e => IO.eprintln s!"export error: {e}"; pure 3
         | .ok out =>
+            reportInertBudget toFmt out
             if opts.json then
               match outp with
               | none => IO.eprintln "invocation error: --json requires an output path"; pure 1
@@ -1141,7 +1170,7 @@ def runConvert (fromFmt toFmt inp : String) (outp : Option String)
                   | .error error => IO.eprintln s!"export error: {error}"; pure 3
                   | .ok _ =>
                       IO.println (transcriptSummaryJson fromFmt toFmt inp output source t
-                        callsCarried resultsCarried).compress
+                        callsCarried resultsCarried (some out)).compress
                       pure 0
             else do
               reportExportObligations toFmt t
@@ -1163,6 +1192,7 @@ private def runCursorIde (db composerId toFmt : String) (outp : Option String)
       match runPipeline "cursor-ide" toFmt source with
       | .error error => IO.eprintln s!"export error: {error}"; pure 3
       | .ok output =>
+          reportInertBudget toFmt output
           if opts.json then
             match outp with
             | none =>
@@ -1173,7 +1203,7 @@ private def runCursorIde (db composerId toFmt : String) (outp : Option String)
                 | .error error => IO.eprintln s!"export error: {error}"; pure 3
                 | .ok _ =>
                     IO.println (transcriptSummaryJson "cursor-ide" toFmt
-                      s!"{db}#{composerId}" path source source 0 0).compress
+                      s!"{db}#{composerId}" path source source 0 0 (some output)).compress
                     pure 0
           else do
             reportExportObligations toFmt source

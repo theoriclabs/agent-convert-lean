@@ -7,6 +7,11 @@ lands; move them into a dated version section when publishing a release.
 
 ### Fixed
 
+- Batch Claude event and archive provenance into one header, retaining event
+  positions, exact Codex completion records, and original graph links for
+  re-import. Keep events out of the physical conversation chain. Report
+  `inertByteShare` in JSON and warn when provenance exceeds 10% of the file
+  ([#25](https://github.com/theoriclabs/agent-convert-lean/issues/25)).
 - Consume Codex `item_completed` mirrors and command completions without extra
   conversation entries. Keep exact events and source positions on typed entries,
   attach other reviewed item kinds to nearby entries, and retain unmatched or

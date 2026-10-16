@@ -30,3 +30,6 @@ structured command completions. `scripts/test-codex-item-completed.mjs` checks
 deduplication, source-record retention, and conservative handling of unmatched,
 cross-turn, and future event shapes. Command evidence attaches only to an
 unambiguous enclosing `exec` call in the same recorded turn.
+`scripts/test-claude-event-batch.mjs` checks the same fixture's three exact
+completion records in one provenance header, event order and graph restoration,
+malformed batches, appended native turns, and the provenance byte budget.
