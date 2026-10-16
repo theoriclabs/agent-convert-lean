@@ -20,6 +20,7 @@ echo "== product build and Lean smoke checks =="
 lake build loom LoomOps LoomRequirements
 lake env lean smoke.lean
 lake env lean convert_smoke.lean
+lake env lean testdata/codex/checkpoint-pins.lean
 
 echo "== filesystem publication and wire contracts =="
 "$LOOM_BIN" self-test-sidecar-publication

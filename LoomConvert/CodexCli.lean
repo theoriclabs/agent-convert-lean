@@ -603,8 +603,9 @@ recording an empty `message`. Codex adds such keys every few releases, and a
 key whitelist here silently demoted every real checkpoint of a long thread to
 `codex-malformed-compaction-record`. The domain is therefore OPEN-WORLD for
 unknown keys and strict only about the semantic shape: a string `message`, a
-`replacement_history` of messages with an optional final encrypted `compaction`
-signature, a positive `window_number`, and the three window ids. Newer
+`replacement_history` of Responses messages, reasoning, and tool activity with
+an optional final encrypted `compaction` signature. Window numbers and ids are
+optional upstream metadata; when present they must have the right types. Newer
 checkpoints omit the signature and retain conversation in additional fields.
 Loom's typed compaction can project only `message`; the complete
 checkpoint therefore remains entry-scoped provenance and is reusable only when
@@ -674,13 +675,36 @@ private def codexCompactionSignatureItemValid (item : Json) : Bool :=
     codexCompactionOptionalNonemptyString item "id" &&
     codexCompactionMetadataValid item
 
+/-- Replacement histories can retain already-completed tool activity as well
+as messages. Validate those Responses shapes before reusing the regular fold;
+requiring message-only histories would erase valid native tool continuity. -/
+private def codexCheckpointResponseItemValid (item : Json) : Bool :=
+  let nonempty := fun key => (ostr item key).any (fun value => !value.isEmpty)
+  let outputValid := match oobj item "output" with
+    | some (.str _) | some (.arr _) => true
+    | _ => false
+  match ostr item "type" with
+  | some "message" => codexCompactionMessageItemValid item
+  | some "function_call" =>
+      nonempty "name" && nonempty "call_id" &&
+        (match oobj item "arguments" with
+         | some (.str _) | some (.obj _) => true
+         | _ => false)
+  | some "custom_tool_call" =>
+      nonempty "name" && nonempty "call_id" && (ostr item "input").isSome
+  | some "function_call_output" | some "custom_tool_call_output" =>
+      nonempty "call_id" && outputValid
+  | some "reasoning" =>
+      (oarr item "summary").isSome || nonempty "encrypted_content"
+  | _ => false
+
 private def codexReplacementHistoryValid (history : Array Json) : Bool :=
   match history.toList.reverse with
-  | [] => false
+  | [] => true -- an explicitly empty checkpoint is distinct from a missing field
   | signature :: reversedMessages =>
       (codexCompactionSignatureItemValid signature &&
-        reversedMessages.all codexCompactionMessageItemValid) ||
-      history.all codexCompactionMessageItemValid
+        reversedMessages.all codexCheckpointResponseItemValid) ||
+      history.all codexCheckpointResponseItemValid
 
 private def codexCompactedPayloadValid (payload : Json) : Bool :=
   codexCompactionIsObject payload &&
@@ -693,21 +717,40 @@ private def codexCompactedPayloadValid (payload : Json) : Bool :=
      | none | some Json.null | some (Json.obj _) => true
      | _ => false) &&
     (oarr payload "replacement_history").any codexReplacementHistoryValid &&
-    (payload.getObjVal? "window_number" >>= Json.getNat?).toOption.any (· > 0) &&
+    (match oobj payload "window_number" with
+     | none | some Json.null => true
+     | some value => value.getNat?.toOption.any (· > 0)) &&
     ["first_window_id", "previous_window_id", "window_id"].all (fun key =>
-      (ostr payload key).any (fun value => !value.isEmpty))
+      codexCompactionOptionalNonemptyString payload key)
 
-private def codexCompactedRecordValid (record : Json) : Bool :=
+private def codexCompactedRecordShapeValid (record : Json) : Bool :=
   codexCompactionIsObject record &&
     (match oobj record "ordinal" with
      | none | some Json.null | some (Json.num _) => true
      | _ => false) &&
     ostr record "type" == some "compacted" &&
-    (ostr record "timestamp" >>= iso8601ToEpochMs?).isSome &&
+    (match oobj record "timestamp" with
+     | none => true
+     | some value => (value.getStr?.toOption >>= iso8601ToEpochMs?).isSome) &&
     (oobj record "payload").any codexCompactedPayloadValid &&
     (match oobj record codexTimeProvenanceKey with
      | none => true
      | some _ => (parseCodexTimeProvenance? record).isSome)
+
+/-- The one checked checkpoint view used by full import, active import, boundary
+reporting, and native replay validation. Unknown bookkeeping keys stay in raw. -/
+private structure CodexCheckpoint where
+  summary : String
+  replacementHistory : Array Json
+
+private def codexCheckpoint? (record : Json) : Option CodexCheckpoint := do
+  guard (codexCompactedRecordShapeValid record)
+  let payload ← oobj record "payload"
+  pure { summary := ← ostr payload "message"
+         replacementHistory := ← oarr payload "replacement_history" }
+
+private def codexCompactedRecordValid (record : Json) : Bool :=
+  (codexCheckpoint? record).isSome
 
 private def codexGeneratedTargetDefaultsMarkerExact (payload : Json) : Bool :=
   oobj payload codexCarrierMarkerKey ==
@@ -1485,9 +1528,8 @@ private def adaptRecords (records : List Json) (carrierSessionSelfIdentified : B
       segment := segment + 1
       lastChannel := ""
     else if ty == "compacted" then
-      if codexCompactedRecordValid j then
-        let summary := (ostr p "message").getD ""
-        kept := kept.push { (mkKept (.kcompaction summary) ts .assistant "" none) with
+      if let some checkpoint := codexCheckpoint? j then
+        kept := kept.push { (mkKept (.kcompaction checkpoint.summary) ts .assistant "" none) with
           nativeCompactionRaw := some j }
         lastChannel := "compacted"
       else
@@ -2080,29 +2122,14 @@ everything before it EXCEPT the `session_meta`/`turn_context` headers, and splic
 last compaction's `replacement_history` items in as synthetic `response_item`s (the
 summarised snapshot codex replayed to GPT on resume). No compaction → records
 returned unchanged. This is an INPUT-level transform: the `replacement_history` items
-are message-shaped, so the existing `adaptRecords` fold handles them with no new
+use the Responses shapes, so the existing `adaptRecords` fold handles them with no new
 branches — exactly how codex.ts rewrites its `lines` array before its import loop.
 A missing, wrong-typed, or malformed latest replacement is an import error;
 defaulting it to `#[]` would silently erase all preceding active history. -/
 private def latestCompactionReplacement (compacted : Json) : Except String (Array Json) := do
-  let payload ← match oobj compacted "payload" with
-    | some value => pure value
-    | none => throw "latest compacted record is missing an object payload"
-  match payload with
-  | .obj _ => pure ()
-  | _ => throw "latest compacted record payload must be an object"
-  let replacementValue ← match oobj payload "replacement_history" with
-    | some value => pure value
-    | none => throw "latest compacted record is missing replacement_history"
-  let replacement ← match replacementValue with
-    | .arr items => pure items
-    | _ => throw "latest compacted replacement_history must be an array"
-  if replacement.all (fun item => match item with
-      | .obj _ => (ostr item "type").any (fun kind => !kind.isEmpty)
-      | _ => false) then
-    pure replacement
-  else
-    throw "latest compacted replacement_history contains a malformed item"
+  match codexCheckpoint? compacted with
+  | some checkpoint => pure checkpoint.replacementHistory
+  | none => throw "latest compacted record has an invalid resumable checkpoint shape"
 
 private def applyLatestCompactionSegment (records : List Json) :
     Except String (List Json) := do
@@ -2153,13 +2180,13 @@ private def codexActiveCompactionBoundary? (segment segmentStart : Nat)
   let lastIdx <- (records.zipIdx.filterMap (fun (record, index) =>
     if ostr record "type" == some "compacted" then some index else none)).getLast?
   let compacted <- records[lastIdx]?
+  let checkpoint ← codexCheckpoint? compacted
   let excludedPrefix := (records.take lastIdx).zipIdx.filterMap (fun (record, index) =>
     if ostr record "type" == some "turn_context" then none
     else some (codexIndexedRawRecord (segmentStart + index) record))
   let excluded := excludedPrefix ++
     [codexIndexedRawRecord (segmentStart + lastIdx) compacted]
-  let replacementCount := (oobj compacted "payload" >>= fun payload =>
-    oarr payload "replacement_history").map Array.size |>.getD 0
+  let replacementCount := checkpoint.replacementHistory.size
   let boundary := Json.mkObj [
     ("segment", Json.num segment),
     ("record_index", Json.num (segmentStart + lastIdx)),
@@ -2176,7 +2203,8 @@ private def codexActiveCompactionBoundary? (segment segmentStart : Nat)
 /-- Machine-readable audit data for a context-rewritten import. The complete
 source stream is intentionally retained so the continuation projection never
 becomes the only surviving account of pre-compaction history. -/
-private def codexActiveContextProvenance (records activeRecords : List Json) : Json := Id.run do
+private def codexActiveContextProvenance (records activeRecords : List Json)
+    (active : Bool := true) : Json := Id.run do
   let mut boundaries : Array Json := #[]
   let mut excludedCount := 0
   let mut segment := 0
@@ -2201,10 +2229,10 @@ private def codexActiveContextProvenance (records activeRecords : List Json) : J
   | none => pure ()
   return Json.mkObj [
     ("protocol", Json.str "agent-convert.codex-active-context.v1"),
-    ("active", Json.bool true),
+    ("active", Json.bool active),
     ("source_record_count", Json.num records.length),
     ("materialized_active_record_count", Json.num activeRecords.length),
-    ("excluded_record_count", Json.num excludedCount),
+    ("excluded_record_count", Json.num (if active then excludedCount else 0)),
     ("compaction_boundaries", Json.arr boundaries),
     ("raw_source_records", Json.arr records.toArray)]
 
@@ -2546,7 +2574,10 @@ carry no id) so `Origin.rawId := none` rather than a fabricated `cdxNNNN` — th
 positional IR does not need synthesized ids. -/
 def importCodexCli (text : String) : Except String Transcript := do
   let (mp, records) ← parseCodexSession text
-  pure (buildCodexTranscript mp records (codexCompactionRecords records) false)
+  let compactions := codexCompactionRecords records
+  let provenance := if compactions.isEmpty then none
+    else some (codexActiveContextProvenance records records false)
+  pure (buildCodexTranscript mp records compactions false provenance)
 
 /-- Import the context Codex would actually resume: apply the latest compaction's
 replacement history, but retain Loom's faithful event/tool/control handling.
@@ -2740,7 +2771,7 @@ synthetic result under ts-parity). -/
 private def codexCompactionFixture : String := String.intercalate "\n" [
   "{\"type\":\"session_meta\",\"timestamp\":\"T0\",\"payload\":{\"id\":\"s\",\"timestamp\":\"T0\",\"cwd\":\"/w\",\"cli_version\":\"0\",\"originator\":\"codex-tui\",\"model_provider\":\"openai\",\"instructions\":\"x\"}}",
   "{\"type\":\"response_item\",\"timestamp\":\"T1\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"OLD-precompaction\"}]}}",
-  "{\"type\":\"compacted\",\"timestamp\":\"T2\",\"payload\":{\"message\":\"summary\",\"replacement_history\":[{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"SNAPSHOT-spliced\"}]}]}}",
+  "{\"type\":\"compacted\",\"timestamp\":\"2026-07-20T00:00:02.000Z\",\"payload\":{\"message\":\"summary\",\"replacement_history\":[{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"SNAPSHOT-spliced\"}]}]}}",
   "{\"type\":\"response_item\",\"timestamp\":\"T3\",\"payload\":{\"type\":\"web_search_call\",\"status\":\"completed\"}}",
   "{\"type\":\"response_item\",\"timestamp\":\"T4\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"NEW-postcompaction\"}]}}"
 ]
@@ -3791,7 +3822,7 @@ def codexTargetCompactionsValid (t : Transcript) : Bool :=
   t.entries.all codexCompactionEntryExportable
 
 def codexCompactionPreflightError : String :=
-  "Codex target native compaction requires an exact 0.144.1 compacted record with replacement_history and encrypted compaction signature provenance"
+  "Codex target native compaction requires exact valid checkpoint provenance with replacement_history"
 
 /-- Render one IR entry to its Codex `response_item` record(s). Text blocks of a
 message collapse into a single `message` record; each tool call / thinking /
@@ -5410,11 +5441,11 @@ which supports segment-local reduction rather than cross-header replay. -/
 private def codexIndependentCompactionsFixture : String := String.intercalate "\n" [
   "{\"type\":\"session_meta\",\"payload\":{\"id\":\"segmented-compaction\"}}",
   "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"OLD-ONE\"}]}}",
-  "{\"type\":\"compacted\",\"payload\":{\"replacement_history\":[{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"SNAP-ONE\"}]}]}}",
+  "{\"type\":\"compacted\",\"payload\":{\"message\":\"segment checkpoint\",\"replacement_history\":[{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"SNAP-ONE\"}]}]}}",
   "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"NEW-ONE\"}]}}",
   "{\"type\":\"session_meta\",\"payload\":{\"id\":\"segmented-compaction\"}}",
   "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"OLD-TWO\"}]}}",
-  "{\"type\":\"compacted\",\"payload\":{\"replacement_history\":[{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"SNAP-TWO\"}]}]}}",
+  "{\"type\":\"compacted\",\"payload\":{\"message\":\"segment checkpoint\",\"replacement_history\":[{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"SNAP-TWO\"}]}]}}",
   "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"NEW-TWO\"}]}}"]
 
 def codexCompactionsStayInsideResumeSegments : Bool :=
@@ -8973,7 +9004,7 @@ def codexUnsignedCompactionCheckpointAccepted : Bool := Id.run do
     !imported.importNotes.any (fun note => match note.kind with
       | .other "codex-malformed-compaction-record" => true
       | _ => false) &&
-    !codexReplacementHistoryValid #[] &&
+    codexReplacementHistoryValid #[] &&
     !codexReplacementHistoryValid #[Json.mkObj [
       ("type", Json.str "compaction"), ("encrypted_content", Json.str "")]]
 

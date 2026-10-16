@@ -16,6 +16,10 @@ lands; move them into a dated version section when publishing a release.
 - Accept Codex checkpoints whose replacement history omits the optional trailing
   compaction signature, retaining the complete checkpoint as provenance while
   continuing to reject malformed histories ([#21](https://github.com/theoriclabs/agent-convert-lean/issues/21)).
+- Share checkpoint validation between Codex archive and active-context imports,
+  including retained native tool activity and optional window metadata. Both
+  modes report the same selected boundaries; three versioned fixtures pin their
+  agreement ([#22](https://github.com/theoriclabs/agent-convert-lean/issues/22)).
 
 ## [0.2.0-preview.4] - 2026-10-15
 
