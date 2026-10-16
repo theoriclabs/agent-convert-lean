@@ -1023,6 +1023,13 @@ function parseClaudeRows(rows, allowTargetCarriers, context) {
           ? [textBlock(block.content)]
           : Array.isArray(block.content) ? block.content.map(parseClaudeResultBlock)
             : hasOwn(block, "content") ? [unmodeledBlock("tool_result_content", block.content)] : [];
+        for (const retained of marker?.unavailableOutput || []) {
+          if (retained.block !== blockIndex) continue;
+          const original = exactHistoricalBlock(retained.source);
+          invariant(original && retained.contentIndex < resultContent.length,
+            `${context}: invalid unavailable-output provenance`);
+          resultContent[retained.contentIndex] = original;
+        }
         let error = hasOwn(block, "is_error") ? nativeError(block.is_error) : unrecordedError();
         const retained = marker?.toolResultErrors?.filter(e => e.block === blockIndex) || [];
         invariant(retained.length <= 1, `${context}: duplicate result error provenance`);
@@ -2009,11 +2016,30 @@ function validateClaudeTimeProvenance(value, context) {
 
 function validateClaudeMarker(marker, content, rowType, context) {
   invariant(exactOptionalKeys(marker, ["protocol"], ["contentBlocks", "identityProvenance",
-    "inertPayload", "provenance", "timeProvenance", "toolCanonical", "toolTranslation", "toolResultErrors"]) &&
+    "inertPayload", "provenance", "timeProvenance", "toolCanonical", "toolTranslation", "toolResultErrors", "unavailableOutput"]) &&
     marker.protocol === CLAUDE_PROTOCOL, `${context}: invalid Claude marker`);
   invariant(rowType === "system" ? hasOwn(marker, "inertPayload") &&
     !hasOwn(marker, "contentBlocks") : !hasOwn(marker, "inertPayload"),
   `${context}: Claude marker fields disagree with the row type`);
+  if (hasOwn(marker, "unavailableOutput")) {
+    invariant(Array.isArray(marker.unavailableOutput) && marker.unavailableOutput.length > 0 &&
+      new Set(marker.unavailableOutput.map(v => `${v.block}:${v.contentIndex}`)).size === marker.unavailableOutput.length,
+      `${context}: invalid unavailable-output locations`);
+    for (const retained of marker.unavailableOutput) {
+      invariant(exactKeys(retained, ["block", "contentIndex", "source"]) &&
+        Number.isSafeInteger(retained.block) && retained.block >= 0 &&
+        Number.isSafeInteger(retained.contentIndex) && retained.contentIndex >= 0 &&
+        content[retained.block]?.type === "tool_result" && exactHistoricalBlock(retained.source),
+        `${context}: invalid unavailable-output provenance`);
+      const source = retained.source;
+      invariant(["unmodeled", "media"].includes(source.kind), `${context}: unavailable output must retain opaque content`);
+      const expected = source.kind === "media"
+        ? `[output not retained in a displayable form: ${source.mimeType}]`
+        : `[output not retained as readable text: ${source.label}]`;
+      invariant(jsonEqual(content[retained.block].content[retained.contentIndex], { type: "text", text: expected }),
+        `${context}: unavailable-output placeholder disagrees with provenance`);
+    }
+  }
   for (const key of ["toolCanonical", "toolTranslation", "toolResultErrors"]) {
     if (!hasOwn(marker, key)) continue;
     invariant(Array.isArray(marker[key]) && marker[key].length > 0 &&

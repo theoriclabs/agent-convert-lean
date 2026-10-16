@@ -344,10 +344,23 @@ function targetLifecycle(rows) {
           });
         }
       } else if (row.type === "user" && block?.type === "tool_result") {
+        const restoredContent = targetNativeResultBlocks(block.content);
+        for (const retained of row._agent_convert?.unavailableOutput || []) {
+          if (retained.block !== blockIndex) continue;
+          const source = retained.source;
+          const expected = source.kind === "media"
+            ? `[output not retained in a displayable form: ${source.mimeType}]`
+            : `[output not retained as readable text: ${source.label}]`;
+          if (!["media", "unmodeled"].includes(source.kind) ||
+              block.content?.[retained.contentIndex]?.text !== expected) {
+            throw new Error("unavailable output does not match its native placeholder");
+          }
+          restoredContent[retained.contentIndex] = source;
+        }
         events.push({
           kind: "result",
           id: block.tool_use_id ?? null,
-          content: targetNativeResultBlocks(block.content),
+          content: restoredContent,
           // `is_error` is a bare bool with no "unknown" state, so its ABSENCE is
           // load-bearing: it is the only honest rendering of a source that never
           // recorded whether the call errored. Record presence separately from

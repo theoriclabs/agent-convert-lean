@@ -630,6 +630,41 @@ private def cParseHistoricalUserBlock? (j : Json) : Option UserBlock := do
   | "unmodeled" => pure (.unmodeled (← cstr j "label") (← cobj j "raw"))
   | _ => none
 
+private def cClaudeImageSource? (mime locator : String) : Option Json :=
+  match locator.dropPrefix? "data:" with
+  | some rest =>
+      match rest.toString.splitOn ";base64," with
+      | [encodedMime, data] =>
+          if encodedMime != mime || !encodedMime.startsWith "image/" || data.isEmpty then
+            none
+          else
+            some (Json.mkObj [
+              ("type", Json.str "base64"),
+              ("media_type", Json.str encodedMime),
+              ("data", Json.str data)])
+      | _ => none
+  | none =>
+      if mime == "image" &&
+          (locator.startsWith "https://" || locator.startsWith "http://") then
+        some (Json.mkObj [("type", Json.str "url"), ("url", Json.str locator)])
+      else match locator.dropPrefix? "claude-file:" with
+        | some fileId =>
+            if mime != "image" || fileId.isEmpty then none else some (Json.mkObj [
+              ("type", Json.str "file"), ("file_id", Json.str fileId.toString)])
+        | none => none
+
+/-- A missing readable projection says nothing about whether the tool ran.
+The original encrypted/unsupported block is retained in record metadata. -/
+private def cUnavailableResultPlaceholder? : UserBlock → Option Json
+  | .text _ => none
+  | .media mime locator =>
+      if (cClaudeImageSource? mime locator).isSome then none else some (Json.mkObj [
+        ("type", Json.str "text"),
+        ("text", Json.str s!"[output not retained in a displayable form: {mime}]")])
+  | .unmodeled label _ => some (Json.mkObj [
+      ("type", Json.str "text"),
+      ("text", Json.str s!"[output not retained as readable text: {label}]")])
+
 private def cErrorSignalJson : ErrorSignal → Json
   | .native isError => Json.mkObj [
       ("kind", Json.str "native"), ("isError", Json.bool isError)]
@@ -1344,6 +1379,28 @@ private def cCarrierToolErrors? (j : Json) : Option (List (Nat × ErrorSignal)) 
       pure (block, signal))
   | some _ => none
 
+private def cCarrierUnavailableOutput? (j : Json) :
+    Option (List (Nat × Nat × UserBlock)) := do
+  let marker ← cobj j claudeCarrierMarkerKey
+  guard (cstr marker "protocol" == some claudeCarrierProtocol)
+  match cobj marker "unavailableOutput" with
+  | none => pure []
+  | some (.arr values) => values.toList.mapM (fun value => do
+      let block ← cobj value "block" >>= (fun raw => raw.getNat?.toOption)
+      let content ← cobj value "contentIndex" >>= (fun raw => raw.getNat?.toOption)
+      let source ← cobj value "source" >>= cParseHistoricalUserBlock?
+      guard (cUnavailableResultPlaceholder? source).isSome
+      guard (value == Json.mkObj [("block", Json.num block),
+        ("contentIndex", Json.num content), ("source", cHistoricalUserBlockJson source)])
+      pure (block, content, source))
+  | _ => none
+
+private def cRestoreUnavailableOutput (j : Json) (block : Nat)
+    (content : List UserBlock) : List UserBlock :=
+  let retained := (cCarrierUnavailableOutput? j).getD []
+  content.zipIdx.map (fun (source, index) =>
+    (retained.find? (fun (b, c, _) => b == block && c == index)).map (·.2.2) |>.getD source)
+
 private def cCanonicalForBlock
     (overrides : List (Nat × CanonicalTool)) (blockIdx : Nat) : Option CanonicalTool :=
   (overrides.find? (fun entry => entry.1 == blockIdx)).map Prod.snd
@@ -2000,7 +2057,8 @@ private def stepLine (byUuid : List (String × Json)) (acc : Acc) (j : Json) : A
                           "no unmatched earlier tool_use occurrence"
                       | _ => CallRef.unresolved (cstr b "tool_use_id")
                           "ambiguous tool_use_id: multiple unmatched earlier occurrences"
-                    let resultBlocks := parseToolResultContent carrierMarked (cobj b "content")
+                    let resultBlocks := cRestoreUnavailableOutput j sourceIdx
+                      (parseToolResultContent carrierMarked (cobj b "content"))
                     -- A carrier-marked result is inert historical data: keep the
                     -- honest `.unrecorded` and infer nothing. For live results an
                     -- absent `is_error` is inferred from the output text (see
@@ -2318,7 +2376,7 @@ private def cValidateConversationCarrierMarker
       else pure ()
       let recognizedPurpose :=
         ["contentBlocks", "provenance", "identityProvenance", "timeProvenance",
-          "toolCanonical", "toolTranslation", "toolResultErrors"].any
+          "toolCanonical", "toolTranslation", "toolResultErrors", "unavailableOutput"].any
           (fun key => (marker.getObjVal? key).toOption.isSome)
       if !recognizedPurpose then
         cSchemaError line claudeCarrierMarkerKey
@@ -2408,6 +2466,30 @@ private def cValidateConversationCarrierMarker
             if !agrees then
               cSchemaError line "toolResultErrors.errorSignal"
                 "contradicts the emitted native error flag"
+            else pure ())
+      match marker.getObjVal? "unavailableOutput" with
+      | .error _ => pure ()
+      | .ok _ =>
+          let retained ← match cCarrierUnavailableOutput? record with
+            | some values => pure values
+            | none => (cSchemaError line "unavailableOutput"
+                "must list exact block/contentIndex/source objects for unavailable content")
+          let coordinates := retained.map (fun (block, index, _) => (block, index))
+          if retained.isEmpty || coordinates.eraseDups.length != coordinates.length then
+            cSchemaError line "unavailableOutput" "must contain unique content locations"
+          else pure ()
+          retained.forM (fun (blockIndex, contentIndex, source) => do
+            let block ← match content with
+              | .arr blocks => match blocks[blockIndex]? with
+                | some block => pure block
+                | none => cSchemaError line "unavailableOutput.block" "is out of range"
+              | _ => cSchemaError line "unavailableOutput.block" "requires content array"
+            if cstr block "type" != some "tool_result" then
+              cSchemaError line "unavailableOutput.block" "must address a native tool_result"
+            else pure ()
+            let actual := carr block "content" >>= (fun blocks => blocks[contentIndex]?)
+            if actual != cUnavailableResultPlaceholder? source then
+              cSchemaError line "unavailableOutput.source" "does not match its native placeholder"
             else pure ())
       match marker.getObjVal? "provenance" with
       | .error _ => pure ()
@@ -3881,29 +3963,6 @@ def toolResultText (blocks : List UserBlock) : String :=
     | UserBlock.media _ _ => "[image tool result omitted]"
     | _ => ""))
 
-private def cClaudeImageSource? (mime locator : String) : Option Json :=
-  match locator.dropPrefix? "data:" with
-  | some rest =>
-      match rest.toString.splitOn ";base64," with
-      | [encodedMime, data] =>
-          if encodedMime != mime || !encodedMime.startsWith "image/" || data.isEmpty then
-            none
-          else
-            some (Json.mkObj [
-              ("type", Json.str "base64"),
-              ("media_type", Json.str encodedMime),
-              ("data", Json.str data)])
-      | _ => none
-  | none =>
-      if mime == "image" &&
-          (locator.startsWith "https://" || locator.startsWith "http://") then
-        some (Json.mkObj [("type", Json.str "url"), ("url", Json.str locator)])
-      else match locator.dropPrefix? "claude-file:" with
-        | some fileId =>
-            if mime != "image" || fileId.isEmpty then none else some (Json.mkObj [
-              ("type", Json.str "file"), ("file_id", Json.str fileId.toString)])
-        | none => none
-
 private def cClaudeImageBlock? (mime locator : String) : Option Json :=
   (cClaudeImageSource? mime locator).map (fun source => Json.mkObj [
     ("type", Json.str "image"), ("source", source)])
@@ -3921,11 +3980,8 @@ def claudeUserBlockToJson : UserBlock → Json
       ("type", Json.str "text"),
       ("text", Json.str (claudeUnmodeledUserCarrierText label raw))]
 
-private def claudeToolResultBlockToJson : UserBlock → Json
-  | UserBlock.unmodeled label raw => Json.mkObj [
-      ("type", Json.str "text"),
-      ("text", Json.str (claudeStructuredToolResultCarrierText label raw))]
-  | other => claudeUserBlockToJson other
+private def claudeToolResultBlockToJson (block : UserBlock) : Json :=
+  (cUnavailableResultPlaceholder? block).getD (claudeUserBlockToJson block)
 
 private def claudeToolResultContentToJson (blocks : List UserBlock) : Json :=
   match blocks with
@@ -4298,8 +4354,9 @@ private def cClaudeTargetToolAt?
 private def cNativeResultContentValid (content : List UserBlock) : Bool :=
   content.all (fun block => match block with
     | .text _ => true
-    | .media mime locator => (cClaudeImageSource? mime locator).isSome
-    | .unmodeled _ _ => false)
+    | .media mime locator => (cClaudeImageSource? mime locator).isSome ||
+        (cUnavailableResultPlaceholder? block).isSome
+    | .unmodeled _ _ => (cUnavailableResultPlaceholder? block).isSome)
 
 private structure ClaudeResultSite where
   entry   : Nat
@@ -4701,15 +4758,29 @@ private def cEntryToolErrors (t : Transcript) (entry : Entry) : List Json :=
       | _ => none)
   | _ => []
 
+private def cEntryUnavailableOutput (t : Transcript) (entry : Entry) : List Json :=
+  match entry.payload with
+  | .envMsg blocks => blocks.zipIdx.flatMap (fun (block, index) =>
+      match block with
+      | .toolResult _ content _ =>
+          if cToolResultAtIsNative t block then content.zipIdx.filterMap (fun (source, contentIndex) =>
+            if (cUnavailableResultPlaceholder? source).isSome then some (Json.mkObj [
+              ("block", Json.num index), ("contentIndex", Json.num contentIndex),
+              ("source", cHistoricalUserBlockJson source)]) else none)
+          else []
+      | _ => [])
+  | _ => []
+
 private def cCarrierMarker
     (indices : List Nat) (rawEnvelope : Option Json := none)
     (identityProvenance : Option Json := none)
     (timeProvenance : Option Json := none)
     (toolCanonical : List (Nat × CanonicalTool) := [])
-    (toolTranslation : List Json := []) (toolErrors : List Json := []) : Option Json :=
+    (toolTranslation : List Json := []) (toolErrors : List Json := [])
+    (unavailableOutput : List Json := []) : Option Json :=
   if indices.isEmpty && rawEnvelope.isNone && identityProvenance.isNone &&
       timeProvenance.isNone && toolCanonical.isEmpty && toolTranslation.isEmpty &&
-      toolErrors.isEmpty then none else
+      toolErrors.isEmpty && unavailableOutput.isEmpty then none else
     some (Json.mkObj ([
       ("protocol", Json.str claudeCarrierProtocol)] ++
       (if indices.isEmpty then [] else [
@@ -4719,6 +4790,8 @@ private def cCarrierMarker
         ("toolCanonical", cToolCanonicalJson toolCanonical)]) ++
       (if toolTranslation.isEmpty then [] else [
         ("toolTranslation", Json.arr toolTranslation.toArray)]) ++
+      (if unavailableOutput.isEmpty then [] else [
+        ("unavailableOutput", Json.arr unavailableOutput.toArray)]) ++
       (if toolErrors.isEmpty then [] else [
         ("toolResultErrors", Json.arr toolErrors.toArray)]) ++
       (match rawEnvelope with
@@ -4743,9 +4816,10 @@ private def cCarrierTopLevelStampWithRaw
     (identityProvenance : Option Json := none)
     (timeProvenance : Option Json := none)
     (toolCanonical : List (Nat × CanonicalTool) := [])
-    (toolTranslation : List Json := []) (toolErrors : List Json := []) : List (String × Json) :=
+    (toolTranslation : List Json := []) (toolErrors : List Json := [])
+    (unavailableOutput : List Json := []) : List (String × Json) :=
   match cCarrierMarker indices rawEnvelope identityProvenance timeProvenance
-      toolCanonical toolTranslation toolErrors with
+      toolCanonical toolTranslation toolErrors unavailableOutput with
   | some marker => [(claudeCarrierMarkerKey, marker)]
   | none => []
 
@@ -4850,6 +4924,7 @@ private def cClaudeEntryToJson
     let ordinaryStamp := stamp ++
       cCarrierTopLevelStampWithRaw carrierIndices provenanceRaw
         identityProvenance timeProvenance toolCanonical toolTranslation (cEntryToolErrors t e)
+        (cEntryUnavailableOutput t e)
     if cEntryNeedsWholeHistoricalCarrier t i e carrierIndices then
       match e.payload with
       | Payload.compaction summary coverage tokensBefore =>

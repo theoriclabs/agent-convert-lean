@@ -7,6 +7,10 @@ lands; move them into a dated version section when publishing a release.
 
 ### Fixed
 
+- Preserve native Claude call/result history for encrypted and unsupported
+  result content. Emit a labeled unavailable-output block, retain the complete
+  original content in validated metadata, and restore it on re-import
+  ([#17](https://github.com/theoriclabs/agent-convert-lean/issues/17)).
 - Keep valid completed source tools as raw-name native Claude history when no
   semantic translation exists. Preserve Codex notes/history tool namespaces and
   exact source arguments in reversible metadata
