@@ -574,7 +574,7 @@ private def assistantBlockPart (t : Transcript) (sessionId messageId : String)
             ("status", .str "pending"), ("input", args), ("raw", .str args.compress)]
         | some result =>
             let failed := match result.error with
-              | .native value | .inferred value _ => value
+              | .native value | .structured value _ | .heuristic value _ => value
               | .unrecorded => false
             if failed then Json.mkObj [
               ("status", .str "error"), ("input", args),

@@ -42,8 +42,10 @@ private def callRefText : CallRef -> String
 private def errorText : ErrorSignal -> String
   | .native false => "success (recorded)"
   | .native true => "error (recorded)"
-  | .inferred false heuristic => s!"success (inferred: {heuristic})"
-  | .inferred true heuristic => s!"error (inferred: {heuristic})"
+  | .heuristic false heuristic => s!"success (heuristic: {heuristic})"
+  | .heuristic true heuristic => s!"error (heuristic: {heuristic})"
+  | .structured false source => s!"success (structured: {source})"
+  | .structured true source => s!"error (structured: {source})"
   | .unrecorded => "unknown (not recorded)"
 
 private def dispositionText : EntryDisposition -> String

@@ -482,7 +482,8 @@ def hasPiUnexportableToolLifecycle (t : Transcript) : Bool :=
         | _ => false)
     | .envMsg [] => true
     | .envMsg blocks => blocks.any (fun
-        | .toolResult _ _ (.inferred _ _) => true
+        | .toolResult _ _ (.heuristic _ _)
+        | .toolResult _ _ (.structured _ _) => true
         | .toolResult call _ _ => !piCallHasExportableId t call
         | .unmodeled _ _ => true)
     | _ => false

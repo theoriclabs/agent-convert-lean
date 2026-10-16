@@ -64,9 +64,12 @@ private def callOrdinal? (transcript : Transcript) (entry block : Nat) : Option 
 private def resultState : ErrorSignal -> Json
   | .native value => Json.mkObj
       [("kind", Json.str "native"), ("value", Json.bool value)]
-  | .inferred value heuristic => Json.mkObj
-      [("kind", Json.str "inferred"), ("value", Json.bool value),
-       ("heuristic", Json.str heuristic)]
+  | .heuristic value heuristic => Json.mkObj
+      [("kind", Json.str "heuristic"), ("value", Json.bool value),
+        ("method", Json.str heuristic)]
+  | .structured value source => Json.mkObj
+      [("kind", Json.str "structured"), ("value", Json.bool value),
+        ("source", Json.str source)]
   | .unrecorded => Json.mkObj [("kind", Json.str "unrecorded")]
 
 private def callLinkJson (transcript : Transcript) : CallRef -> Json

@@ -215,7 +215,7 @@ const baseline = finalizeLifecycle([
     { kind: "media", mimeType: "image/png", locator: "data:image/png;base64,eA==" },
     { kind: "unmodeled", label: "future", raw: { exact: [1, null] } },
   ], {
-    provenance: "inferred",
+    provenance: "heuristic",
     value: true,
     heuristic: "fixture heuristic",
   }, resolved("call-1", duplicate)),
@@ -1228,7 +1228,7 @@ mutation("Codex session stamp must be first",
 const codexResultSource = finalizeLifecycle([
   call("source-call", valueId("carrier-id"), "carrier_tool", { exact: true }),
   result("source-result", valueId("carrier-id"), [{ kind: "text", text: "done" }], {
-    provenance: "inferred",
+    provenance: "heuristic",
     value: false,
     heuristic: "carrier heuristic",
   }, resolved("source-call", valueId("carrier-id"))),

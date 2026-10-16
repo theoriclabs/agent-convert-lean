@@ -332,17 +332,29 @@ private def cursorHistoricalCallRef? (j : Json) : Option CallRef := do
 private def cursorHistoricalErrorJson : ErrorSignal -> Json
   | .native value => Json.mkObj [
       ("kind", Json.str "native"), ("value", Json.bool value)]
-  | .inferred value heuristic => Json.mkObj [
-      ("kind", Json.str "inferred"), ("value", Json.bool value),
-      ("heuristic", Json.str heuristic)]
+  | .heuristic value heuristic => Json.mkObj [
+      ("kind", Json.str "heuristic"), ("value", Json.bool value),
+      ("method", Json.str heuristic)]
+  | .structured value source => Json.mkObj [
+      ("kind", Json.str "structured"), ("value", Json.bool value),
+      ("source", Json.str source)]
   | .unrecorded => Json.mkObj [("kind", Json.str "unrecorded")]
 
 private def cursorHistoricalError? (j : Json) : Option ErrorSignal := do
   match ← ostr j "kind" with
   | "native" => pure (.native (← obool j "value"))
-  | "inferred" => pure (.inferred (← obool j "value") (← ostr j "heuristic"))
+  | "inferred" => pure (.heuristic (← obool j "value") (← ostr j "heuristic"))
+  | "heuristic" => pure (.heuristic (← obool j "value") (← ostr j "method"))
+  | "structured" => pure (.structured (← obool j "value") (← ostr j "source"))
   | "unrecorded" => pure .unrecorded
   | _ => none
+
+example : cursorHistoricalError? (Json.mkObj [("kind", Json.str "inferred"),
+    ("value", Json.bool true), ("heuristic", Json.str "legacy")]) =
+    some (.heuristic true "legacy") := by native_decide
+
+example : cursorHistoricalError? (cursorHistoricalErrorJson (.structured true "exit_code")) =
+    some (.structured true "exit_code") := by native_decide
 
 private def cursorHistoricalEnvBlockJson : EnvBlock -> Json
   | .toolResult call content error => Json.mkObj [

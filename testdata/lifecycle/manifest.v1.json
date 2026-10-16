@@ -11,7 +11,7 @@
         "missingCallIds": 1,
         "openCalls": 1,
         "resultBlockKinds": ["media", "text", "unmodeled"],
-        "errorProvenance": ["inferred", "native"]
+        "errorProvenance": ["heuristic", "native"]
       },
       "limitations": [
         "An unresolved Loom CallRef is serializable but violates conversion well-formedness, so the accepted fixture does not use an orphan result."
@@ -61,11 +61,11 @@
         "missingCallIds": 0,
         "openCalls": 1,
         "resultBlockKinds": ["text"],
-        "errorProvenance": ["inferred"]
+        "errorProvenance": ["heuristic", "structured"]
       },
       "limitations": [
         "Recognized native Codex call and output records require a nonempty call_id.",
-        "Codex function_call_output has no native error boolean; the fixture records the converter's documented text heuristic as inferred provenance.",
+        "Codex function_call_output has no native error boolean; the fixture distinguishes a free-text heuristic from a structured runner exit code.",
         "The checked candidate rejects open-world array output items as a recognized lifecycle result, so exact raw structured-result coverage comes from other declared sources."
       ]
     },
@@ -113,7 +113,7 @@
         "missingCallIds": 1,
         "openCalls": 1,
         "resultBlockKinds": ["text", "unmodeled"],
-        "errorProvenance": ["inferred", "native"]
+        "errorProvenance": ["native", "structured"]
       },
       "limitations": [
         "Google AI Studio functionCall and functionResponse IDs are optional; a missing-ID response cannot be linked from name and order alone.",

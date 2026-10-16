@@ -499,18 +499,18 @@ def targetCapabilities : List TargetCapability := [
        Codex now preserves these states too. The \
        wire field is a bare `isError` bool; the PROVENANCE rides beside it in \
        the same message-level `loomPi` stamp, as its reserved `toolError` \
-       member. `piErrorExport` writes `{state:inferred,value,heuristic}` for \
-       `.inferred` — the heuristic STRING included — and `{state:unrecorded}` \
+       member. `piErrorExport` writes `{state:heuristic,value,method}` for \
+       `.heuristic`, `{state:structured,value,source}` for `.structured`, and `{state:unrecorded}` \
        for `.unrecorded`, and writes nothing for `.native`, whose bare bool \
        already says everything known. `piToolErrorSignal` reads each back and \
        an absent stamp restores `.native`, so all three states are recovered, \
        not normalized. The stamp cannot drift from the wire bool either: an \
-       `inferred` carrier whose `value` disagrees with `isError`, or an \
+       derived carrier whose `value` disagrees with `isError`, or an \
        `unrecorded` carrier beside `isError: true`, FAILS THE IMPORT rather \
        than being reconciled. Measured end to end by \
        `LoomConvert.piToolErrorEpistemicsPinned`: a foreign source's four \
        results export native and re-import as \
-       [.native false, .native true, .inferred true \"nonzero exit\", \
+       [.native false, .native true, .heuristic true \"nonzero exit\", \
        .unrecorded], and a second export is byte-equal to the first." },
   -- Measured 2026-07-26 by reading LoomConvert/CursorAgent.lean's importer and
   -- exporter against the 2026-07-06 census in Loom/Formats/CursorAgent.lean

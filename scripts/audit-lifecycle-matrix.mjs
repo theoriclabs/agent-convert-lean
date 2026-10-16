@@ -376,10 +376,15 @@ function nativeError(value) {
   return { provenance: "native", value };
 }
 
-function inferredError(value, heuristic) {
+function heuristicError(value, heuristic) {
   invariant(typeof value === "boolean", "inferred error value must be boolean");
   invariant(nonemptyString(heuristic), "inferred error must name its heuristic");
-  return { provenance: "inferred", value, heuristic };
+  return { provenance: "heuristic", value, heuristic };
+}
+
+function structuredError(value, source) {
+  invariant(typeof value === "boolean" && nonemptyString(source), "invalid structured error");
+  return { provenance: "structured", value, source };
 }
 
 function unrecordedError() {
@@ -528,7 +533,15 @@ function parseWireError(error, context) {
   }
   if (error.kind === "inferred") {
     invariant(value !== null, `${context}: inferred isError must be true or false`);
-    return inferredError(value, error.heuristic);
+    return heuristicError(value, error.heuristic);
+  }
+  if (error.kind === "heuristic") {
+    invariant(value !== null, `${context}: heuristic isError must be true or false`);
+    return heuristicError(value, error.method);
+  }
+  if (error.kind === "structured") {
+    invariant(value !== null, `${context}: structured isError must be true or false`);
+    return structuredError(value, error.source);
   }
   if (error.kind === "unrecorded") return unrecordedError();
   throw new AuditError(`${context}: unsupported error kind ${error.kind}`);
@@ -644,7 +657,15 @@ function parsePiCarrierError(error) {
   if (exactKeys(error, ["heuristic", "state", "value"]) &&
       error.state === "inferred" && typeof error.value === "boolean" &&
       nonemptyString(error.heuristic)) {
-    return inferredError(error.value, error.heuristic);
+    return heuristicError(error.value, error.heuristic);
+  }
+  if (exactKeys(error, ["method", "state", "value"]) &&
+      error.state === "heuristic" && typeof error.value === "boolean" && nonemptyString(error.method)) {
+    return heuristicError(error.value, error.method);
+  }
+  if (exactKeys(error, ["source", "state", "value"]) &&
+      error.state === "structured" && typeof error.value === "boolean" && nonemptyString(error.source)) {
+    return structuredError(error.value, error.source);
   }
   if (exactKeys(error, ["state"]) && error.state === "unrecorded") {
     return unrecordedError();
@@ -820,7 +841,11 @@ function exactCarrierError(error) {
       typeof error.isError === "boolean") return nativeError(error.isError);
   if (error.kind === "inferred" && exactKeys(error,
     ["heuristic", "isError", "kind"]) && typeof error.isError === "boolean" &&
-      nonemptyString(error.heuristic)) return inferredError(error.isError, error.heuristic);
+      nonemptyString(error.heuristic)) return heuristicError(error.isError, error.heuristic);
+  if (error.kind === "heuristic" && exactKeys(error, ["method", "isError", "kind"]) &&
+      typeof error.isError === "boolean" && nonemptyString(error.method)) return heuristicError(error.isError, error.method);
+  if (error.kind === "structured" && exactKeys(error, ["source", "isError", "kind"]) &&
+      typeof error.isError === "boolean" && nonemptyString(error.source)) return structuredError(error.isError, error.source);
   if (error.kind === "unrecorded" && exactKeys(error, ["kind"])) {
     return unrecordedError();
   }
@@ -1013,6 +1038,14 @@ function codexOutputIndicatesError(blocks) {
   return false;
 }
 
+function codexErrorSignal(blocks) {
+  const text = blocks.filter(b => b.kind === "text").map(b => b.text).join("");
+  const header = text.split(/\n(?:Output:|Final output:)/, 1)[0];
+  const codes = [...header.matchAll(/^Process exited with code (-?\d+)$/gm)].map(m => Number(m[1]));
+  return codes.length ? structuredError(codes.some(c => c !== 0), "codex.runner.process_exit_code")
+    : heuristicError(codexOutputIndicatesError(blocks), "codexOutputIndicatesError (codexAdapter.ts:75)");
+}
+
 function parseCodexOutput(value, context) {
   if (typeof value === "string") return [textBlock(value)];
   if (!Array.isArray(value)) return [unmodeledBlock("tool_output", value)];
@@ -1077,7 +1110,8 @@ function exactCodexResultCarrier(text) {
   if (!call || !error || blocks.some((block) => block === null)) return null;
   const expectedProvenance = error.provenance === "native" ? "native"
     : error.provenance === "unrecorded" ? "unrecorded"
-      : `inferred: ${error.heuristic}`;
+      : error.provenance === "structured" ? `structured: ${error.source}`
+        : `${carrier.error.kind === "inferred" ? "inferred" : "heuristic"}: ${error.heuristic}`;
   const expectedValue = error.provenance === "unrecorded" ? null : error.value;
   if (carrier.errorProvenance !== expectedProvenance || carrier.isError !== expectedValue) {
     return null;
@@ -1140,8 +1174,7 @@ function parseCodexRows(rows, allowTargetCarriers, context) {
       const id = rawId(payload.call_id);
       const blocks = parseCodexOutput(payload.output, `${context}: row ${rowIndex + 1}`);
       state.events.push(rawResult(`native-result:${rowIndex}`, id, blocks,
-        inferredError(codexOutputIndicatesError(blocks),
-          "codexOutputIndicatesError (codexAdapter.ts:75)"),
+        codexErrorSignal(blocks),
         resolvePrior(state, id, null, `Codex ${payload.type}`)));
     }
   }
@@ -1237,7 +1270,7 @@ function parseGaisLifecycle(text, context) {
             `${context}: functionResponse.isError must be boolean`);
           error = nativeError(response.isError);
         } else if (isObject(response.response) && hasOwn(response.response, "error")) {
-          error = inferredError(true,
+          error = structuredError(true,
             "google-ai-studio:functionResponse.response.error-present");
         } else error = unrecordedError();
         const blocks = typeof response.response === "string"
@@ -1376,6 +1409,11 @@ function validateWireError(value, context) {
     invariant(exactKeys(value, ["heuristic", "isError", "kind"]) &&
       ["true", "false"].includes(value.isError) && nonemptyString(value.heuristic),
     `${context}: invalid inferred error`);
+  } else if (["heuristic", "structured"].includes(value.kind)) {
+    const detail = value.kind === "heuristic" ? "method" : "source";
+    invariant(exactKeys(value, [detail, "isError", "kind"]) &&
+      ["true", "false"].includes(value.isError) && nonemptyString(value[detail]),
+      `${context}: invalid derived error`);
   } else if (value.kind === "unrecorded") {
     invariant(exactKeys(value, ["kind"]), `${context}: invalid unrecorded error`);
   } else throw new AuditError(`${context}: unsupported error signal`);
@@ -1848,6 +1886,11 @@ function validateClaudeHistoricalError(error, context) {
     invariant(exactKeys(error, ["heuristic", "isError", "kind"]) &&
       typeof error.isError === "boolean" && typeof error.heuristic === "string",
     `${context}: invalid inferred error signal`);
+  } else if (["heuristic", "structured"].includes(error.kind)) {
+    const detail = error.kind === "heuristic" ? "method" : "source";
+    invariant(exactKeys(error, [detail, "isError", "kind"]) &&
+      typeof error.isError === "boolean" && typeof error[detail] === "string",
+      `${context}: invalid derived error signal`);
   } else invariant(error.kind === "unrecorded" && exactKeys(error, ["kind"]),
     `${context}: invalid unrecorded error signal`);
 }
@@ -2387,6 +2430,8 @@ function field(fields, path, expected, actual, pass = jsonEqual(expected, actual
 function compareRawId(fields, path, expected, actual) {
   field(fields, `${path}.kind`, expected?.kind, actual?.kind);
   field(fields, `${path}.value`, expected?.value, actual?.value);
+  field(fields, `${path}.source`, expected?.source, actual?.source,
+    expected?.source === actual?.source || (dispositionPolicy === "allow-native-to-historical" && actual?.provenance === "native"));
 }
 
 function compareBlocks(fields, path, expected, actual) {
@@ -2416,7 +2461,7 @@ function compareError(fields, path, expected, actual, dispositionPolicy = "exact
   const provenancePass =
     expected?.provenance === actual?.provenance ||
     (dispositionPolicy === "allow-native-to-historical" &&
-      expected?.provenance === "inferred" && actual?.provenance === "native" &&
+      ["heuristic", "structured"].includes(expected?.provenance) && actual?.provenance === "native" &&
       expected?.value === actual?.value);
   field(fields, `${path}.provenance`, expected?.provenance, actual?.provenance,
     provenancePass,
@@ -2424,9 +2469,11 @@ function compareError(fields, path, expected, actual, dispositionPolicy = "exact
       ? "inferred source error may surface as a native target is_error"
       : undefined);
   field(fields, `${path}.value`, expected?.value, actual?.value);
+  field(fields, `${path}.source`, expected?.source, actual?.source,
+    expected?.source === actual?.source || (dispositionPolicy === "allow-native-to-historical" && actual?.provenance === "native"));
   // Heuristic identity is source-side only; a native target encoding drops it.
   if (!(dispositionPolicy === "allow-native-to-historical" &&
-      expected?.provenance === "inferred" && actual?.provenance === "native")) {
+      ["heuristic", "structured"].includes(expected?.provenance) && actual?.provenance === "native")) {
     field(fields, `${path}.heuristic`, expected?.heuristic, actual?.heuristic);
   } else {
     field(fields, `${path}.heuristic`, expected?.heuristic, actual?.heuristic,

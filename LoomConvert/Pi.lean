@@ -511,10 +511,14 @@ private def piEntryJson (origin : Origin) (fields : List (String × Json)) : Jso
 private def piErrorExport (error : ErrorSignal) : Bool × List (String × Json) :=
   match error with
   | .native value => (value, [])
-  | .inferred value heuristic =>
+  | .heuristic value heuristic =>
       (value, [("toolError", Json.mkObj [
-        ("state", Json.str "inferred"), ("value", Json.bool value),
-        ("heuristic", Json.str heuristic)])])
+        ("state", Json.str "heuristic"), ("value", Json.bool value),
+        ("method", Json.str heuristic)])])
+  | .structured value source =>
+      (value, [("toolError", Json.mkObj [
+        ("state", Json.str "structured"), ("value", Json.bool value),
+        ("source", Json.str source)])])
   | .unrecorded =>
       (false, [("toolError", Json.mkObj [
         ("state", Json.str "unrecorded")])])
@@ -747,9 +751,12 @@ private def piHistoricalCallRef
 private def piHistoricalErrorSignal : ErrorSignal -> Json
   | .native value => Json.mkObj [
       ("kind", Json.str "native"), ("value", Json.bool value)]
-  | .inferred value heuristic => Json.mkObj [
-      ("kind", Json.str "inferred"), ("value", Json.bool value),
-      ("heuristic", Json.str heuristic)]
+  | .heuristic value heuristic => Json.mkObj [
+      ("kind", Json.str "heuristic"), ("value", Json.bool value),
+      ("method", Json.str heuristic)]
+  | .structured value source => Json.mkObj [
+      ("kind", Json.str "structured"), ("value", Json.bool value),
+      ("source", Json.str source)]
   | .unrecorded => Json.mkObj [("kind", Json.str "unrecorded")]
 
 private def piHistoricalEnvBlock
@@ -833,9 +840,12 @@ private def piCallRefValue (coordinatePlan : PiAssistantCoordinatePlan) : CallRe
 private def piErrorSignalValue : ErrorSignal → Json
   | .native value => Json.mkObj [
       ("state", Json.str "native"), ("value", Json.bool value)]
-  | .inferred value heuristic => Json.mkObj [
-      ("state", Json.str "inferred"), ("value", Json.bool value),
-      ("heuristic", Json.str heuristic)]
+  | .heuristic value heuristic => Json.mkObj [
+      ("state", Json.str "heuristic"), ("value", Json.bool value),
+      ("method", Json.str heuristic)]
+  | .structured value source => Json.mkObj [
+      ("state", Json.str "structured"), ("value", Json.bool value),
+      ("source", Json.str source)]
   | .unrecorded => Json.mkObj [("state", Json.str "unrecorded")]
 
 private def piToolResultCarrierValue (t : Transcript)
@@ -2065,6 +2075,11 @@ private def piValidateMessageReservedStamp
           let _ ← piRequireBool memberCtx value "value"
           let _ ← piRequireString memberCtx value "heuristic"
           pure ()
+      | "heuristic" | "structured" =>
+          let _ ← piRequireBool memberCtx value "value"
+          let field := if ostr value "state" == some "heuristic" then "method" else "source"
+          let _ ← piRequireString memberCtx value field
+          pure ()
       | "unrecorded" => pure ()
       | state => piSchemaError memberCtx s!"unsupported Loom tool-error carrier state '{state}'"
   | none => pure ()
@@ -2278,7 +2293,14 @@ private def piToolErrorSignal (ctx : String) (message : Json)
       let value ← piRequireBool ctx toolError "value"
       if value != nativeValue then
         piSchemaError ctx "Loom inferred tool-error carrier disagrees with required isError"
-      else pure (.inferred value (← piRequireString ctx toolError "heuristic"))
+      else pure (.heuristic value (← piRequireString ctx toolError "heuristic"))
+  | "heuristic" | "structured" =>
+      let value ← piRequireBool ctx toolError "value"
+      if value != nativeValue then
+        piSchemaError ctx "Loom derived tool-error carrier disagrees with required isError"
+      else if state == "heuristic" then
+        pure (.heuristic value (← piRequireString ctx toolError "method"))
+      else pure (.structured value (← piRequireString ctx toolError "source"))
   | "unrecorded" =>
       if nativeValue then
         piSchemaError ctx "Loom unrecorded tool-error placeholder must use isError=false"
@@ -2331,8 +2353,12 @@ private def piCarrierErrorSignal (ctx : String) (value : Json) : Except String E
   let state ← piRequireNonemptyString ctx value "state"
   match state with
   | "native" => pure (.native (← piRequireBool ctx value "value"))
-  | "inferred" => pure (.inferred (← piRequireBool ctx value "value")
+  | "inferred" => pure (.heuristic (← piRequireBool ctx value "value")
       (← piRequireString ctx value "heuristic"))
+  | "heuristic" => pure (.heuristic (← piRequireBool ctx value "value")
+      (← piRequireString ctx value "method"))
+  | "structured" => pure (.structured (← piRequireBool ctx value "value")
+      (← piRequireString ctx value "source"))
   | "unrecorded" => pure .unrecorded
   | other => piSchemaError ctx s!"unsupported Loom error carrier state '{other}'"
 
@@ -2403,10 +2429,22 @@ private def piParseHistoricalErrorSignal
     (ctx : String) (value : Json) : Except String ErrorSignal := do
   match ← piRequireNonemptyString ctx value "kind" with
   | "native" => pure (.native (← piRequireBool ctx value "value"))
-  | "inferred" => pure (.inferred (← piRequireBool ctx value "value")
+  | "inferred" => pure (.heuristic (← piRequireBool ctx value "value")
       (← piRequireString ctx value "heuristic"))
+  | "heuristic" => pure (.heuristic (← piRequireBool ctx value "value")
+      (← piRequireString ctx value "method"))
+  | "structured" => pure (.structured (← piRequireBool ctx value "value")
+      (← piRequireString ctx value "source"))
   | "unrecorded" => pure .unrecorded
   | other => piSchemaError ctx s!"unsupported historical error signal '{other}'"
+
+example : (piParseHistoricalErrorSignal "legacy" (Json.mkObj [
+    ("kind", Json.str "inferred"), ("value", Json.bool true),
+    ("heuristic", Json.str "legacy")])).toOption = some (.heuristic true "legacy") := by native_decide
+
+example : (piParseHistoricalErrorSignal "structured"
+    (piHistoricalErrorSignal (.structured true "exit_code"))).toOption =
+    some (.structured true "exit_code") := by native_decide
 
 private def piParseHistoricalEnvBlock
     (ctx : String) (value : Json) : Except String EnvBlock := do
@@ -3868,7 +3906,7 @@ private def piEpistemicTranscript : Transcript := {
         (.native true)], origin := piForeignOrigin "r1" },
     { parent := some 2, time := .absent,
       payload := .envMsg [.toolResult (.resolved 0 2) [.text "inferred"]
-        (.inferred true "nonzero exit")], origin := piForeignOrigin "r2" },
+        (.heuristic true "nonzero exit")], origin := piForeignOrigin "r2" },
     { parent := some 3, time := .absent,
       payload := .envMsg [.toolResult (.resolved 0 3) [.text "unknown"]
         .unrecorded], origin := piForeignOrigin "r3" }],
@@ -3936,7 +3974,7 @@ def piToolErrorEpistemicsPinned : Bool :=
               (restored.entries.toList.drop 1 |>.take 4 |>.all (fun entry =>
                 entry.disposition == EntryDisposition.native)) &&
               errors == [.native false, .native true,
-                .inferred true "nonzero exit", .unrecorded] &&
+                .heuristic true "nonzero exit", .unrecorded] &&
               match exportPiChecked restored with
               | .error _ => false
               | .ok second => piTestJsonLines second == piTestJsonLines output

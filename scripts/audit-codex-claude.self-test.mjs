@@ -49,7 +49,7 @@ function resultCarrierContent(occurrence, callOccurrence, content) {
       rawId: "duplicate-id",
     },
     content,
-    error: { kind: "inferred", isError: false, heuristic },
+    error: { kind: "heuristic", isError: false, method: heuristic },
   })}`;
 }
 

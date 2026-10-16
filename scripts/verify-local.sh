@@ -13,8 +13,18 @@ for tool in lake node python3 sqlite3; do
 done
 
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/loom-verify-local.XXXXXX")"
-# The lifecycle audit seals its owned snapshots read-only until verification ends.
-trap 'chmod -R u+w "$scratch"; rm -rf "$scratch"' EXIT
+# Preserve failing audit receipts for diagnosis. Successful runs clean up the
+# read-only snapshots sealed by the lifecycle audit.
+cleanup() {
+  local status=$?
+  if (( status != 0 )); then
+    echo "verification failed; evidence retained in $scratch" >&2
+    return
+  fi
+  chmod -R u+w "$scratch"
+  rm -rf "$scratch"
+}
+trap cleanup EXIT
 export LOOM_BIN="$ROOT/.lake/build/bin/loom"
 
 echo "== product build and Lean smoke checks =="

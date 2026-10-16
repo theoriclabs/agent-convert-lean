@@ -699,7 +699,7 @@ private def inferredPiResultTranscript : Transcript :=
   { validReferenceTranscript with
     entries := #[validCallEntry, { validResultEntry with payload := .envMsg [
       .toolResult (.resolved 0 0) [.text "contents"]
-        (.inferred false "source-specific inference")] }] }
+        (.heuristic false "source-specific inference")] }] }
 
 private def missingPiToolIdTranscript : Transcript :=
   { validReferenceTranscript with
@@ -1066,7 +1066,7 @@ recorded in the conversion provenance sidecar, out of band, so the transcript
 itself stays native (`LoomOps.Interop`, P2/P4). Refusing the conversion over it,
 or demanding `ErrorSignal.native` before emitting a native result, would force
 every Codex tool result to prose — Codex has no structured error flag, so its
-importer always produces `.inferred`.
+importer always produces `.heuristic`.
 
 The `loom` wire target does carry full provenance and is compared unnormalized. -/
 private def withoutErrorProvenance (events : Array Lean.Json) : Array Lean.Json :=
@@ -2740,7 +2740,7 @@ private def inferredResultTranscript (heuristic : String) : Transcript :=
     entries := #[validCallEntry,
       { validResultEntry with payload := .envMsg [
           .toolResult (.resolved 0 0) [.text "contents"]
-            (.inferred false heuristic)] }]
+            (.heuristic false heuristic)] }]
     activeLeaf := some 1 }
 
 /-- The content projection is materially stronger than the historical parity
@@ -2841,7 +2841,7 @@ private def nativeCodexTranscript : Transcript :=
   { validReferenceTranscript with entries := #[nativeCodexCallEntry,
       { validResultEntry with payload := .envMsg [
           .toolResult (.resolved 0 0) [.text "contents"]
-            (.inferred false "codexOutputIndicatesError (codexAdapter.ts:75)")] }] }
+            (.heuristic false "codexOutputIndicatesError (codexAdapter.ts:75)")] }] }
 
 /-- Inverted 2026-07-27 for the same reason as
 `claudeToCodexNativeLifecycleWitness`: a representable call/result pair reaches

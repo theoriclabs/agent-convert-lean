@@ -52,6 +52,10 @@ window. `--allow-empty-dialogue` permits deliberate tool-only archives and is
 recorded as `allowEmptyDialogue` in `--json` output. The `loom` archive target is
 exempt from this guard.
 
+The IR and archive/carrier codecs distinguish native error flags, structured
+status evidence, heuristic guesses, and unrecorded status. Legacy `inferred`
+records decode as heuristic evidence; new records use `structured` or `heuristic`.
+
 ## How each target represents history
 
 | Target | Tool-history representation | Output / next step | Important limits |

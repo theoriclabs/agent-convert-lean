@@ -62,15 +62,16 @@ inductive Time where
 /-- How we know whether a tool invocation failed.
 
 * `native` — the source format records it (Claude `is_error`, pi `isError`).
-* `inferred` — guessed from content. Codex has no structured flag; the
-  adapter applies a substring heuristic (`codexOutputIndicatesError`,
-  `codexAdapter.ts:75`). The heuristic string names the method so the guess
-  is auditable.
+* `structured` — derived from a source exit code, runner status, or another
+  explicit field. The source string names that evidence.
+* `heuristic` — guessed from free text. The method string makes the guess
+  auditable; it must not become a target-authoritative failure flag.
 * `unrecorded` — the format cannot say (Hermes always reports success,
   `hermes.ts:298`). Distinct from "no error": we *don't know*. -/
 inductive ErrorSignal where
   | native (isError : Bool)
-  | inferred (isError : Bool) (heuristic : String)
+  | structured (isError : Bool) (source : String)
+  | heuristic (isError : Bool) (method : String)
   | unrecorded
   deriving Repr, DecidableEq
 
@@ -102,6 +103,7 @@ inductive AssumptionKind where
   | dedupDropped
   | timeInterpolated
   | timeSequenced
+  /-- A derived error judgment; detail must identify structured versus heuristic evidence. -/
   | errorInferred
   /-- Re-attributed authorship (e.g. Claude serializes tool results inside
   user-role messages; Loom records them as `environment`). -/

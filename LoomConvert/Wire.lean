@@ -213,16 +213,28 @@ def timeFromWireJson (ctx : String) (j : Json) : Except String Time := do
 def errorSignalToWireJson : ErrorSignal → Json
   | .native isError =>
       Json.mkObj [("kind", Json.str "native"), ("isError", Json.str (toString isError))]
-  | .inferred isError heuristic =>
-      Json.mkObj [("kind", Json.str "inferred"), ("isError", Json.str (toString isError)), ("heuristic", Json.str heuristic)]
+  | .heuristic isError heuristic =>
+      Json.mkObj [("kind", Json.str "heuristic"), ("isError", Json.str (toString isError)), ("method", Json.str heuristic)]
+  | .structured isError source =>
+      Json.mkObj [("kind", Json.str "structured"), ("isError", Json.str (toString isError)), ("source", Json.str source)]
   | .unrecorded => Json.mkObj [("kind", Json.str "unrecorded")]
 
 def errorSignalFromWireJson (ctx : String) (j : Json) : Except String ErrorSignal := do
   match ← strField ctx j "kind" with
   | "native" => pure (.native (← boolField ctx j "isError"))
-  | "inferred" => pure (.inferred (← boolField ctx j "isError") (← strField ctx j "heuristic"))
+  | "inferred" => pure (.heuristic (← boolField ctx j "isError") (← strField ctx j "heuristic"))
+  | "heuristic" => pure (.heuristic (← boolField ctx j "isError") (← strField ctx j "method"))
+  | "structured" => pure (.structured (← boolField ctx j "isError") (← strField ctx j "source"))
   | "unrecorded" => pure .unrecorded
   | other => .error s!"{ctx}: unsupported error kind '{other}'"
+
+example : (do
+    let value ← Json.parse "{\"kind\":\"inferred\",\"isError\":true,\"heuristic\":\"x\"}"
+    errorSignalFromWireJson "error" value).toOption = some (.heuristic true "x") := by native_decide
+
+example : ([.native false, .native true, .heuristic true "x",
+    .structured false "exit_code", .structured true "runner.status", .unrecorded] : List ErrorSignal).all
+    (fun error => decide ((errorSignalFromWireJson "error" (errorSignalToWireJson error)).toOption = some error)) = true := by native_decide
 
 def callRefToWireJson : CallRef → Json
   | .resolved entry block =>
@@ -744,7 +756,7 @@ private def wireAllConstructorsFixture : Transcript :=
         payload := .envMsg [
           .toolResult (.resolved 1 2) [.text "out"] (.native false),
           .toolResult (.resolved 1 2) [.text "inferred"]
-            (.inferred true "fixture heuristic"),
+            (.heuristic true "fixture heuristic"),
           .toolResult (.unresolved (some "orphan") "no call") [.text "orphan"] .unrecorded,
           .unmodeled "e-future" (Json.mkObj [])] },
       { parent := some 2, thread := 0, time := .absent, origin := org,

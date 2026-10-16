@@ -633,17 +633,29 @@ private def cParseHistoricalUserBlock? (j : Json) : Option UserBlock := do
 private def cErrorSignalJson : ErrorSignal → Json
   | .native isError => Json.mkObj [
       ("kind", Json.str "native"), ("isError", Json.bool isError)]
-  | .inferred isError heuristic => Json.mkObj [
-      ("kind", Json.str "inferred"), ("isError", Json.bool isError),
-      ("heuristic", Json.str heuristic)]
+  | .heuristic isError heuristic => Json.mkObj [
+      ("kind", Json.str "heuristic"), ("isError", Json.bool isError),
+      ("method", Json.str heuristic)]
+  | .structured isError source => Json.mkObj [
+      ("kind", Json.str "structured"), ("isError", Json.bool isError),
+      ("source", Json.str source)]
   | .unrecorded => Json.mkObj [("kind", Json.str "unrecorded")]
 
 private def cParseErrorSignal? (j : Json) : Option ErrorSignal := do
   match ← cstr j "kind" with
   | "native" => pure (.native (← cbool? j "isError"))
-  | "inferred" => pure (.inferred (← cbool? j "isError") (← cstr j "heuristic"))
+  | "inferred" => pure (.heuristic (← cbool? j "isError") (← cstr j "heuristic"))
+  | "heuristic" => pure (.heuristic (← cbool? j "isError") (← cstr j "method"))
+  | "structured" => pure (.structured (← cbool? j "isError") (← cstr j "source"))
   | "unrecorded" => pure .unrecorded
   | _ => none
+
+example : cParseErrorSignal? (Json.mkObj [("kind", Json.str "inferred"),
+    ("isError", Json.bool true), ("heuristic", Json.str "legacy")]) =
+    some (.heuristic true "legacy") := by native_decide
+
+example : cParseErrorSignal? (cErrorSignalJson (.structured true "exit_code")) =
+    some (.structured true "exit_code") := by native_decide
 
 private def cCanonicalToolName : CanonicalTool → String
   | .bash => "bash"
@@ -1224,7 +1236,7 @@ private def cCarrierBlockIndices (j : Json) : List Nat :=
 
 Claude Code omits `is_error` on some real results (async agent launches, some
 file tools). A missing field is not an asserted success, so the value is
-*guessed* from the output text into `ErrorSignal.inferred` — the same policy the
+*guessed* from the output text into `ErrorSignal.heuristic` — the same policy the
 Codex importer already applies via `codexOutputIndicatesError`
 (`codexAdapter.ts:75`). The guess feeds a named heuristic plus an
 `errorInferred` import note so it stays auditable; `.unrecorded` would make
@@ -1974,7 +1986,7 @@ private def stepLine (byUuid : List (String × Json)) (acc : Acc) (j : Json) : A
                     let errSignal := match cobj b "is_error" with
                       | some (Json.bool value) => ErrorSignal.native value
                       | _ => if carrierMarked then ErrorSignal.unrecorded
-                        else ErrorSignal.inferred
+                        else ErrorSignal.heuristic
                           (claudeOutputIndicatesError (cResultText resultBlocks))
                           claudeStatusHeuristic
                     let blk := EnvBlock.toolResult call resultBlocks errSignal
@@ -1983,7 +1995,7 @@ private def stepLine (byUuid : List (String × Json)) (acc : Acc) (j : Json) : A
                         (Payload.envMsg [blk]) (if carrierMarked then [0] else [])
                         (rawEnvelope := some raw)
                         (inferredError := match errSignal with
-                          | .inferred value _ => some value
+                          | .heuristic value _ | .structured value _ => some value
                           | _ => none)),
                       matchedCalls := cRememberResolvedCall a.matchedCalls call }
                 | some "text" =>
@@ -3805,7 +3817,8 @@ Fidelity notes (the semantic IR round-trips, while native record layout may not)
 provenance is carried instead of being collapsed through this projection. -/
 def errorBool : ErrorSignal → Bool
   | ErrorSignal.native b => b
-  | ErrorSignal.inferred b _ => b
+  | ErrorSignal.heuristic b _ => b
+  | ErrorSignal.structured b _ => b
   | ErrorSignal.unrecorded => false
 
 /-- Recover the source `tool_use_id` for a `toolResult` from its `CallRef`: a
@@ -4315,10 +4328,9 @@ private def cNativeClaudeCallAt
           !(cEntryCarrierForced t site.entry site.block) &&
           -- The error signal is deliberately NOT gated on `.native`. Claude's
           -- `is_error` is a plain bool and `errorBool` is a total projection
-          -- from every ErrorSignal, so an inferred signal is fully
-          -- representable. Codex has no structured error flag and therefore
-          -- always yields `.inferred`; demanding `.native` here forced every
-          -- Codex result to prose. Inference stays recorded in provenance.
+          -- from every ErrorSignal. Structured source status and heuristic
+          -- provenance do not prevent a result from using native history.
+          -- Requiring source `.native` here would turn Codex history into prose.
           cNativeResultContentValid site.content
       | _ => false
 
@@ -4383,7 +4395,7 @@ private def cEnvBlockToJsonAt
         -- (see the `| _ => ErrorSignal.unrecorded` arm), so `.unrecorded`
         -- round-trips through this target with no carrier and no loss.
         --
-        -- `.inferred` is deliberately still emitted through `errorBool`: there
+        -- `.heuristic` is deliberately still emitted through `errorBool`: there
         -- the VALUE is real and only the provenance normalizes to `.native` on
         -- re-import, which is the reportable class (Interop P2/P4).
         Json.mkObj ([
@@ -5314,7 +5326,7 @@ private def claudeCodexHistoricalFixture : Transcript :=
             .unmodeled "structured" (Json.mkObj [
               ("type", Json.str "custom_result"),
               ("items", Json.arr #[Json.num (Lean.JsonNumber.fromNat 1), Json.bool false])])]
-            (.inferred true "codex exit-code heuristic"),
+            (.heuristic true "codex exit-code heuristic"),
           .toolResult (.resolved 0 1) [.text "A-1", .text "A-2"] (.native false),
           .toolResult (.resolved 0 4) [] .unrecorded],
         origin := origin "hc1" },
@@ -5348,7 +5360,7 @@ private def cCodexHistoricalResultsRestored : Payload → Bool
       .toolResult (.resolved 0 3)
         [.text "B-1", .media "image/png" image,
          .unmodeled "structured" raw]
-        (.inferred true "codex exit-code heuristic"),
+        (.heuristic true "codex exit-code heuristic"),
       .toolResult (.resolved 0 1) [.text "A-1", .text "A-2"] (.native false),
       .toolResult (.resolved 0 4) [] .unrecorded] =>
       image == "data:image/png;base64,iVBORw0KGgoAAAA" &&
@@ -5531,7 +5543,7 @@ private def claudeCarrierSpoofText : String :=
 
 private def claudeResultCarrierSpoofText : String :=
   claudeHistoricalToolResultCarrierText claudeCodexHistoricalFixture 1 0
-    (.resolved 0 1) [.text "quoted result"] (.inferred false "quoted heuristic")
+    (.resolved 0 1) [.text "quoted result"] (.heuristic false "quoted heuristic")
 
 private def claudeCarrierSpoofFixture : String := String.intercalate "\n" [
   cClaudeTestLine "assistant" "assistant" "sp0" none "T0" #[
@@ -5757,7 +5769,7 @@ private def cCodexClosedToolFixture
       { parent := some 0,
         payload := .envMsg [
           .toolResult (.resolved 0 0) [.text "command-result"]
-            (.inferred false "Codex result fixture")],
+            (.heuristic false "Codex result fixture")],
         origin := origin (rawId ++ "-result") }],
     activeLeaf := some 1,
     origin := { format := .codexCli, sourceRef := "codex-target-tool-fixture" } }
@@ -6208,7 +6220,7 @@ def claudeRecognizedSchemaRefusalChecked : Bool :=
 example : claudeRecognizedSchemaRefusalChecked = true := by native_decide
 
 /-- A missing native error flag is inferred from the output text
-(`claudeOutputIndicatesError`) and recorded as `ErrorSignal.inferred` with an
+(`claudeOutputIndicatesError`) and recorded as `ErrorSignal.heuristic` with an
 `errorInferred` import note — the same policy the Codex importer applies.
 Present non-boolean flags remain schema errors above. -/
 def claudeOptionalToolResultErrorChecked : Bool :=
@@ -6222,7 +6234,7 @@ def claudeOptionalToolResultErrorChecked : Bool :=
       match transcript.entries[0]? with
       | some entry => match entry.payload with
         | .envMsg [.toolResult (.unresolved (some "call") _) [.text "result"]
-            (.inferred false heuristic)] =>
+            (.heuristic false heuristic)] =>
               heuristic == claudeStatusHeuristic &&
                 transcript.importNotes.any (fun note =>
                   note.kind == AssumptionKind.errorInferred)

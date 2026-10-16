@@ -67,7 +67,7 @@ private def refId : Loom.CallRef → String
 
 private def isError : Loom.ErrorSignal → Bool
   | .native e => e
-  | .inferred e _ => e
+  | .heuristic e _ | .structured e _ => e
   | .unrecorded => false
 
 private def timeMs : Loom.Time → Option Nat

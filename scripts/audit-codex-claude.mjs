@@ -155,14 +155,20 @@ function sourceOutputBlocks(value) {
   });
 }
 
-function outputIndicatesError(blocks) {
-  const text = blocks.filter((block) => block.kind === "text")
-    .map((block) => block.text).join("");
-  const lower = text.toLowerCase();
-  return /Process exited with code [1-9]/.test(text) ||
-    lower.includes("timed out after") || lower.includes("command timed out") ||
-    (lower.includes("timeout") && ["exceeded", "expired", "limit"]
-      .some((part) => lower.includes(part)));
+function sourceErrorSignal(blocks) {
+  const text = blocks.filter(block => block.kind === "text").map(block => block.text).join("");
+  const codes = [];
+  let guessed = false;
+  for (const line of text.split('\n')) {
+    const exit = /^Process exited with code (-?\d+)$/.exec(line);
+    if (exit) codes.push(Number(exit[1]));
+    if (/^(?:command timed out|timed out after|timeout exceeded|timeout expired)/i.test(line)) {
+      guessed = true;
+    } else if (!/^(?:Script (?:completed|failed)$|Chunk ID: |Wall time[: ]|Original token count: |Process exited with code )/.test(line)) break;
+  }
+  return codes.length
+    ? { kind: "structured", isError: codes.some(code => code !== 0), source: "codex.runner.process_exit_code" }
+    : { kind: "heuristic", isError: guessed, method: "codexOutputIndicatesError (codexAdapter.ts:75)" };
 }
 
 function sourceResult(payload) {
@@ -176,11 +182,7 @@ function sourceResult(payload) {
     return {
       id,
       content,
-      error: {
-        kind: "inferred",
-        isError: outputIndicatesError(content),
-        heuristic: "codexOutputIndicatesError (codexAdapter.ts:75)",
-      },
+      error: sourceErrorSignal(content),
     };
   }
   if (payload.type === "tool_search_output") {

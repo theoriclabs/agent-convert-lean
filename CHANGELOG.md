@@ -7,6 +7,10 @@ lands; move them into a dated version section when publishing a release.
 
 ### Fixed
 
+- Split derived tool errors into `structured` source evidence and `heuristic`
+  guesses. Preserve both through wire and historical-carrier codecs, and decode
+  legacy `inferred` records as heuristic evidence
+  ([#13](https://github.com/theoriclabs/agent-convert-lean/issues/13)).
 - Restrict Codex error inference to runner headers. Successful output that prints
   timeout limits, quoted failures, or exit-status text stays successful
   ([#11](https://github.com/theoriclabs/agent-convert-lean/issues/11)).

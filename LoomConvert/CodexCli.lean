@@ -40,7 +40,7 @@ none). That is exactly how the pi IR renders a single linear thread.
   when all required fields parse; malformed calls remain exact assistant
   `unmodeled` blocks rather than being normalized into executable calls.
 * `response_item.function_call_output`   → `Payload.envMsg [EnvBlock.toolResult …]`
-  authored by the `environment`, `ErrorSignal.inferred` via `codexOutputIndicatesError`
+  authored by the `environment`, `ErrorSignal.heuristic` via `codexOutputIndicatesError`
   (`codexAdapter.ts:75`); logs an `ImportNote errorInferred`. The result's
   `CallRef` is resolved positionally to the earlier `function_call` entry.
 * `response_item.reasoning`              → `.assistant` with one `AssistantBlock.thinking`
@@ -158,6 +158,20 @@ def codexOutputIndicatesError (out : String) : Bool :=
     exitedNonzero line || lc.startsWith "timed out after" ||
       lc.startsWith "command timed out" || lc.startsWith "timeout exceeded" ||
       lc.startsWith "timeout expired")
+
+def codexOutputErrorSignal (out : String) : ErrorSignal :=
+  let codes := (codexRunnerHeaderLines out).filterMap (fun line =>
+    if line.startsWith "Process exited with code " then
+      (line.drop "Process exited with code ".length).toString.toInt?
+    else none)
+  if codes.isEmpty then .heuristic (codexOutputIndicatesError out)
+    "codexOutputIndicatesError (codexAdapter.ts:75)"
+  else .structured (codes.any (· != 0)) "codex.runner.process_exit_code"
+
+example : codexOutputErrorSignal "Process exited with code 1\nFinal output:\n" =
+    .structured true "codex.runner.process_exit_code" := by native_decide
+example : codexOutputErrorSignal "Command timed out after 30 seconds" =
+    .heuristic true "codexOutputIndicatesError (codexAdapter.ts:75)" := by native_decide
 
 example : codexOutputIndicatesError
     "Script completed\nWall time 0.2 seconds\nOutput:\nSet the request timeout to 30s; the rate limit is 100/min." = false := by native_decide
@@ -1030,17 +1044,29 @@ private def historicalResultBlockJson : UserBlock -> Json
 private def parseCodexErrorSignal? (j : Json) : Option ErrorSignal := do
   match ← ostr j "kind" with
   | "native" => pure (.native (← obool j "isError"))
-  | "inferred" => pure (.inferred (← obool j "isError") (← ostr j "heuristic"))
+  | "inferred" => pure (.heuristic (← obool j "isError") (← ostr j "heuristic"))
+  | "heuristic" => pure (.heuristic (← obool j "isError") (← ostr j "method"))
+  | "structured" => pure (.structured (← obool j "isError") (← ostr j "source"))
   | "unrecorded" => pure .unrecorded
   | _ => none
 
 private def errorSignalJson : ErrorSignal → Json
   | .native value => Json.mkObj [
       ("kind", Json.str "native"), ("isError", Json.bool value)]
-  | .inferred value heuristic => Json.mkObj [
-      ("kind", Json.str "inferred"), ("isError", Json.bool value),
-      ("heuristic", Json.str heuristic)]
+  | .heuristic value heuristic => Json.mkObj [
+      ("kind", Json.str "heuristic"), ("isError", Json.bool value),
+      ("method", Json.str heuristic)]
+  | .structured value source => Json.mkObj [
+      ("kind", Json.str "structured"), ("isError", Json.bool value),
+      ("source", Json.str source)]
   | .unrecorded => Json.mkObj [("kind", Json.str "unrecorded")]
+
+example : parseCodexErrorSignal? (Json.mkObj [("kind", Json.str "inferred"),
+    ("isError", Json.bool true), ("heuristic", Json.str "legacy")]) =
+    some (.heuristic true "legacy") := by native_decide
+
+example : parseCodexErrorSignal? (errorSignalJson (.structured true "exit_code")) =
+    some (.structured true "exit_code") := by native_decide
 
 private def codexHistoricalOptionalString : Option String -> Json
   | some value => Json.str value
@@ -1137,8 +1163,13 @@ private def codexPayloadErrorSignal? (payload : Json) : Option ErrorSignal := do
   if codexPayloadErrorIsUnrecorded payload then return .unrecorded
   let marker ← oobj payload codexCarrierMarkerKey
   let error ← oobj marker "error" >>= parseCodexErrorSignal?
-  guard (oobj payload codexCarrierMarkerKey ==
-    (codexResultErrorFields error).head?.map Prod.snd)
+  let expected ← (codexResultErrorFields error).head?.map Prod.snd
+  let legacy := match error with
+    | .heuristic value method => expected.setObjVal! "error" (Json.mkObj [
+        ("kind", Json.str "inferred"), ("isError", Json.bool value),
+        ("heuristic", Json.str method)])
+    | _ => expected
+  guard (marker == expected || marker == legacy)
   pure error
 
 private def codexHistoricalAssistantBlockJson : AssistantBlock -> Json
@@ -1296,13 +1327,31 @@ private def parseCodexHistoricalPayload? (j : Json) : Option Payload := do
   | _ => none
 
 private def errorSignalBoolJson : ErrorSignal → Json
-  | .native value | .inferred value _ => Json.bool value
+  | .native value | .structured value _ | .heuristic value _ => Json.bool value
   | .unrecorded => Json.null
 
 private def errorSignalProvenance : ErrorSignal → String
   | .native _ => "native"
-  | .inferred _ heuristic => "inferred: " ++ heuristic
+  | .heuristic _ heuristic => "heuristic: " ++ heuristic
+  | .structured _ source => "structured: " ++ source
   | .unrecorded => "unrecorded"
+
+private def legacyCodexErrorJson (error : ErrorSignal) : Json :=
+  match error with
+  | .heuristic value method => Json.mkObj [
+      ("kind", Json.str "inferred"), ("isError", Json.bool value),
+      ("heuristic", Json.str method)]
+  | _ => errorSignalJson error
+
+private def legacyCodexPayloadJson (payload : Payload) : Json :=
+  let encoded := codexHistoricalPayloadJson payload
+  match payload with
+  | .envMsg blocks => encoded.setObjVal! "blocks" (Json.arr (blocks.map (fun block =>
+      let value := codexHistoricalEnvBlockJson block
+      match block with
+      | .toolResult _ _ error => value.setObjVal! "error" (legacyCodexErrorJson error)
+      | _ => value)).toArray)
+  | _ => encoded
 
 private def codexHistoricalToolCallReason : String :=
   "source lifecycle is not losslessly executable in Codex"
@@ -1477,7 +1526,6 @@ private def parseCodexHistoricalCarrier? (payload : Json) (segment : Nat) :
     let error ← oobj record "error" >>= parseCodexErrorSignal?
     guard (oobj record "output" == some (Json.str (toolOutputText content)))
     guard (oobj record "isError" == some (errorSignalBoolJson error))
-    guard (ostr record "errorProvenance" == some (errorSignalProvenance error))
     let expected := Json.mkObj [
       ("carrier", Json.str "agent-convert.codex-tool-result.v1"),
       ("occurrence", Json.str resultOccurrence),
@@ -1488,8 +1536,12 @@ private def parseCodexHistoricalCarrier? (payload : Json) (segment : Nat) :
       ("isError", errorSignalBoolJson error),
       ("error", errorSignalJson error),
       ("errorProvenance", Json.str (errorSignalProvenance error))]
-    guard (record == expected)
-    guard (encoded.toString == expected.compress)
+    let legacy := expected.setObjVal! "error" (legacyCodexErrorJson error)
+      |>.setObjVal! "errorProvenance" (Json.str (match error with
+          | .heuristic _ method => "inferred: " ++ method
+          | _ => errorSignalProvenance error))
+    guard ((record == expected && encoded.toString == expected.compress) ||
+      (record == legacy && encoded.toString == legacy.compress))
     pure (.result link content error text)
   else if kind == "unmodeled" then
     let encoded ← text.dropPrefix? (codexHistoricalUnmodeledCarrierHeader ++ "\n")
@@ -1534,8 +1586,9 @@ private def parseCodexHistoricalCarrier? (payload : Json) (segment : Nat) :
       ("carrier", Json.str "agent-convert.codex-entry.v1"),
       ("payload", codexHistoricalPayloadJson payload),
       ("reason", Json.str codexHistoricalEntryReason)]
-    guard (record == expected)
-    guard (encoded.toString == expected.compress)
+    let legacy := expected.setObjVal! "payload" (legacyCodexPayloadJson payload)
+    guard ((record == expected && encoded.toString == expected.compress) ||
+      (record == legacy && encoded.toString == legacy.compress))
     pure (.entry payload text)
   else if kind == "session_boundary" then
     let encoded <- text.dropPrefix? (codexHistoricalSessionBoundaryCarrierHeader ++ "\n")
@@ -1818,17 +1871,14 @@ private def adaptRecords (records : List Json) (carrierSessionSelfIdentified : B
             notes := notes.push (mkNote (.other "codex-malformed-tool-record") idx
               "function_call_output has an empty call_id; payload retained unmodeled")
           else
-            let isErr := codexOutputIndicatesError (toolOutputText content)
             let recorded := if carrierSessionSelfIdentified then
                 codexPayloadErrorSignal? p else none
-            let err := recorded.getD (ErrorSignal.inferred isErr
-                "codexOutputIndicatesError (codexAdapter.ts:75)")
+            let err := recorded.getD (codexOutputErrorSignal (toolOutputText content))
             if recorded.isSome then
               notes := notes.push (mkNote (.other "errorProvenancePreserved") idx
                 "function_call_output error signal preserved from exporter-owned metadata; output text unchanged")
             else
-              let d := "function_call_output error status inferred (isError=" ++
-                toString isErr ++ ") via codexOutputIndicatesError"
+              let d := "function_call_output error status: " ++ errorSignalProvenance err
               notes := notes.push (mkNote .errorInferred idx d)
             kept := kept.push { (mkKept (.ktool (.byId segment callId) content err
               (some ("codex.unresolved.function_call_output", p)))
@@ -1961,14 +2011,12 @@ private def adaptRecords (records : List Json) (carrierSessionSelfIdentified : B
             notes := notes.push (mkNote (.other "codex-malformed-tool-record") idx
               "custom_tool_call_output has an empty call_id; payload retained unmodeled")
           else
-            let isErr := codexOutputIndicatesError (toolOutputText content)
             let recorded := if carrierSessionSelfIdentified then
                 codexPayloadErrorSignal? p else none
-            let err := recorded.getD (ErrorSignal.inferred isErr
-              "codexOutputIndicatesError (codexAdapter.ts:75)")
+            let err := recorded.getD (codexOutputErrorSignal (toolOutputText content))
             notes := notes.push (mkNote (if recorded.isSome then
                 .other "errorProvenancePreserved" else .errorInferred) idx
-              "custom_tool_call_output error signal read from metadata when present, otherwise inferred from output")
+              ("custom_tool_call_output error status: " ++ errorSignalProvenance err))
             kept := kept.push { (mkKept (.ktool (.byId segment callId) content err
               (some ("codex.unresolved.custom_tool_call_output", p)))
               ts .environment "" none) with nativeToolRaw := some j }
@@ -3564,9 +3612,8 @@ private def exactImportedNativeResultEvidence? (t : Transcript)
   guard (codexResultContentJson parsedContent == codexResultContentJson content)
   -- Exact source metadata takes precedence over text heuristics. Reusing a
   -- retained record must agree with the complete typed error signal.
-  let expectedError := (codexPayloadErrorSignal? payload).getD (ErrorSignal.inferred
-      (codexOutputIndicatesError (toolOutputText parsedContent))
-      "codexOutputIndicatesError (codexAdapter.ts:75)")
+  let expectedError := (codexPayloadErrorSignal? payload).getD
+    (codexOutputErrorSignal (toolOutputText parsedContent))
   guard (errorSignalJson error == errorSignalJson expectedError)
   match ostr payload "type" with
   | some "function_call_output" =>
@@ -5144,7 +5191,7 @@ private def codexHistoricalCarrierFixture : Transcript :=
             [.text "second", .media "image/png" "https://example.invalid/image.png",
              .unmodeled "structured" (Json.mkObj [
                ("items", Json.arr #[Json.bool false, Json.null])])]
-            (.inferred true "source-specific heuristic")],
+            (.heuristic true "source-specific heuristic")],
         origin := entryOrigin },
       { parent := some 2, payload := .envMsg [
           .toolResult (.resolved 0 0) [.text "first"] (.native false)],
@@ -5182,7 +5229,7 @@ private def codexHistoricalCarrierRestored (t : Transcript) : Bool :=
        | .envMsg [.toolResult (.resolved 1 0)
            [.text "second", .media "image/png" "https://example.invalid/image.png",
             .unmodeled "structured" raw]
-           (.inferred true "source-specific heuristic")] =>
+           (.heuristic true "source-specific heuristic")] =>
              raw == Json.mkObj [("items", Json.arr #[Json.bool false, Json.null])]
        | _ => false) &&
       (match firstResult.payload with
@@ -5592,7 +5639,7 @@ private def codexConcatenationCollisionFixture
       { parent := some 0,
         payload := .envMsg [.toolResult (.resolved 0 0)
           [.text first, .text second]
-          (.inferred false "codexOutputIndicatesError (codexAdapter.ts:75)")],
+          (.heuristic false "codexOutputIndicatesError (codexAdapter.ts:75)")],
         origin := source }],
     env := { sessionId := some "result-collision" },
     activeLeaf := some 1,
@@ -5603,7 +5650,7 @@ private def codexCollisionBlocksRestored
   match transcript.entries[1]? with
   | some entry => match entry.payload with
     | .envMsg [.toolResult (.resolved 0 0) [.text a, .text b]
-        (.inferred false "codexOutputIndicatesError (codexAdapter.ts:75)")] =>
+        (.heuristic false "codexOutputIndicatesError (codexAdapter.ts:75)")] =>
           a == first && b == second
     | _ => false
   | none => false
@@ -6191,7 +6238,7 @@ private def codexEmptyNativeIdFixture : Transcript :=
         origin := source },
       { parent := some 0,
         payload := .envMsg [.toolResult (.resolved 0 0) [.text "done"]
-          (.inferred false "codexOutputIndicatesError (codexAdapter.ts:75)")],
+          (.heuristic false "codexOutputIndicatesError (codexAdapter.ts:75)")],
         origin := source }],
     env := { sessionId := some "empty-native-id" },
     activeLeaf := some 1,
@@ -7071,7 +7118,7 @@ private def codexNativeLikeHistoricalSource : Transcript :=
         origin := source },
       { parent := some 0,
         payload := .envMsg [.toolResult (.resolved 0 0) [.text "done"]
-          (.inferred false "codexOutputIndicatesError (codexAdapter.ts:75)")],
+          (.heuristic false "codexOutputIndicatesError (codexAdapter.ts:75)")],
         origin := source }],
     env := { sessionId := some "native-like-history" },
     activeLeaf := some 1,
@@ -7086,7 +7133,7 @@ private def codexNativeLikeHistoricalCarrierFixture : String :=
         (Json.mkObj [("cmd", Json.str "pwd")]) (some "history-id"))).compress,
     (codexAssistantCarrier "tool_result"
       (historicalToolResultText source 1 0 (.resolved 0 0) [.text "done"]
-        (.inferred false "codexOutputIndicatesError (codexAdapter.ts:75)"))).compress]
+        (.heuristic false "codexOutputIndicatesError (codexAdapter.ts:75)"))).compress]
 
 private def codexNativeLikeHistoryShape (transcript : Transcript) : Bool :=
   Loom.Ops.callSites transcript == [(0, 0)] &&
@@ -7102,7 +7149,7 @@ private def codexNativeLikeHistoryShape (transcript : Transcript) : Bool :=
         | _ => false) &&
        (match result.payload with
         | .envMsg [.toolResult (.resolved 0 0) [.text "done"]
-            (.inferred false "codexOutputIndicatesError (codexAdapter.ts:75)")] => true
+            (.heuristic false "codexOutputIndicatesError (codexAdapter.ts:75)")] => true
         | _ => false)
    | _, _ => false)
 
@@ -7154,7 +7201,7 @@ private def codexTypedHistoricalTargetFixture : Transcript :=
       { parent := some 1,
         time := .recorded ⟨1700000000002⟩,
         payload := .envMsg [.toolResult (.resolved 1 0) [.text "done"]
-          (.inferred false "codexOutputIndicatesError (codexAdapter.ts:75)")],
+          (.heuristic false "codexOutputIndicatesError (codexAdapter.ts:75)")],
         origin := source,
         disposition := .historicalUnverified },
       { parent := some 2,
@@ -7185,7 +7232,7 @@ private def codexTypedHistoricalShape (transcript : Transcript) : Bool :=
        | _ => false) &&
       (match result.payload with
        | .envMsg [.toolResult (.resolved 1 0) [.text "done"]
-           (.inferred false "codexOutputIndicatesError (codexAdapter.ts:75)")] => true
+           (.heuristic false "codexOutputIndicatesError (codexAdapter.ts:75)")] => true
        | _ => false) &&
       (match compaction.payload with
        | .compaction "native-looking historical compaction"
@@ -7481,7 +7528,7 @@ example : codexCanonicalizedNativeEvidenceUsesV2Carrier = true := by
 
 private def codexForeignNativeLookingToolsFixture : Transcript :=
   let source : Origin := { format := .pi, sourceRef := "foreign-native-looking" }
-  let ok := ErrorSignal.inferred false
+  let ok := ErrorSignal.heuristic false
     "codexOutputIndicatesError (codexAdapter.ts:75)"
   { codexEnvironmentCarrierTwinFixture with
     entries := #[
@@ -7790,7 +7837,7 @@ result, and the target's ability to continue the session, to keep a scalar. The
 reserved envelope member carries the scalar beside the native record instead, so
 `codexToolCallSignatureAt?` (which includes `canonical`) still matches and the
 records are real. Codex has no error field at all, so the source's
-`.unrecorded` would come back as the `.inferred false` its importer re-derives
+`.unrecorded` would come back as the `.heuristic false` its importer re-derives
 from the output text — a value nobody asserted. `codexResultErrorFields` stamps
 that one state into the reserved envelope beside the record instead, so the
 result is a real `function_call_output` AND still says "the source never
@@ -8174,7 +8221,7 @@ def codexCheckedGenuineCursorIdeTerminalMutationsRejected : Bool :=
       let changedProvenance := codexMutateEntry restored 4 (fun entry =>
         { entry with payload := .envMsg [
             .toolResult (.resolved 3 0) [.text "edit applied"]
-              (.inferred false "invented provenance")] })
+              (.heuristic false "invented provenance")] })
       let changedLink := codexMutateEntry restored 3 (fun entry =>
         { entry with payload := .assistantMsg [
             .toolCall { raw := "different-edit", canonical := some .edit }
@@ -8711,7 +8758,7 @@ private def codexMixedTimeTargetFixture : Transcript :=
       { parent := some 2,
         time := .recorded ⟨1700000000003⟩,
         payload := .envMsg [.toolResult (.resolved 2 0) [.text "done"]
-          (.inferred false "codexOutputIndicatesError (codexAdapter.ts:75)")],
+          (.heuristic false "codexOutputIndicatesError (codexAdapter.ts:75)")],
         origin := toolSource },
       { parent := some 3,
         time := .sequenced 41,

@@ -276,9 +276,9 @@ private def responseErrorSignal (ctx : String) (response : Json)
   | some value => pure (.native value, [])
   | none =>
       if hasField response "error" then
-        pure (.inferred true "google-ai-studio:functionResponse.response.error-present",
+        pure (.structured true "google-ai-studio:functionResponse.response.error-present",
           [{ kind := .errorInferred, loc := some (ctx ++ ".response.error"),
-             detail := "function response error inferred from presence of response.error" }])
+             detail := "structured error from presence of functionResponse.response.error" }])
       else
         pure (.unrecorded,
           [gNote "gais-error-unrecorded" ctx
@@ -911,7 +911,7 @@ private def gaisDuplicateLifecycleStaysAmbiguous : Bool :=
           { payload := .envMsg [
               .toolResult (.unresolved (some "same") _)
                 [.unmodeled "google-ai-studio-function-response" response]
-                (.inferred true
+                (.structured true
                   "google-ai-studio:functionResponse.response.error-present")], .. }] =>
           hasField response "error" &&
           t.importNotes.any (fun note =>
