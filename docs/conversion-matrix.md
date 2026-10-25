@@ -39,7 +39,7 @@ subject to validation and is not necessarily a byte-for-byte file copy.
 | Pi | Session JSONL or resolvable session ID | Branches must be selected or preserved in an appropriate output. |
 | Cursor Agent / IDE transcript export | Agent transcript JSONL | The file omits tool results. For native `agent-transcripts/<session>/<session>.jsonl` paths, Loom checks the same IDE composer and recovers recorded results when messages and ordered calls agree. Standalone files alone cannot supply missing results. |
 | OpenCode | JSON from `opencode export <id>` | Not the live database; use the supported interchange document. |
-| Cursor IDE | `state.vscdb` plus composer ID, or extracted `{composer,bubbles}` JSON | Use the rich store, not an incomplete text/Agent export. Binary recovery currently covers grep, edit, and conversation search; unsupported recovery remains explicit. |
+| Cursor IDE | `state.vscdb` plus composer ID, or extracted `{composer,bubbles}` JSON | Use the rich store, not an incomplete text/Agent export. Binary recovery currently covers grep, edit, and conversation search; unsupported recovery remains explicit. Uuid-only images are inlined from the bubble's own `context.selectedImages` path when that file is readable. |
 | Hermes | Session JSON with `messages[]` | Source has no per-message timestamps or recorded tool-error flag; do not invent them. |
 | Google AI Studio | Export JSON with `chunkedPrompt.chunks[]` | External media references are not automatically downloaded; missing source project/time metadata remains distinguishable. |
 | Loom | `loom.transcript.v0` JSON archive | Contains what its importer captured. An older incomplete archive cannot recover missing source data by itself. |
