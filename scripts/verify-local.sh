@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-for tool in lake node python3 sqlite3; do
+for tool in lake node python3 sqlite3 pdftotext pdftoppm; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "error: $tool not found on PATH" >&2
     exit 2
@@ -58,6 +58,7 @@ node scripts/test-source-version.mjs
 node scripts/test-continuation-probe.mjs
 python3 scripts/test-claude-task-notifications.py
 python3 scripts/test-cursor-ide-transcript.py
+python3 scripts/test-agent-convert.py
 
 echo "== audit harness self-tests =="
 node scripts/audit-corpora.self-test.mjs

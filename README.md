@@ -11,6 +11,36 @@ Experimental prerelease. Get binaries from
 see the [conversion matrix](./docs/conversion-matrix.md) for fidelity limits
 and tested continuation routes.
 
+## Installed CLI and agent skill
+
+```sh
+python3 scripts/install-agent-convert.py --build
+# Or supply a built/released core: --core /path/to/loom
+
+agent-convert find "distinctive words"
+agent-convert convert <session-id-or-path> codex --name "My conversation"
+agent-convert convert <session-id-or-path> claude
+```
+
+This installs `~/.local/bin/agent-convert` and the discoverable
+`agent-session-converter` skill. No output path installs a new Codex or Claude
+session and prints its resume command. Other targets require an output path;
+Codex also supports file exports with an optional `--install`.
+
+For Codex, the CLI uses configured model/provider settings, adapts recorded PDF
+results into extracted text and page images, preserves original PDFs and image
+results, and retains labeled peer context with original authorship metadata.
+It restores unambiguous retained results omitted by Claude’s parent walk, audits
+source arguments/results, and validates the actual native request through a
+localhost test provider before publication. It never reruns historical tools or
+calls an external model for validation. Codex conversions and file exports include a checksum-bound
+conversion receipt. Use `--json` for one machine-readable receipt.
+
+`agent-convert doctor` checks the installation. PDF results require Poppler;
+native Codex validation requires the Codex CLI. `--validation artifact` explicitly
+selects reduced verification. The installer builds committed source in isolation
+and keeps an installed core independent of unfinished checkout edits.
+
 ## Quick start
 
 With Lean/Lake installed, build using the pinned [`lean-toolchain`](./lean-toolchain):

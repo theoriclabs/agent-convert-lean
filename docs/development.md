@@ -15,6 +15,7 @@ The core dependency direction is useful and should stay explicit:
 | `LoomConvert/Cli/Publication.lean` | Staged file writes, sidecar projection, ownership, rollback, and fault-injection tests |
 | `LoomConvert/Main.lean` | CLI options, target defaults, continuation policy, reporting, discovery, and command orchestration |
 | `LoomRequirements/` | Requirements and implementation evidence; imports the product, never the reverse |
+| `cli/` | Installed session workflow: source lookup, PDF projection, native Codex validation, publication, naming, and receipts |
 | `mcp/`, `viewer/` | Clients of the conversion core; the viewer is a separate package with external dependencies |
 
 The CLI split keeps the existing public dispatch names available to callers
@@ -34,7 +35,7 @@ Both default derivation and the actual conversion must use path-aware reads.
 
 ## Local checks
 
-With Lean/Lake, Node, Python 3, and `sqlite3` on PATH:
+With Lean/Lake, Node, Python 3, `sqlite3`, and Poppler (`pdftotext` / `pdftoppm`) on PATH:
 
 ```sh
 scripts/verify-local.sh
@@ -74,3 +75,33 @@ would reduce that coupling before splitting adapters into import/export/tests.
 Keep compile-time pins in the build during any such move. Historical release
 evidence and recovered session artifacts should be inventoried before moving
 them; they are not interchangeable with synthetic test fixtures.
+
+## Installed session CLI
+
+`python3 scripts/install-agent-convert.py --build` builds the current committed
+core with its pinned toolchain in an isolated directory. The installer copies
+that binary and `cli/` under `~/.local/share/agent-convert`, adds a launcher in
+`~/.local/bin`, and installs `skills/agent-session-converter` for Codex discovery.
+`--core /path/to/loom` reuses a built/released binary. Source edits do not silently
+change an installed core. `agent-convert version` reports the exact core revision.
+
+The CLI owns mechanical session migration. It delegates IR conversion and
+compaction policy to Loom. Claude results, images, and authenticated peer context
+are projected through a main-thread archive; Codex continuation sources always enter the core directly,
+so active-context selection remains in force. PDF and image bytes are read from
+recorded results, with originals retained. Missing results are recovered only from
+unambiguous same-session records matching retained calls and source order;
+conflicting observations refuse publication. No historical tool is executed.
+
+```sh
+LOOM_BIN=/path/to/loom python3 scripts/test-agent-convert.py
+python3 scripts/test-agent-convert.py --core /path/to/loom --native
+```
+
+The first command checks file conversion, PDF/source fidelity, ID remapping,
+installation in a temporary store, and refusal cases. It needs Poppler for the
+PDF case. The native variant also needs Codex and localhost binding; it runs
+Codex against a local fixed-response provider, verifies exact native calls and
+outputs in the captured request, and makes no external model request. These
+checks do not prove live recall by a model. Failure work is retained for diagnosis;
+successful work is removed unless `--keep-work` is requested.

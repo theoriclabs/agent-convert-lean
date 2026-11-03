@@ -5,6 +5,14 @@ lands; move them into a dated version section when publishing a release.
 
 ## [Unreleased]
 
+- Add an installable `agent-convert` CLI and maintained session-conversion skill.
+  Automate source lookup, configured Codex model selection, recorded PDF
+  text/page projection and native images with original bytes retained, structured
+  ToolSearch references in native results, labeled peer context with source authorship metadata, source/native tool audits and
+  checked recovery of retained results omitted by Claude’s selected parent path,
+  native Codex load and localhost request validation, collision-safe session
+  installation, naming, receipts, and the resume command.
+
 - Keep foreign reasoning readable in Claude without presenting foreign
   ciphertext as a Claude thinking signature. Preserve exact opaque reasoning
   in validated metadata and forward unchanged native Claude signatures only

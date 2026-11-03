@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Session Converter"
+  short_description: "Convert and install coding-agent sessions"
+  default_prompt: "Use $agent-session-converter to move this conversation into the requested coding agent."

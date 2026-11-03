@@ -24,7 +24,7 @@ jobs:
       - uses: leanprover/lean-action@v1
         with:
           auto-config: false
-      - name: Install SQLite CLI
-        run: sudo apt-get update && sudo apt-get install -y sqlite3
+      - name: Install SQLite and PDF tooling
+        run: sudo apt-get update && sudo apt-get install -y sqlite3 poppler-utils
       - name: Build, corpus, lifecycle matrix, and route checks
         run: bash scripts/verify-local.sh
