@@ -1,3 +1,4 @@
+import LoomConvert.IRCodec
 import LoomConvert.Parity
 import LoomConvert.CursorToolBinary
 
@@ -101,12 +102,6 @@ open Loom
 open Lean (Json)
 
 /-! ## Small Json accessors (Except → Option), copied from the Pi.lean scaffold. -/
-
-private def ostr (j : Json) (k : String) : Option String :=
-  (j.getObjVal? k >>= Json.getStr?).toOption
-
-private def oobj (j : Json) (k : String) : Option Json :=
-  (j.getObjVal? k).toOption
 
 private def hasKey (j : Json) (k : String) : Bool :=
   (j.getObjVal? k).toOption.isSome

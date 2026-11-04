@@ -1,3 +1,4 @@
+import LoomConvert.IRCodec
 import Loom
 import LoomConvert.SourceVersion
 import LoomConvert.Parity
@@ -109,18 +110,6 @@ open Loom
 open Lean (Json)
 
 /-! ## Small Json accessors (Except → Option), copied from `Pi.lean`. -/
-
-private def ostr (j : Json) (k : String) : Option String :=
-  (j.getObjVal? k >>= Json.getStr?).toOption
-
-private def oobj (j : Json) (k : String) : Option Json :=
-  (j.getObjVal? k).toOption
-
-private def oarr (j : Json) (k : String) : Option (Array Json) :=
-  (j.getObjVal? k >>= Json.getArr?).toOption
-
-private def obool (j : Json) (k : String) : Option Bool :=
-  (j.getObjVal? k >>= Json.getBool?).toOption
 
 private def nullableStringField? (j : Json) (k : String) : Option (Option String) :=
   match oobj j k with
@@ -1102,40 +1091,15 @@ private def mkKept (kp : KPayload) (ts : Option String) (role : Role)
     (text : String) (callKey : Option CodexCallKey) : Kept :=
   { kpayload := kp, ts := ts, role := role, text := text, callKey := callKey }
 
-private def parseCodexHistoricalUserBlock? (j : Json) : Option UserBlock := do
-  match ← ostr j "kind" with
-  | "text" => pure (.text (← ostr j "text"))
-  | "media" => pure (.media (← ostr j "mimeType") (← ostr j "locator"))
-  | "unmodeled" => pure (.unmodeled (← ostr j "label") (← oobj j "raw"))
-  | _ => none
+private def parseCodexHistoricalUserBlock? (value : Json) : Option UserBlock :=
+  (Lean.fromJson? value).toOption
 
-private def historicalResultBlockJson : UserBlock -> Json
-  | .text text => Json.mkObj [("kind", Json.str "text"), ("text", Json.str text)]
-  | .media mime locator => Json.mkObj [
-      ("kind", Json.str "media"), ("mimeType", Json.str mime),
-      ("locator", Json.str locator)]
-  | .unmodeled label raw => Json.mkObj [
-      ("kind", Json.str "unmodeled"), ("label", Json.str label), ("raw", raw)]
+private def historicalResultBlockJson : UserBlock → Json := toCarrierJson
 
-private def parseCodexErrorSignal? (j : Json) : Option ErrorSignal := do
-  match ← ostr j "kind" with
-  | "native" => pure (.native (← obool j "isError"))
-  | "inferred" => pure (.heuristic (← obool j "isError") (← ostr j "heuristic"))
-  | "heuristic" => pure (.heuristic (← obool j "isError") (← ostr j "method"))
-  | "structured" => pure (.structured (← obool j "isError") (← ostr j "source"))
-  | "unrecorded" => pure .unrecorded
-  | _ => none
+private def parseCodexErrorSignal? (value : Json) : Option ErrorSignal :=
+  (Lean.fromJson? value).toOption
 
-private def errorSignalJson : ErrorSignal → Json
-  | .native value => Json.mkObj [
-      ("kind", Json.str "native"), ("isError", Json.bool value)]
-  | .heuristic value heuristic => Json.mkObj [
-      ("kind", Json.str "heuristic"), ("isError", Json.bool value),
-      ("method", Json.str heuristic)]
-  | .structured value source => Json.mkObj [
-      ("kind", Json.str "structured"), ("isError", Json.bool value),
-      ("source", Json.str source)]
-  | .unrecorded => Json.mkObj [("kind", Json.str "unrecorded")]
+private def errorSignalJson : ErrorSignal → Json := toCarrierJson
 
 example : parseCodexErrorSignal? (Json.mkObj [("kind", Json.str "inferred"),
     ("isError", Json.bool true), ("heuristic", Json.str "legacy")]) =
@@ -1154,30 +1118,10 @@ private def codexHistoricalNullableNat? (j : Json) (key : String) : Option (Opti
   | some value => (Json.getNat? value).toOption.map some
   | none => none
 
-private def codexHistoricalCanonicalTool : CanonicalTool -> String
-  | .bash => "bash"
-  | .read => "read"
-  | .write => "write"
-  | .edit => "edit"
-  | .grep => "grep"
-  | .glob => "glob"
-  | .webFetch => "webFetch"
-  | .webSearch => "webSearch"
-  | .agentSpawn => "agentSpawn"
-  | .applyPatch => "applyPatch"
+private def codexHistoricalCanonicalTool : CanonicalTool → String := canonicalToolToWireString
 
-private def parseCodexHistoricalCanonicalTool? : String -> Option CanonicalTool
-  | "bash" => some .bash
-  | "read" => some .read
-  | "write" => some .write
-  | "edit" => some .edit
-  | "grep" => some .grep
-  | "glob" => some .glob
-  | "webFetch" => some .webFetch
-  | "webSearch" => some .webSearch
-  | "agentSpawn" => some .agentSpawn
-  | "applyPatch" => some .applyPatch
-  | _ => none
+private def parseCodexHistoricalCanonicalTool? (value : String) : Option CanonicalTool :=
+  (Lean.fromJson? (Json.str value)).toOption
 
 private def codexToolCanonicalKind : String := "tool_canonical"
 
@@ -1248,116 +1192,30 @@ private def codexPayloadErrorSignal? (payload : Json) : Option ErrorSignal := do
   guard (marker == expected || marker == legacy)
   pure error
 
-private def codexHistoricalAssistantBlockJson : AssistantBlock -> Json
-  | .text text => Json.mkObj [
-      ("kind", Json.str "text"), ("text", Json.str text)]
-  | .thinking thinking signature => Json.mkObj [
-      ("kind", Json.str "thinking"), ("thinking", Json.str thinking),
-      ("signature", codexHistoricalOptionalString signature)]
-  | .toolCall name arguments rawId => Json.mkObj [
-      ("kind", Json.str "toolCall"), ("name", Json.str name.raw),
-      ("canonical", name.canonical.map (fun canonical =>
-        Json.str (codexHistoricalCanonicalTool canonical)) |>.getD Json.null),
-      ("arguments", arguments),
-      ("rawId", codexHistoricalOptionalString rawId)]
-  | .media mime locator => Json.mkObj [
-      ("kind", Json.str "media"), ("mimeType", Json.str mime),
-      ("locator", Json.str locator)]
-  | .unmodeled label raw => Json.mkObj [
-      ("kind", Json.str "unmodeled"), ("label", Json.str label),
-      ("raw", raw)]
+private def codexHistoricalAssistantBlockJson : AssistantBlock → Json := toCarrierJson
 
-private def parseCodexHistoricalAssistantBlock? (j : Json) : Option AssistantBlock := do
-  match ← ostr j "kind" with
-  | "text" => pure (.text (← ostr j "text"))
-  | "thinking" =>
-      pure (.thinking (← ostr j "thinking") (← nullableStringField? j "signature"))
-  | "toolCall" =>
-      let canonicalText ← nullableStringField? j "canonical"
-      let canonical ← canonicalText.mapM parseCodexHistoricalCanonicalTool?
-      pure (.toolCall { raw := (← ostr j "name"), canonical }
-        (← oobj j "arguments") (← nullableStringField? j "rawId"))
-  | "media" => pure (.media (← ostr j "mimeType") (← ostr j "locator"))
-  | "unmodeled" => pure (.unmodeled (← ostr j "label") (← oobj j "raw"))
-  | _ => none
+private def parseCodexHistoricalAssistantBlock? (value : Json) : Option AssistantBlock :=
+  (Lean.fromJson? value).toOption
 
-private def codexHistoricalCallRefJson : CallRef -> Json
-  | .resolved entry block => Json.mkObj [
-      ("kind", Json.str "resolved"), ("entry", Json.num entry),
-      ("block", Json.num block)]
-  | .unresolved rawId note => Json.mkObj [
-      ("kind", Json.str "unresolved"),
-      ("rawId", codexHistoricalOptionalString rawId),
-      ("note", Json.str note)]
+private def codexHistoricalCallRefJson : CallRef → Json := toCarrierJson
 
-private def parseCodexHistoricalCallRef? (j : Json) : Option CallRef := do
-  match ← ostr j "kind" with
-  | "resolved" =>
-      let entry ← (j.getObjVal? "entry" >>= Json.getNat?).toOption
-      let block ← (j.getObjVal? "block" >>= Json.getNat?).toOption
-      pure (.resolved entry block)
-  | "unresolved" =>
-      pure (.unresolved (← nullableStringField? j "rawId") (← ostr j "note"))
-  | _ => none
+private def parseCodexHistoricalCallRef? (value : Json) : Option CallRef :=
+  (Lean.fromJson? value).toOption
 
-private def codexHistoricalEnvBlockJson : EnvBlock -> Json
-  | .toolResult call content error => Json.mkObj [
-      ("kind", Json.str "toolResult"),
-      ("call", codexHistoricalCallRefJson call),
-      ("content", Json.arr (content.map historicalResultBlockJson).toArray),
-      ("error", errorSignalJson error)]
-  | .unmodeled label raw => Json.mkObj [
-      ("kind", Json.str "unmodeled"), ("label", Json.str label),
-      ("raw", raw)]
+private def codexHistoricalEnvBlockJson : EnvBlock → Json := toCarrierJson
 
-private def parseCodexHistoricalEnvBlock? (j : Json) : Option EnvBlock := do
-  match ← ostr j "kind" with
-  | "toolResult" =>
-      let content ← oarr j "content"
-      pure (.toolResult (← oobj j "call" >>= parseCodexHistoricalCallRef?)
-        (← content.toList.mapM parseCodexHistoricalUserBlock?)
-        (← oobj j "error" >>= parseCodexErrorSignal?))
-  | "unmodeled" => pure (.unmodeled (← ostr j "label") (← oobj j "raw"))
-  | _ => none
+private def parseCodexHistoricalEnvBlock? (value : Json) : Option EnvBlock :=
+  (Lean.fromJson? value).toOption
 
-private def codexHistoricalCoverageJson : CompactionCoverage -> Json
-  | .knownPrefix firstKept => Json.mkObj [
-      ("kind", Json.str "knownPrefix"), ("firstKept", Json.num firstKept)]
-  | .unknownPrefix => Json.mkObj [("kind", Json.str "unknownPrefix")]
+private def codexHistoricalCoverageJson : CompactionCoverage → Json := toCarrierJson
 
-private def parseCodexHistoricalCoverage? (j : Json) : Option CompactionCoverage := do
-  match ← ostr j "kind" with
-  | "knownPrefix" =>
-      pure (.knownPrefix (← (j.getObjVal? "firstKept" >>= Json.getNat?).toOption))
-  | "unknownPrefix" => pure .unknownPrefix
-  | _ => none
+private def parseCodexHistoricalCoverage? (value : Json) : Option CompactionCoverage :=
+  (Lean.fromJson? value).toOption
 
-private def codexHistoricalMetaEventJson : MetaEvent -> Json
-  | .modelChange previous next => Json.mkObj [
-      ("kind", Json.str "modelChange"),
-      ("previous", codexHistoricalOptionalString previous),
-      ("next", codexHistoricalOptionalString next)]
-  | .thinkingLevelChange previous next => Json.mkObj [
-      ("kind", Json.str "thinkingLevelChange"),
-      ("previous", codexHistoricalOptionalString previous),
-      ("next", codexHistoricalOptionalString next)]
-  | .permissionMode mode => Json.mkObj [
-      ("kind", Json.str "permissionMode"), ("mode", Json.str mode)]
-  | .branchSummary summary => Json.mkObj [
-      ("kind", Json.str "branchSummary"), ("summary", Json.str summary)]
-  | .custom label raw => Json.mkObj [
-      ("kind", Json.str "custom"), ("label", Json.str label), ("raw", raw)]
+private def codexHistoricalMetaEventJson : MetaEvent → Json := toCarrierJson
 
-private def parseCodexHistoricalMetaEvent? (j : Json) : Option MetaEvent := do
-  match ← ostr j "kind" with
-  | "modelChange" => pure (.modelChange
-      (← nullableStringField? j "previous") (← nullableStringField? j "next"))
-  | "thinkingLevelChange" => pure (.thinkingLevelChange
-      (← nullableStringField? j "previous") (← nullableStringField? j "next"))
-  | "permissionMode" => pure (.permissionMode (← ostr j "mode"))
-  | "branchSummary" => pure (.branchSummary (← ostr j "summary"))
-  | "custom" => pure (.custom (← ostr j "label") (← oobj j "raw"))
-  | _ => none
+private def parseCodexHistoricalMetaEvent? (value : Json) : Option MetaEvent :=
+  (Lean.fromJson? value).toOption
 
 private def codexHistoricalPayloadJson : Payload -> Json
   | .userMsg blocks => Json.mkObj [
@@ -1620,7 +1478,10 @@ private def parseCodexHistoricalCarrier? (payload : Json) (segment : Nat) :
     let (link, expectedCall) ← parseCodexCarrierCallLink? call segment
     let encodedContent ← oarr record "content"
     let content ← encodedContent.toList.mapM parseCodexHistoricalUserBlock?
-    let error ← oobj record "error" >>= parseCodexErrorSignal?
+    let rawError ← oobj record "error"
+    let error ← parseCodexErrorSignal? rawError
+    guard (carrierJsonMatches rawError error)
+    guard ((encodedContent.toList.zip content).all (fun (raw, block) => carrierJsonMatches raw block))
     guard (oobj record "output" == some (Json.str (toolOutputText content)))
     guard (oobj record "isError" == some (errorSignalBoolJson error))
     let expected := Json.mkObj [
@@ -1629,12 +1490,11 @@ private def parseCodexHistoricalCarrier? (payload : Json) (segment : Nat) :
       ("id", recordRawId.map Json.str |>.getD Json.null),
       ("call", expectedCall),
       ("output", Json.str (toolOutputText content)),
-      ("content", Json.arr (content.map historicalResultBlockJson).toArray),
+      ("content", Json.arr encodedContent),
       ("isError", errorSignalBoolJson error),
-      ("error", errorSignalJson error),
+      ("error", rawError),
       ("errorProvenance", Json.str (errorSignalProvenance error))]
-    let legacy := expected.setObjVal! "error" (legacyCodexErrorJson error)
-      |>.setObjVal! "errorProvenance" (Json.str (match error with
+    let legacy := expected.setObjVal! "errorProvenance" (Json.str (match error with
           | .heuristic _ method => "inferred: " ++ method
           | _ => errorSignalProvenance error))
     guard ((record == expected && encoded.toString == expected.compress) ||
@@ -1678,14 +1538,13 @@ private def parseCodexHistoricalCarrier? (payload : Json) (segment : Nat) :
     guard (ostr record "carrier" == some "agent-convert.codex-entry.v1")
     let rawPayload <- oobj record "payload"
     let payload <- parseCodexHistoricalPayload? rawPayload
+    guard (carrierJsonMatches rawPayload payload)
     guard (ostr record "reason" == some codexHistoricalEntryReason)
     let expected := Json.mkObj [
       ("carrier", Json.str "agent-convert.codex-entry.v1"),
-      ("payload", codexHistoricalPayloadJson payload),
+      ("payload", rawPayload),
       ("reason", Json.str codexHistoricalEntryReason)]
-    let legacy := expected.setObjVal! "payload" (legacyCodexPayloadJson payload)
-    guard ((record == expected && encoded.toString == expected.compress) ||
-      (record == legacy && encoded.toString == legacy.compress))
+    guard (record == expected && encoded.toString == expected.compress)
     pure (.entry payload text)
   else if kind == "session_boundary" then
     let encoded <- text.dropPrefix? (codexHistoricalSessionBoundaryCarrierHeader ++ "\n")
@@ -9489,5 +9348,13 @@ def codexCompactionMalformedAndPreflightPinned : Bool :=
   | .error _ => false
 
 example : codexCompactionMalformedAndPreflightPinned = true := by native_decide
+
+/-- Both on-disk media spellings enter through this adapter's carrier decoder. -/
+example : ["locator", "data"].all (fun key =>
+    let raw := Json.mkObj [("kind", Json.str "media"),
+      ("mimeType", Json.str "image/png"), (key, Json.str "legacy-image")]
+    match parseCodexHistoricalUserBlock? raw with
+    | some (.media mime locator) => mime == "image/png" && locator == "legacy-image"
+    | _ => false) = true := by native_decide
 
 end LoomConvert

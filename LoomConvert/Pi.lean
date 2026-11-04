@@ -1,3 +1,4 @@
+import LoomConvert.IRCodec
 import Loom
 import LoomConvert.SourceVersion
 
@@ -23,18 +24,6 @@ open Lean (Json)
 def piTargetVersion : String := "0.74.0"
 
 /-! ## Small Json accessors (Except → Option) -/
-
-private def ostr (j : Json) (k : String) : Option String :=
-  (j.getObjVal? k >>= Json.getStr?).toOption
-
-private def oobj (j : Json) (k : String) : Option Json :=
-  (j.getObjVal? k).toOption
-
-private def onat (j : Json) (k : String) : Option Nat :=
-  (j.getObjVal? k >>= Json.getNat?).toOption
-
-private def oarr (j : Json) (k : String) : Option (Array Json) :=
-  (j.getObjVal? k >>= Json.getArr?).toOption
 
 private def overlayJsonFields (raw : Json) (modeledKeys : List String)
     (fields : List (String × Json)) : Json :=
@@ -333,17 +322,7 @@ private def messageJson (_t : Transcript) (rawEntry : Option Json)
         entryFields
   | none => Json.mkObj entryFields
 
-private def piHistoricalCanonicalTool : CanonicalTool -> String
-  | .bash => "bash"
-  | .read => "read"
-  | .write => "write"
-  | .edit => "edit"
-  | .grep => "grep"
-  | .glob => "glob"
-  | .webFetch => "webFetch"
-  | .webSearch => "webSearch"
-  | .agentSpawn => "agentSpawn"
-  | .applyPatch => "applyPatch"
+private def piHistoricalCanonicalTool : CanonicalTool → String := canonicalToolToWireString
 
 /-- Pi's native assistant `toolCall` block has slots for exactly an id, a name,
 and object-shaped arguments — no slot for Loom's canonical tool identity, and no
@@ -404,12 +383,12 @@ checked separately by `piEntryEmitsNativeToolCalls`.
 see `piAmbiguousToolCallIds`. It is threaded as a parameter rather than
 recomputed per block so the decomposition stays linear. -/
 private def piAssistantBlockIsContextSafe
-    (ambiguousCallIds : List String) : AssistantBlock -> Bool
-  | .text _ => true
-  | .toolCall name arguments rawId =>
-      piToolCallIsNativeRepresentable name arguments rawId &&
-        !rawId.any ambiguousCallIds.contains
-  | _ => false
+    (ambiguousCallIds : List String) (block : AssistantBlock) : Bool :=
+  Block.isText block || match block with
+    | .toolCall name arguments rawId =>
+        piToolCallIsNativeRepresentable name arguments rawId &&
+          !rawId.any ambiguousCallIds.contains
+    | _ => false
 
 /-- Every tool-call id carried by more than one assistant call block anywhere in
 the transcript. Pi's native call namespace is keyed by id alone and its importer
@@ -594,29 +573,9 @@ private def piHistoricalOptionalString : Option String -> Json
   | some value => Json.str value
   | none => Json.null
 
-private def piHistoricalUserBlock : UserBlock -> Json
-  | .text text => Json.mkObj [("kind", Json.str "text"), ("text", Json.str text)]
-  | .media mimeType data => Json.mkObj [
-      ("kind", Json.str "media"), ("mimeType", Json.str mimeType),
-      ("data", Json.str data)]
-  | .unmodeled label raw => Json.mkObj [
-      ("kind", Json.str "unmodeled"), ("label", Json.str label), ("raw", raw)]
+private def piHistoricalUserBlock : UserBlock → Json := toCarrierJson
 
-private def piHistoricalAssistantBlock : AssistantBlock -> Json
-  | .text text => Json.mkObj [("kind", Json.str "text"), ("text", Json.str text)]
-  | .thinking thinking signature => Json.mkObj [
-      ("kind", Json.str "thinking"), ("thinking", Json.str thinking),
-      ("signature", piHistoricalOptionalString signature)]
-  | .toolCall name arguments rawId => Json.mkObj [
-      ("kind", Json.str "toolCall"), ("name", Json.str name.raw),
-      ("canonical", name.canonical.map (fun canonical =>
-        Json.str (piHistoricalCanonicalTool canonical)) |>.getD Json.null),
-      ("arguments", arguments), ("rawId", piHistoricalOptionalString rawId)]
-  | .media mimeType data => Json.mkObj [
-      ("kind", Json.str "media"), ("mimeType", Json.str mimeType),
-      ("data", Json.str data)]
-  | .unmodeled label raw => Json.mkObj [
-      ("kind", Json.str "unmodeled"), ("label", Json.str label), ("raw", raw)]
+private def piHistoricalAssistantBlock : AssistantBlock → Json := toCarrierJson
 
 private def piUnsafeAssistantBlocks (ambiguousCallIds : List String)
     (blocks : List AssistantBlock) : List AssistantBlock :=
@@ -721,9 +680,7 @@ private def piAssistantCarrierValuePreserving (rawEntry : Option Json)
 /-- Pi's native user content union is closed the same way the assistant one is:
 plain text replays natively, while media and open-world blocks must travel
 inert rather than being replayed into a target-native user turn. -/
-private def piUserBlockIsContextSafe : UserBlock -> Bool
-  | .text _ => true
-  | _ => false
+private def piUserBlockIsContextSafe : UserBlock → Bool := Block.isText
 
 /-- Maximal runs of consecutive user blocks of one context-safety class — the
 same contract `piAssistantBlockRuns` states, for the same reason: the exported
@@ -741,59 +698,27 @@ private def piUserBlockRuns : List UserBlock → List (Bool × List UserBlock)
       | [] => [(safe, [block])]
 
 private def piHistoricalCallRef
-    (remap : Nat → Nat → Nat × Nat) : CallRef -> Json
-  | .resolved entry block =>
-      let physical := remap entry block
-      Json.mkObj [
-        ("kind", Json.str "resolved"), ("entry", Json.num physical.1),
-        ("block", Json.num physical.2)]
-  | .unresolved rawId note => Json.mkObj [
-      ("kind", Json.str "unresolved"),
-      ("rawId", piHistoricalOptionalString rawId), ("note", Json.str note)]
+    (remap : Nat → Nat → Nat × Nat) (call : CallRef) : Json :=
+  toCarrierJson (match call with
+    | .resolved entry block => let physical := remap entry block
+      CallRef.resolved physical.1 physical.2
+    | other => other)
 
-private def piHistoricalErrorSignal : ErrorSignal -> Json
-  | .native value => Json.mkObj [
-      ("kind", Json.str "native"), ("value", Json.bool value)]
-  | .heuristic value heuristic => Json.mkObj [
-      ("kind", Json.str "heuristic"), ("value", Json.bool value),
-      ("method", Json.str heuristic)]
-  | .structured value source => Json.mkObj [
-      ("kind", Json.str "structured"), ("value", Json.bool value),
-      ("source", Json.str source)]
-  | .unrecorded => Json.mkObj [("kind", Json.str "unrecorded")]
+private def piHistoricalErrorSignal : ErrorSignal → Json := toCarrierJson
 
 private def piHistoricalEnvBlock
-    (remap : Nat → Nat → Nat × Nat) : EnvBlock -> Json
-  | .toolResult call content error => Json.mkObj [
-      ("kind", Json.str "toolResult"),
-      ("call", piHistoricalCallRef remap call),
-      ("content", Json.arr (content.map piHistoricalUserBlock).toArray),
-      ("error", piHistoricalErrorSignal error)]
-  | .unmodeled label raw => Json.mkObj [
-      ("kind", Json.str "unmodeled"), ("label", Json.str label), ("raw", raw)]
+    (remap : Nat → Nat → Nat × Nat) (block : EnvBlock) : Json :=
+  match block with
+  | .toolResult call _ _ => (toCarrierJson block).setObjVal! "call" (piHistoricalCallRef remap call)
+  | _ => toCarrierJson block
 
 private def piHistoricalCoverage
-    (remapEntry : Nat → Nat) : CompactionCoverage -> Json
-  | .knownPrefix firstKept => Json.mkObj [
-      ("kind", Json.str "knownPrefix"),
-      ("firstKept", Json.num (remapEntry firstKept))]
-  | .unknownPrefix => Json.mkObj [("kind", Json.str "unknownPrefix")]
+    (remapEntry : Nat → Nat) (coverage : CompactionCoverage) : Json :=
+  toCarrierJson (match coverage with
+    | .knownPrefix firstKept => CompactionCoverage.knownPrefix (remapEntry firstKept)
+    | other => other)
 
-private def piHistoricalMetaEvent : MetaEvent -> Json
-  | .modelChange previous next => Json.mkObj [
-      ("kind", Json.str "modelChange"),
-      ("previous", piHistoricalOptionalString previous),
-      ("next", piHistoricalOptionalString next)]
-  | .thinkingLevelChange previous next => Json.mkObj [
-      ("kind", Json.str "thinkingLevelChange"),
-      ("previous", piHistoricalOptionalString previous),
-      ("next", piHistoricalOptionalString next)]
-  | .permissionMode mode => Json.mkObj [
-      ("kind", Json.str "permissionMode"), ("mode", Json.str mode)]
-  | .branchSummary summary => Json.mkObj [
-      ("kind", Json.str "branchSummary"), ("summary", Json.str summary)]
-  | .custom label raw => Json.mkObj [
-      ("kind", Json.str "custom"), ("label", Json.str label), ("raw", raw)]
+private def piHistoricalMetaEvent : MetaEvent → Json := toCarrierJson
 
 private def piHistoricalPayloadCarrierValue
     (remapCall : Nat → Nat → Nat × Nat)
@@ -2064,18 +1989,8 @@ private def piReservedObjectMember? (ctx : String) (stamp : Json)
   | .ok value@(.obj _) => pure (some value)
   | .ok _ => piSchemaError s!"{ctx}.{piCarrierKey}.{key}" "recognized reserved member must be an object"
 
-private def piParseCanonicalToolName? : String → Option CanonicalTool
-  | "bash" => some .bash
-  | "read" => some .read
-  | "write" => some .write
-  | "edit" => some .edit
-  | "grep" => some .grep
-  | "glob" => some .glob
-  | "webFetch" => some .webFetch
-  | "webSearch" => some .webSearch
-  | "agentSpawn" => some .agentSpawn
-  | "applyPatch" => some .applyPatch
-  | _ => none
+private def piParseCanonicalToolName? (value : String) : Option CanonicalTool :=
+  (Lean.fromJson? (Json.str value)).toOption
 
 private def piValidateMessageReservedStamp
     (ctx : String) (stamp : Json) : Except String Unit := do
@@ -2381,74 +2296,20 @@ private def piParseUserContent (ctx : String) (value : Json) : Except String (Li
       parseUserBlockAt s!"{ctx}[{blockIdx}]" block)
   | _ => piSchemaError ctx "content must be a string or an array"
 
-private def piParseHistoricalCanonicalTool
-    (ctx value : String) : Except String CanonicalTool :=
-  match value with
-  | "bash" => pure .bash
-  | "read" => pure .read
-  | "write" => pure .write
-  | "edit" => pure .edit
-  | "grep" => pure .grep
-  | "glob" => pure .glob
-  | "webFetch" => pure .webFetch
-  | "webSearch" => pure .webSearch
-  | "agentSpawn" => pure .agentSpawn
-  | "applyPatch" => pure .applyPatch
-  | other => piSchemaError ctx s!"unsupported canonical tool '{other}'"
+private def piParseHistoricalCanonicalTool (ctx value : String) : Except String CanonicalTool :=
+  fromJsonAt ctx (Json.str value)
 
-private def piParseHistoricalUserBlock
-    (ctx : String) (value : Json) : Except String UserBlock := do
-  match ← piRequireNonemptyString ctx value "kind" with
-  | "text" => pure (.text (← piRequireString ctx value "text"))
-  | "media" => pure (.media (← piRequireString ctx value "mimeType")
-      (← piRequireString ctx value "data"))
-  | "unmodeled" => pure (.unmodeled (← piRequireString ctx value "label")
-      (← piRequireField ctx value "raw"))
-  | other => piSchemaError ctx s!"unsupported historical user block '{other}'"
+private def piParseHistoricalUserBlock (ctx : String) (value : Json) : Except String UserBlock :=
+  fromJsonAt ctx value
 
-private def piParseHistoricalAssistantBlock
-    (ctx : String) (value : Json) : Except String AssistantBlock := do
-  match ← piRequireNonemptyString ctx value "kind" with
-  | "text" => pure (.text (← piRequireString ctx value "text"))
-  | "thinking" => pure (.thinking (← piRequireString ctx value "thinking")
-      (← piOptionalNullableString ctx value "signature"))
-  | "toolCall" =>
-      let canonical ← match ← piOptionalNullableString ctx value "canonical" with
-        | some name => pure (some (← piParseHistoricalCanonicalTool
-            s!"{ctx}.canonical" name))
-        | none => pure none
-      pure (.toolCall {
-          raw := ← piRequireString ctx value "name", canonical }
-        (← piRequireField ctx value "arguments")
-        (← piOptionalNullableString ctx value "rawId"))
-  | "media" => pure (.media (← piRequireString ctx value "mimeType")
-      (← piRequireString ctx value "data"))
-  | "unmodeled" => pure (.unmodeled (← piRequireString ctx value "label")
-      (← piRequireField ctx value "raw"))
-  | other => piSchemaError ctx s!"unsupported historical assistant block '{other}'"
+private def piParseHistoricalAssistantBlock (ctx : String) (value : Json) : Except String AssistantBlock :=
+  fromJsonAt ctx value
 
-private def piParseHistoricalCallRef
-    (ctx : String) (value : Json) : Except String CallRef := do
-  match ← piRequireNonemptyString ctx value "kind" with
-  | "resolved" => pure (.resolved (← piRequireNat ctx value "entry")
-      (← piRequireNat ctx value "block"))
-  | "unresolved" => pure (.unresolved
-      (← piOptionalNullableString ctx value "rawId")
-      (← piRequireString ctx value "note"))
-  | other => piSchemaError ctx s!"unsupported historical call reference '{other}'"
+private def piParseHistoricalCallRef (ctx : String) (value : Json) : Except String CallRef :=
+  fromJsonAt ctx value
 
-private def piParseHistoricalErrorSignal
-    (ctx : String) (value : Json) : Except String ErrorSignal := do
-  match ← piRequireNonemptyString ctx value "kind" with
-  | "native" => pure (.native (← piRequireBool ctx value "value"))
-  | "inferred" => pure (.heuristic (← piRequireBool ctx value "value")
-      (← piRequireString ctx value "heuristic"))
-  | "heuristic" => pure (.heuristic (← piRequireBool ctx value "value")
-      (← piRequireString ctx value "method"))
-  | "structured" => pure (.structured (← piRequireBool ctx value "value")
-      (← piRequireString ctx value "source"))
-  | "unrecorded" => pure .unrecorded
-  | other => piSchemaError ctx s!"unsupported historical error signal '{other}'"
+private def piParseHistoricalErrorSignal (ctx : String) (value : Json) : Except String ErrorSignal :=
+  fromJsonAt ctx value
 
 example : (piParseHistoricalErrorSignal "legacy" (Json.mkObj [
     ("kind", Json.str "inferred"), ("value", Json.bool true),
@@ -2458,41 +2319,14 @@ example : (piParseHistoricalErrorSignal "structured"
     (piHistoricalErrorSignal (.structured true "exit_code"))).toOption =
     some (.structured true "exit_code") := by native_decide
 
-private def piParseHistoricalEnvBlock
-    (ctx : String) (value : Json) : Except String EnvBlock := do
-  match ← piRequireNonemptyString ctx value "kind" with
-  | "toolResult" => pure (.toolResult
-      (← piParseHistoricalCallRef s!"{ctx}.call" (← piRequireObject ctx value "call"))
-      (← (← piRequireArray ctx value "content").toList.zipIdx.mapM
-        (fun (block, blockIdx) => piParseHistoricalUserBlock
-          s!"{ctx}.content[{blockIdx}]" block))
-      (← piParseHistoricalErrorSignal s!"{ctx}.error"
-        (← piRequireObject ctx value "error")))
-  | "unmodeled" => pure (.unmodeled (← piRequireString ctx value "label")
-      (← piRequireField ctx value "raw"))
-  | other => piSchemaError ctx s!"unsupported historical environment block '{other}'"
+private def piParseHistoricalEnvBlock (ctx : String) (value : Json) : Except String EnvBlock :=
+  fromJsonAt ctx value
 
-private def piParseHistoricalCoverage
-    (ctx : String) (value : Json) : Except String CompactionCoverage := do
-  match ← piRequireNonemptyString ctx value "kind" with
-  | "knownPrefix" => pure (.knownPrefix (← piRequireNat ctx value "firstKept"))
-  | "unknownPrefix" => pure .unknownPrefix
-  | other => piSchemaError ctx s!"unsupported historical compaction coverage '{other}'"
+private def piParseHistoricalCoverage (ctx : String) (value : Json) : Except String CompactionCoverage :=
+  fromJsonAt ctx value
 
-private def piParseHistoricalMetaEvent
-    (ctx : String) (value : Json) : Except String MetaEvent := do
-  match ← piRequireNonemptyString ctx value "kind" with
-  | "modelChange" => pure (.modelChange
-      (← piOptionalNullableString ctx value "previous")
-      (← piOptionalNullableString ctx value "next"))
-  | "thinkingLevelChange" => pure (.thinkingLevelChange
-      (← piOptionalNullableString ctx value "previous")
-      (← piOptionalNullableString ctx value "next"))
-  | "permissionMode" => pure (.permissionMode (← piRequireString ctx value "mode"))
-  | "branchSummary" => pure (.branchSummary (← piRequireString ctx value "summary"))
-  | "custom" => pure (.custom (← piRequireString ctx value "label")
-      (← piRequireField ctx value "raw"))
-  | other => piSchemaError ctx s!"unsupported historical event '{other}'"
+private def piParseHistoricalMetaEvent (ctx : String) (value : Json) : Except String MetaEvent :=
+  fromJsonAt ctx value
 
 private def piParseHistoricalPayload
     (ctx : String) (value : Json) : Except String Payload := do
@@ -6568,5 +6402,13 @@ def piNativeAssistantMetadataAndCountExact : Bool :=
         | .ok output => piTestJsonLines output == piTestJsonLines piNativeStopFixture
 
 example : piNativeAssistantMetadataAndCountExact = true := by native_decide
+
+/-- Both on-disk media spellings enter through this adapter's carrier decoder. -/
+example : ["locator", "data"].all (fun key =>
+    let raw := Json.mkObj [("kind", Json.str "media"),
+      ("mimeType", Json.str "image/png"), (key, Json.str "legacy-image")]
+    match (piParseHistoricalUserBlock "legacy" raw).toOption with
+    | some (.media mime locator) => mime == "image/png" && locator == "legacy-image"
+    | _ => false) = true := by native_decide
 
 end LoomConvert
