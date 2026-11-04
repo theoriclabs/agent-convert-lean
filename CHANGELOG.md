@@ -43,6 +43,23 @@ lands; move them into a dated version section when publishing a release.
 
 ### Fixed
 
+- Stop exporting reasoning without OpenAI `encrypted_content` as Codex
+  `reasoning` items. Responses accepted them once, then failed the next
+  tool-call follow-up with `unsupported_persisted_item_context`. Such reasoning
+  (from Claude, Gemini via Cursor, Pi, …) is now a display-only stamped
+  `agent_reasoning` event that Codex shows but never sends to the model, and
+  that re-imports as the same thinking.
+
+- Import Cursor IDE thinking stored as a JSON-encoded string (seen on Gemini
+  turns) as reasoning instead of refusing each bubble as malformed, which
+  blocked Codex export of those sessions.
+
+- Recover Cursor IDE images that a bubble records only by uuid: when the same
+  bubble's `context.selectedImages` names exactly one local file for that uuid,
+  inline it as an image whose type comes from its bytes, not its file name.
+  Unreadable files keep the image unmodeled with a `cursorIdeImageUnresolved`
+  note, so export still refuses instead of dropping it.
+
 - Refuse OpenCode export when a failed tool result contains images or files,
   with the exact entry/block location. The native error state cannot carry
   attachments; successful results retain their media and text-only failures

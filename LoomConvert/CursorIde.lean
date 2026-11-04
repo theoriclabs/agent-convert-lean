@@ -21,6 +21,7 @@ of exactly what that actuator extracts:
 ```
 { "composer": { "composerId": …, … },
   "workspaceIdentifier": { "uri": { "fsPath": … } }, // optional enrichment
+  "selectedImageData": { "<image uuid>": "data:image/…;base64,…" }, // optional enrichment
   "bubbles":  [ { "bubbleId", "type", "text", "thinking", "toolFormerData", … }, … ] }
 ```
 
@@ -40,10 +41,17 @@ logic; `CursorIdeActuator.lean` owns sqlite extraction.
   `Payload.assistantMsg`; any other → inert raw `MetaEvent.custom`.
 * `bubble.text` → `UserBlock.text` (type 1) / `AssistantBlock.text` (type 2).
 * `bubble.thinking.{text, signature}` → `AssistantBlock.thinking text (some signature)`.
+  Some builds store `thinking` as a JSON-encoded string of that object; only an
+  encoded object is decoded, any other string stays a malformed bubble.
   cursor.ts drops the signature (pi's Block has no signature field, it goes to
   `cursorExtras.thinkingSignature`); Loom carries it **in the block** — Cursor
   IDE natively records it. This is the L12 "leanCore is strictly better"
   divergence noted in `LoomConvert.Parity`.
+* `bubble.images[]` with a locator → `media`. A uuid-only record whose uuid
+  names exactly one `context.selectedImages[]` entry with a `path` in the same
+  bubble → `media` carrying the actuator-inlined data URI for that file. An
+  unreadable file leaves the record unmodeled with a `cursorIdeImageUnresolved`
+  note.
 * Only assistant `toolFormerData` with a valid numeric `tool` yields a tool
   call. Metadata shells remain unmodeled. A source-recorded result yields a
   following positional environment result; non-string JSON stays exact in an
@@ -284,22 +292,66 @@ private def cursorMedia? (ctx : String) (raw : Json) : Except String (Option (St
       | some (key, _) => throw s!"{ctx}.{key}: expected string image locator"
   | _ => pure none
 
-private def userImageBlocks (ctx : String) (b : Json) : Except String (List Loom.UserBlock) := do
-  let images ← optionalArrayField ctx b "images"
-  images.toList.zipIdx.mapM fun (raw, idx) => do
-    match ← cursorMedia? s!"{ctx}.images[{idx}]" raw with
-    | some (mime, locator) => pure (.media mime locator)
-    | none => pure (.unmodeled "cursor_ide.image" raw)
+/-- Uuid-only `images[]` records joined to the single `context.selectedImages[]`
+entry in the same bubble that has the same uuid and a non-empty `path`. No
+filename, dimension, timestamp, or cross-bubble matching is attempted. -/
+def cursorSelectedImagePaths (b : Json) : List (String × String) :=
+  let array (value? : Option Json) : List Json := match value? with
+    | some (Json.arr values) => values.toList
+    | _ => []
+  let selected := array ((field? b "context").bind (field? · "selectedImages"))
+  (array (field? b "images")).filterMap fun image => do
+    guard (firstPresentField image ["url", "uri", "path", "imageUrl", "data"]).isNone
+    let uuid ← ostr image "uuid"
+    guard !uuid.isEmpty
+    match selected.filter (fun entry => ostr entry "uuid" == some uuid) with
+    | [entry] =>
+        let path ← ostr entry "path"
+        if path.isEmpty then none else pure (uuid, path)
+    | _ => none
 
-private def assistantImageBlocks (ctx : String) (b : Json) : Except String (List Loom.AssistantBlock) := do
-  let images ← optionalArrayField ctx b "images"
-  images.toList.zipIdx.mapM fun (raw, idx) => do
-    match ← cursorMedia? s!"{ctx}.images[{idx}]" raw with
-    | some (mime, locator) => pure (.media mime locator)
-    | none => pure (.unmodeled "cursor_ide.image" raw)
+private def bytesMatchAt (bytes : ByteArray) (offset : Nat) (signature : List UInt8) : Bool :=
+  offset + signature.length ≤ bytes.size &&
+    signature.zipIdx.all fun (byte, i) => bytes[offset + i]! == byte
+
+/-- Image MIME type from magic bytes. File names are not trusted: Cursor saves
+pasted JPEG screenshots under `.png` names. -/
+def sniffImageMime? (bytes : ByteArray) : Option String :=
+  if bytesMatchAt bytes 0 [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] then some "image/png"
+  else if bytesMatchAt bytes 0 [0xFF, 0xD8, 0xFF] then some "image/jpeg"
+  else if bytesMatchAt bytes 0 [0x47, 0x49, 0x46, 0x38] then some "image/gif"
+  else if bytesMatchAt bytes 0 [0x52, 0x49, 0x46, 0x46] &&
+      bytesMatchAt bytes 8 [0x57, 0x45, 0x42, 0x50] then some "image/webp"
+  else none
+
+def imageDataUri? (bytes : ByteArray) : Option String :=
+  (sniffImageMime? bytes).map fun mime =>
+    s!"data:{mime};base64,{CursorToolBinary.encodeBase64 bytes}"
+
+private inductive CursorImage where
+  | media (mime locator : String)
+  | unmodeled (raw : Json)
+
+private def CursorImage.toUser : CursorImage → Loom.UserBlock
+  | .media mime locator => .media mime locator
+  | .unmodeled raw => .unmodeled "cursor_ide.image" raw
+
+private def CursorImage.toAssistant : CursorImage → Loom.AssistantBlock
+  | .media mime locator => .media mime locator
+  | .unmodeled raw => .unmodeled "cursor_ide.image" raw
+
+/-- `thinking` is an object, or a string whose JSON decodes to one (observed on
+2026-10-25 for Gemini turns: `"{\"text\":…,\"isLastThinkingChunk\":true}"`). -/
+private def thinkingObjectField (ctx : String) (b : Json) : Except String (Option Json) :=
+  match field? b "thinking" with
+  | some (Json.str encoded) =>
+      match Json.parse encoded with
+      | .ok value@(Json.obj _) => pure (some value)
+      | _ => throw s!"{ctx}.thinking: expected object or JSON-encoded object when present"
+  | _ => optionalObjectField ctx b "thinking"
 
 private def assistantThinkingBlocks (ctx : String) (b : Json) : Except String (List Loom.AssistantBlock) := do
-  match ← optionalObjectField ctx b "thinking" with
+  match ← thinkingObjectField ctx b with
   | none => pure []
   | some thinking =>
       let text? ← optionalStringField s!"{ctx}.thinking" thinking "text"
@@ -321,6 +373,32 @@ private def mkEntry (parent : Option Nat) (time : Loom.Time)
 
 private def cursorNote (kind : Loom.AssumptionKind) (loc detail : String) : Loom.ImportNote :=
   { kind, loc := some loc, detail }
+
+/-- `imageData` maps image uuid → data URI, supplied by the actuator for files
+named by `cursorSelectedImagePaths`. -/
+private def cursorImages (ctx sourceRef : String) (b : Json)
+    (imageData : List (String × String)) :
+    Except String (List CursorImage × List Loom.ImportNote) := do
+  let images ← optionalArrayField ctx b "images"
+  let joined := cursorSelectedImagePaths b
+  let mut out : Array CursorImage := #[]
+  let mut notes : Array Loom.ImportNote := #[]
+  for (raw, idx) in images.zipIdx do
+    match ← cursorMedia? s!"{ctx}.images[{idx}]" raw with
+    | some (mime, locator) => out := out.push (.media mime locator)
+    | none =>
+        let uuid := (ostr raw "uuid").getD ""
+        match joined.lookup uuid, imageData.lookup uuid with
+        | some path, some uri =>
+            out := out.push (.media "image" uri)
+            notes := notes.push (cursorNote (.other "cursorIdeSelectedImageRecovered") sourceRef
+              s!"image {uuid} inlined from its context.selectedImages path {path}")
+        | some path, none =>
+            out := out.push (.unmodeled raw)
+            notes := notes.push (cursorNote (.other "cursorIdeImageUnresolved") sourceRef
+              s!"image {uuid} names {path}, but no image data was supplied for it (file missing, unreadable, not PNG/JPEG/GIF/WebP, or input not read from the store)")
+        | none, _ => out := out.push (.unmodeled raw)
+  pure (out.toList, notes.toList)
 
 private inductive CursorToolFormerData where
   | absent
@@ -355,7 +433,7 @@ private structure CursorBubbleImport where
 /-- One bubble → the IR entries it contributes, given the absolute index
 `startIdx` at which the first lands. Every valid bubble yields at least one
 entry; a terminal tool bubble with recorded result data yields two. -/
-private def bubbleEntries (startIdx sourceIdx : Nat)
+private def bubbleEntries (startIdx sourceIdx : Nat) (imageData : List (String × String))
     (b : Json) : Except String CursorBubbleImport := do
   let ctx := s!"bubbles[{sourceIdx}]"
   match b with
@@ -373,12 +451,12 @@ private def bubbleEntries (startIdx sourceIdx : Nat)
       | some value => if value != Json.null then
           throw s!"{ctx}.thinking: user bubble cannot carry assistant thinking"
       | none => pure ()
-      let images ← userImageBlocks ctx b
+      let (images, imageNotes) ← cursorImages ctx sourceRef b imageData
       let textBlocks := match text? with
         | some text => if text.isEmpty then [] else [Loom.UserBlock.text text]
         | none => []
-      let mut blocks := textBlocks ++ images
-      let mut notes : Array Loom.ImportNote := #[]
+      let mut blocks := textBlocks ++ images.map CursorImage.toUser
+      let mut notes : Array Loom.ImportNote := imageNotes.toArray
       match classifyToolFormerData b with
       | .absent => pure ()
       | .metadata raw reason =>
@@ -393,14 +471,15 @@ private def bubbleEntries (startIdx sourceIdx : Nat)
         (.userMsg blocks) origin], notes := notes.toList }
   | 2 =>
       let thinking ← assistantThinkingBlocks ctx b
-      let images ← assistantImageBlocks ctx b
+      let (images, imageNotes) ← cursorImages ctx sourceRef b imageData
       let textBlocks := match text? with
         | some text => if text.isEmpty then [] else [Loom.AssistantBlock.text text]
         | none => []
-      let preBlocks := thinking ++ textBlocks ++ images
+      let preBlocks := thinking ++ textBlocks ++ images.map CursorImage.toAssistant
       match classifyToolFormerData b with
       | .absent =>
-          pure { entries := [mkEntry (parentOf startIdx) time (.assistantMsg preBlocks) origin] }
+          pure { entries := [mkEntry (parentOf startIdx) time (.assistantMsg preBlocks) origin],
+                 notes := imageNotes }
       | .metadata raw reason =>
           let note := cursorNote (.other "cursorIdeToolMetadataOnly") sourceRef
             s!"retained non-executable assistant toolFormerData: {reason}"
@@ -408,11 +487,11 @@ private def bubbleEntries (startIdx sourceIdx : Nat)
             "cursor_ide.toolFormerData.metadata" raw
           let entry := mkEntry (parentOf startIdx) time
             (.assistantMsg (preBlocks ++ [metadataBlock])) origin
-          pure { entries := [entry], notes := [note] }
+          pure { entries := [entry], notes := imageNotes ++ [note] }
       | .executable tf toolEnum =>
           let tfCtx := s!"{ctx}.toolFormerData"
           let fallbackName := cursorToolEnumToName toolEnum
-          let mut notes : Array Loom.ImportNote := #[]
+          let mut notes : Array Loom.ImportNote := imageNotes.toArray
           let nativeName? ← match field? tf "name" with
             | none | some Json.null => pure none
             | some (Json.str "") =>
@@ -565,10 +644,12 @@ private structure CursorIdeImportState where
   notes : Array Loom.ImportNote := #[]
   /-- Source-native ids observed while walking selected bubbles. -/
   seenToolIds : List String := []
+  /-- Envelope `selectedImageData`: image uuid → actuator-inlined data URI. -/
+  imageData : List (String × String) := []
 
 private def appendCursorBubble (state : CursorIdeImportState)
     (sourceIdx : Nat) (bubble : Json) : CursorIdeImportState :=
-  match bubbleEntries state.entries.size sourceIdx bubble with
+  match bubbleEntries state.entries.size sourceIdx state.imageData bubble with
   | .error error =>
       let rawId := (ostr bubble "bubbleId").bind fun id => if id.isEmpty then none else some id
       let sourceRef := rawId.map (fun id => s!"bubble:{id}") |>.getD s!"bubbles[{sourceIdx}]"
@@ -592,7 +673,8 @@ private def appendCursorBubble (state : CursorIdeImportState)
       let seenToolIds := match imported.nativeToolCallId with
         | some nativeId => nativeId :: state.seenToolIds
         | none => state.seenToolIds
-      { entries := state.entries ++ imported.entries.toArray,
+      { state with
+        entries := state.entries ++ imported.entries.toArray,
         notes := notes ++ imported.notes.toArray,
         seenToolIds }
 
@@ -631,7 +713,12 @@ def importCursorIde (text : String) : Except String Loom.Transcript := do
         hasKey b "bestOfNJudgeWinner") then
     notes := notes.push (cursorNote (.other "cursorIdeBranchMetadata") "composer"
       "preserved branch/best-of-N metadata in exact raw provenance while importing the recorded active path")
-  let mut state : CursorIdeImportState := { notes }
+  let imageData ← match ← optionalObjectField "importCursorIde" j "selectedImageData" with
+    | some (Json.obj kvs) => kvs.toList.mapM fun (uuid, value) => match value with
+        | Json.str uri => pure (uuid, uri)
+        | _ => throw s!"importCursorIde.selectedImageData.{uuid}: expected data URI string"
+    | _ => pure []
+  let mut state : CursorIdeImportState := { notes, imageData }
   let mut usedBubbleIndices : List Nat := []
   match field? composer "fullConversationHeadersOnly" with
   | none | some Json.null =>
@@ -712,11 +799,16 @@ def importCursorIde (text : String) : Except String Loom.Transcript := do
   if unselectedCount > 0 then
     state := { state with notes := state.notes.push (cursorNote (.other "cursorIdeUnselectedBubbles") "bubbles"
       s!"{unselectedCount} supplied bubble row(s) were not uniquely selected by the recorded active path; retained in raw envelope provenance") }
+  -- Inlined image bytes already live in their media blocks; keep them out of
+  -- the envelope provenance rather than storing every image twice.
+  let rawEnvelope := match j with
+    | Json.obj kvs => Json.mkObj (kvs.toList.filter (·.1 != "selectedImageData"))
+    | other => other
   let transcriptOrigin : Loom.Origin := {
     format := Loom.Format.cursorIde,
     sourceRef := "importCursorIde",
     rawId := some composerId,
-    extras := some (Json.mkObj [("rawEnvelope", j), ("rawComposer", composer)])
+    extras := some (Json.mkObj [("rawEnvelope", rawEnvelope), ("rawComposer", composer)])
   }
   let transcript : Loom.Transcript := {
     threads := #[{ kind := Loom.ThreadKind.main }],
@@ -833,6 +925,86 @@ def cursorIdeMalformedBubbleIsLocalized : Bool :=
   | .error _ => false
 
 example : cursorIdeMalformedBubbleIsLocalized = true := by native_decide
+
+/-- A JSON-encoded `thinking` object imports as the same thinking block (extra
+keys such as `isLastThinkingChunk` stay in raw provenance). A string that does
+not decode to an object remains a malformed, inert bubble. -/
+def cursorIdeEncodedThinkingImports : Bool :=
+  let encoded := cursorIdeSingleBubble 2
+    ("{\"type\":2,\"bubbleId\":\"b\",\"text\":\"answer\",\"thinking\":" ++
+      "\"{\\\"text\\\":\\\"streamed\\\",\\\"isLastThinkingChunk\\\":true}\"}")
+  let plain := cursorIdeSingleBubble 2
+    "{\"type\":2,\"bubbleId\":\"b\",\"thinking\":\"streamed\"}"
+  match importCursorIde encoded, importCursorIde plain with
+  | .ok decoded, .ok refused =>
+      (match decoded.entries.toList with
+        | [entry] =>
+            match entry.payload with
+            | .assistantMsg [.thinking "streamed" none, .text "answer"] => true
+            | _ => false
+        | _ => false) &&
+      (match refused.entries.toList with
+        | [entry] =>
+            match entry.payload with
+            | .event (.custom "cursor_ide.malformed_bubble" _) =>
+                cursorIdeHasOtherNote refused "cursorIdeMalformedBubble"
+            | _ => false
+        | _ => false)
+  | _, _ => false
+
+example : cursorIdeEncodedThinkingImports = true := by native_decide
+
+/-- A uuid-only image joined to its bubble's `context.selectedImages` path
+imports as media carrying the actuator's data URI. Without supplied data it
+stays unmodeled with an unresolved note; an unjoined uuid stays unmodeled. -/
+def cursorIdeSelectedImageRecovered : Bool :=
+  let source (uuid : String) (withData : Bool) :=
+    "{" ++ (if withData then "\"selectedImageData\":{\"img\":\"data:image/jpeg;base64,/9j/\"}," else "") ++
+    "\"composer\":{\"composerId\":\"cmp-test\",\"fullConversationHeadersOnly\":[{\"bubbleId\":\"b\",\"type\":1}]}," ++
+    "\"bubbles\":[{\"type\":1,\"bubbleId\":\"b\",\"text\":\"see\",\"images\":[{\"uuid\":\"" ++ uuid ++
+    "\",\"dimension\":{\"width\":1,\"height\":1}}],\"context\":{\"selectedImages\":" ++
+    "[{\"uuid\":\"img\",\"path\":\"/x/images/img.png\"}]}}]}"
+  let imported (text : String) : Option (List Loom.UserBlock × Loom.Transcript) :=
+    match importCursorIde text with
+    | .ok transcript =>
+        match transcript.entries.toList.map (·.payload) with
+        | [Loom.Payload.userMsg blocks] => some (blocks, transcript)
+        | _ => none
+    | .error _ => none
+  (match imported (source "img" true) with
+    | some ([.text "see", .media "image" "data:image/jpeg;base64,/9j/"], t) =>
+        cursorIdeHasOtherNote t "cursorIdeSelectedImageRecovered" &&
+          ((t.origin.extras.bind (oobj · "rawEnvelope")).bind (oobj · "selectedImageData")).isNone
+    | _ => false) &&
+  (match imported (source "img" false) with
+    | some ([.text "see", .unmodeled "cursor_ide.image" _], t) =>
+        cursorIdeHasOtherNote t "cursorIdeImageUnresolved"
+    | _ => false) &&
+  (match imported (source "other" true) with
+    | some ([.text "see", .unmodeled "cursor_ide.image" _], t) =>
+        !cursorIdeHasOtherNote t "cursorIdeSelectedImageRecovered"
+    | _ => false)
+
+example : cursorIdeSelectedImageRecovered = true := by native_decide
+
+/-- Two selected images sharing the uuid are ambiguous, and an image with its
+own locator never consults `selectedImages`. -/
+example : (["{\"images\":[{\"uuid\":\"i\"}],\"context\":{\"selectedImages\":" ++
+      "[{\"uuid\":\"i\",\"path\":\"/a\"},{\"uuid\":\"i\",\"path\":\"/b\"}]}}",
+    "{\"images\":[{\"uuid\":\"i\",\"url\":\"/own\"}],\"context\":{\"selectedImages\":" ++
+      "[{\"uuid\":\"i\",\"path\":\"/a\"}]}}"].all fun text =>
+      (Json.parse text).toOption.map cursorSelectedImagePaths == some []) := by
+  native_decide
+
+example : sniffImageMime? ⟨#[0xFF, 0xD8, 0xFF, 0xE0]⟩ = some "image/jpeg" := by native_decide
+example : sniffImageMime? ⟨#[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]⟩ = some "image/png" := by
+  native_decide
+example : sniffImageMime? ⟨#[0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50]⟩ =
+    some "image/webp" := by native_decide
+example : sniffImageMime? ⟨#[0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x41, 0x56, 0x45]⟩ = none := by
+  native_decide
+example : imageDataUri? ⟨#[0xFF, 0xD8, 0xFF]⟩ = some "data:image/jpeg;base64,/9j/" := by native_decide
+example : imageDataUri? "not an image".toUTF8 = none := by native_decide
 
 /-- Metadata-only tool shells on either author remain unmodeled provenance and
 never become executable calls or erase adjacent text. -/

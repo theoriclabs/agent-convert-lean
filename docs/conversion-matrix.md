@@ -39,7 +39,7 @@ subject to validation and is not necessarily a byte-for-byte file copy.
 | Pi | Session JSONL or resolvable session ID | Branches must be selected or preserved in an appropriate output. |
 | Cursor Agent / IDE transcript export | Agent transcript JSONL | The file omits tool results. For native `agent-transcripts/<session>/<session>.jsonl` paths, Loom checks the same IDE composer and recovers recorded results when messages and ordered calls agree. Standalone files alone cannot supply missing results. |
 | OpenCode | JSON from `opencode export <id>` | Not the live database; use the supported interchange document. |
-| Cursor IDE | `state.vscdb` plus composer ID, or extracted `{composer,bubbles}` JSON | Use the rich store, not an incomplete text/Agent export. Binary recovery currently covers grep, edit, and conversation search; unsupported recovery remains explicit. |
+| Cursor IDE | `state.vscdb` plus composer ID, or extracted `{composer,bubbles}` JSON | Use the rich store, not an incomplete text/Agent export. Binary recovery currently covers grep, edit, and conversation search; unsupported recovery remains explicit. Uuid-only images are inlined from the bubble's own `context.selectedImages` path when that file is readable. |
 | Hermes | Session JSON with `messages[]` | Source has no per-message timestamps or recorded tool-error flag; do not invent them. |
 | Google AI Studio | Export JSON with `chunkedPrompt.chunks[]` | External media references are not automatically downloaded; missing source project/time metadata remains distinguishable. |
 | Loom | `loom.transcript.v0` JSON archive | Contains what its importer captured. An older incomplete archive cannot recover missing source data by itself. |
@@ -88,6 +88,12 @@ restoring the original block. An unchanged signed block from a physical native
 Claude record can be forwarded; the converter does not cryptographically
 validate provider signatures. This follows Claude's requirement to return its
 own [thinking signatures unchanged](https://platform.claude.com/docs/en/build-with-claude/thinking#thinking-encryption).
+
+In Codex, only Codex-origin reasoning with its OpenAI `encrypted_content`
+becomes a `reasoning` item. Reasoning without that ciphertext is not replayable:
+Responses refuses to chain from a response containing it once a tool call needs
+a follow-up. It is exported as a stamped display-only `agent_reasoning` event
+that the resumed model does not receive.
 
 Claude exports batch events, archived controls, and archived records into one
 `agent-convert-provenance` header. Events retain their position and graph links

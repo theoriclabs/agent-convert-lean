@@ -39,6 +39,25 @@ def decodeBase64 (s : String) : Except String ByteArray := do
     throw "invalid base64 padding"
   pure out
 
+private def base64Alphabet : Array Char :=
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".toList.toArray
+
+/-- Standard padded base64, the inverse of `decodeBase64`. -/
+def encodeBase64 (bytes : ByteArray) : String := Id.run do
+  let digit (n : Nat) : Char := base64Alphabet[n % 64]!
+  let mut out := ""
+  let mut i := 0
+  while i < bytes.size do
+    let rest := bytes.size - i
+    let n := bytes[i]!.toNat * 65536 +
+      (if rest > 1 then bytes[i + 1]!.toNat * 256 else 0) +
+      (if rest > 2 then bytes[i + 2]!.toNat else 0)
+    out := (out.push (digit (n / 262144))).push (digit (n / 4096))
+    out := out.push (if rest > 1 then digit (n / 64) else '=')
+    out := out.push (if rest > 2 then digit n else '=')
+    i := i + 3
+  return out
+
 private structure Field where
   number : Nat
   wire : Nat
@@ -239,5 +258,11 @@ def recoverResult (encoded : String) (toolEnum : Nat) (name : String)
 example : ((decodeBase64 "AQID").toOption.map (fun b => b.data == #[1, 2, 3])) = some true := by native_decide
 example : (decodeBase64 "A===" |>.toOption).isNone := by native_decide
 example : (decodeBase64 "AB==" |>.toOption).isNone := by native_decide
+example : encodeBase64 ⟨#[1, 2, 3]⟩ = "AQID" := by native_decide
+example : encodeBase64 ⟨#[0xFF, 0xD8]⟩ = "/9g=" := by native_decide
+example : encodeBase64 ⟨#[0x89]⟩ = "iQ==" := by native_decide
+example : ([⟨#[]⟩, ⟨#[0]⟩, ⟨#[250, 1]⟩, ⟨#[9, 8, 7, 6]⟩] : List ByteArray).all (fun bytes =>
+    (decodeBase64 (encodeBase64 bytes)).toOption.map (·.data) == some bytes.data) := by
+  native_decide
 
 end LoomConvert.CursorToolBinary

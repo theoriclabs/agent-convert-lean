@@ -45,9 +45,35 @@ private def workspaceForComposer (headers : Lean.Json) (composerId : String) : L
       | _ => Lean.Json.null
   | _ => Lean.Json.null
 
+/-- Largest selected-image file the actuator inlines. -/
+private def maxSelectedImageBytes : UInt64 := 20 * 1024 * 1024
+
+/-- A regular file within the limit whose magic bytes identify an image. -/
+private def readImageDataUri? (path : String) : IO (Option String) := do
+  try
+    let metadata ← System.FilePath.metadata path
+    if metadata.type != .file || metadata.byteSize > maxSelectedImageBytes then
+      return none
+    pure (imageDataUri? (← IO.FS.readBinFile path))
+  catch _ => pure none
+
+/-- Inline the local files that bubbles reference by uuid through
+`context.selectedImages[].path` (`cursorSelectedImagePaths`). Unreadable or
+non-image files are omitted, so the importer keeps those images unmodeled. -/
+private def selectedImageData (bubbles : Array String) : IO Lean.Json := do
+  let mut out : Array (String × Lean.Json) := #[]
+  for text in bubbles do
+    if let .ok bubble := Lean.Json.parse text then
+      for (uuid, path) in cursorSelectedImagePaths bubble do
+        if !out.any (·.1 == uuid) then
+          if let some uri ← readImageDataUri? path then
+            out := out.push (uuid, Lean.Json.str uri)
+  pure (Lean.Json.mkObj out.toList)
+
 /-- Read a Cursor IDE composer thread + its bubbles from a `state.vscdb` into
 the JSON shape `importCursorIde` consumes: `{composer, bubbles:[...]}`, bubbles
-ordered per the composer's `fullConversationHeadersOnly`. -/
+ordered per the composer's `fullConversationHeadersOnly`, plus the
+`selectedImageData` for images recorded only by uuid and local path. -/
 def readCursorIdeStore? (dbPath composerId : String) : IO (Except String (Option String)) := do
   let composerKey := sqlString s!"composerData:{composerId}"
   match ← runSqlite dbPath s!"SELECT value FROM cursorDiskKV WHERE key={composerKey}" with
@@ -81,8 +107,10 @@ def readCursorIdeStore? (dbPath composerId : String) : IO (Except String (Option
               match Lean.Json.parse headersStr with
               | .error e => return .error s!"composer headers JSON parse: {e}"
               | .ok headers => pure (workspaceForComposer headers composerId)
+      let imageData ← selectedImageData bubbles
       let json := "{\"composer\":" ++ composerStr
         ++ ",\"workspaceIdentifier\":" ++ workspaceIdentifier.compress
+        ++ ",\"selectedImageData\":" ++ imageData.compress
         ++ ",\"bubbles\":[" ++ String.intercalate "," bubbles.toList ++ "]}"
       pure (.ok (some json))
 

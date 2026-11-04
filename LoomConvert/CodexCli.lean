@@ -1487,6 +1487,27 @@ private def codexCarrierMarkerExact (payload : Json) (kind : String) : Bool :=
   oobj payload codexCarrierMarkerKey == some (Json.mkObj [
     ("protocol", Json.str codexCarrierProtocol), ("kind", Json.str kind)])
 
+/-- Reasoning without OpenAI `encrypted_content` cannot be replayed: Responses
+accepts it in one request, then refuses to chain from that response
+(`unsupported_persisted_item_context`) once a tool call needs a follow-up. Such
+reasoning is exported display-only as a stamped `agent_reasoning` event, which
+Codex shows on resume and never sends to the model. -/
+private def codexDisplayReasoningKind : String := "display_only_reasoning"
+
+private def codexDisplayReasoningEvent (text : String) : Json :=
+  Json.mkObj [("type", Json.str "event_msg"), ("payload", Json.mkObj [
+    ("type", Json.str "agent_reasoning"), ("text", Json.str text),
+    (codexCarrierMarkerKey, codexMarker codexDisplayReasoningKind)])]
+
+/-- Only the exact stamped event imports back as thinking; native Codex
+`agent_reasoning` display events stay inert events. -/
+private def codexDisplayReasoningText? (payload : Json) : Option String := do
+  guard (ostr payload "type" == some "agent_reasoning")
+  guard (codexCarrierMarkerExact payload codexDisplayReasoningKind)
+  let text ← ostr payload "text"
+  guard (!text.isEmpty)
+  pure text
+
 private def codexCarrierMessageText? (payload : Json) : Option String := do
   guard (ostr payload "type" == some "message")
   guard (ostr payload "role" == some "assistant")
@@ -2233,6 +2254,10 @@ private def adaptRecords (records : List Json) (carrierSessionSelfIdentified : B
         | some .neighbor => notes := notes.push (mkNote (.other "codex-item-completion-provenance") idx
             "item_completed retained as raw provenance on the nearest typed entry")
         | none => pure ()
+      else if let some text := codexDisplayReasoningText? p then
+        kept := kept.push (mkKept (.kassistant [AssistantBlock.thinking text none])
+          ts .assistant "" none)
+        lastChannel := "response_item"
       else if pt == "user_message" || pt == "agent_message" then
         let role : Role := if pt == "user_message" then .user else .assistant
         match ostr p "message" with
@@ -3466,12 +3491,13 @@ Inverse mapping (Loom → Codex `response_item.payload`):
   when the result is exactly one text block with reproducible inferred status;
   all other result structures use the lossless history carrier.
 * `AssistantBlock.thinking`             → `{type:reasoning, summary:[{type:
-  summary_text, text}], encrypted_content?:signature}` only when the entry is
-  Codex-origin (so `signature` is OpenAI ciphertext). Foreign signatures
-  (Claude `thinking.signature`, Pi `thinkingSignature`, …) are omitted from
-  `encrypted_content`; empty foreign thinking is omitted entirely. Placing a
-  non-OpenAI blob in that slot breaks Codex resume with
-  `invalid_encrypted_content`.
+  summary_text, text}], encrypted_content:signature}` only when the entry is
+  Codex-origin with a signature (so it is OpenAI ciphertext). Foreign signatures
+  (Claude `thinking.signature`, Pi `thinkingSignature`, …) are omitted:
+  a non-OpenAI blob in that slot breaks resume with `invalid_encrypted_content`.
+  Thinking without ciphertext is not replayable as `reasoning` (the API refuses
+  to chain from such a response), so non-empty text becomes a display-only
+  stamped `agent_reasoning` event; empty unsigned thinking is omitted.
 
 Also re-emitted (S5+S6): message `.media` → an `input_image` content item with
 its complete locator; every standalone `AssistantBlock.unmodeled` payload uses an
@@ -4102,14 +4128,13 @@ private def assistantStandaloneRecord? (t : Transcript) (entryIdx blockIdx : Nat
             | some entry =>
                 if entry.origin.format == Format.codexCli then signature else none
             | none => none
-          if text.isEmpty && encrypted.isNone then none
-          else some (respItem (Json.mkObj ([
+          match encrypted with
+          | some value => some (respItem (Json.mkObj [
               ("type", Json.str "reasoning"),
               ("summary", Json.arr #[Json.mkObj [
-                ("type", Json.str "summary_text"), ("text", Json.str text)]])] ++
-              (match encrypted with
-               | some value => [("encrypted_content", Json.str value)]
-               | none => []))))
+                ("type", Json.str "summary_text"), ("text", Json.str text)]]),
+              ("encrypted_content", Json.str value)]))
+          | none => if text.isEmpty then none else some (codexDisplayReasoningEvent text)
   | .unmodeled label raw =>
       if label == codexMessageContentLabel && codexContentItemRemainsUnmodeled raw then none
       else if exactImportedEncryptedOnlyReasoning? t entryIdx blockIdx label raw ||
@@ -6331,22 +6356,27 @@ private def codexNativeSignatureFixture : Transcript :=
 /-- Foreign thinking signatures are provider-private ciphertext for another
 API. Codex's `encrypted_content` slot only accepts OpenAI ciphertext; placing
 a Claude/Pi signature there breaks resume with `invalid_encrypted_content`.
-Export keeps the visible summary and omits the foreign signature. -/
+Export omits the foreign signature. Without ciphertext the summary is not a
+replayable `reasoning` item either, so it becomes a display-only stamped
+`agent_reasoning` event that re-imports as the same unsigned thinking. -/
 def codexForeignThinkingSignatureIsNotEncryptedContent : Bool :=
   let exported := exportCodexCli codexForeignSignatureFixture
-  match parseCodexSession exported with
-  | .ok (_, records) =>
-      records.any (fun record =>
+  match parseCodexSession exported, importCodexCli exported with
+  | .ok (_, records), .ok restored =>
+      records.all (fun record =>
         match oobj record "payload" with
-        | some payload =>
-            ostr payload "type" == some "reasoning" &&
-              (ostr payload "encrypted_content").isNone &&
-              (oarr payload "summary").any (fun summary =>
-                summary.any (fun item =>
-                  ostr item "text" == some "visible reasoning"))
-        | none => false) &&
+        | some payload => ostr payload "type" != some "reasoning"
+        | none => true) &&
+      records.any (fun record =>
+        ostr record "type" == some "event_msg" &&
+          ((oobj record "payload").bind codexDisplayReasoningText?) ==
+            some "visible reasoning") &&
+      restored.entries.toList.any (fun entry =>
+        match entry.payload with
+        | .assistantMsg [.thinking "visible reasoning" none] => true
+        | _ => false) &&
       !exported.contains "foreign:claude-or-pi-signature=="
-  | _ => false
+  | _, _ => false
 
 example : codexForeignThinkingSignatureIsNotEncryptedContent = true := by native_decide
 
