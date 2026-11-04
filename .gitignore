@@ -2,3 +2,5 @@
 /.lake
 /build
 *.olean
+__pycache__/
+*.py[cod]

@@ -104,6 +104,70 @@ def main():
         assert receipt['sourceImages'] == receipt['peerMessages'] == 1
         assert receipt['recoveredResults'] == 1
         rows = [json.loads(line) for line in output.read_text().splitlines()]
+        # Running sessions are captured only at complete-record boundaries.
+        snapshot_source = directory / 'growing-codex.jsonl'
+        snapshot_output = directory / 'snapshot.jsonl'
+        snapshot_source.write_bytes(output.read_bytes() + b'{"partial":')
+        captured = agent_convert.snapshot_file('codex', snapshot_source, snapshot_output)
+        assert snapshot_output.read_bytes() == output.read_bytes()
+        assert captured['omittedRecords'] == 0 and captured['runningToolCalls'] == []
+        # A call still running ends the snapshot; no result is invented for it.
+        started = {'type': 'event_msg', 'payload': {'type': 'task_started'}}
+        pending = {'type': 'response_item', 'payload': {'type': 'function_call', 'call_id': 'pending', 'name': 'exec_command'}}
+        later = {'type': 'event_msg', 'payload': {'type': 'token_count'}}
+        snapshot_source.write_text(output.read_text() + ''.join(json.dumps(r) + '\n' for r in (started, pending, later)))
+        snapshot_output.unlink()
+        captured = agent_convert.snapshot_file('codex', snapshot_source, snapshot_output)
+        assert snapshot_output.read_text() == output.read_text() + json.dumps(started) + '\n'
+        assert captured['omittedRecords'] == 2 and captured['runningToolCalls'] == ['exec_command']
+        # Parallel Claude calls: a call whose result follows a running call is left out with it.
+        prompt = {'type': 'user', 'message': {'role': 'user', 'content': 'IN-PROGRESS-REQUEST'}}
+        def claude_call(ident):
+            return {'type': 'assistant', 'message': {'role': 'assistant', 'content': [
+                {'type': 'tool_use', 'id': ident, 'name': 'Bash', 'input': {}}]}}
+        finished = {'type': 'user', 'message': {'role': 'user', 'content': [
+            {'type': 'tool_result', 'tool_use_id': 'first', 'content': 'done'}]}}
+        claude_running = directory / 'running-claude.jsonl'
+        claude_running.write_text(source.read_text() + ''.join(
+            json.dumps(r) + '\n' for r in (prompt, claude_call('first'), claude_call('second'), finished)))
+        claude_snapshot = directory / 'claude-snapshot' / 'running-claude.jsonl'
+        captured = agent_convert.snapshot_file('claude', claude_running, claude_snapshot)
+        assert claude_snapshot.read_text() == source.read_text() + json.dumps(prompt) + '\n'
+        assert captured['omittedRecords'] == 3 and captured['runningToolCalls'] == ['Bash']
+        # End to end: --snapshot converts a running Claude session that would otherwise be refused.
+        running_rows = [json.loads(line) for line in source.read_text().splitlines()]
+        last = running_rows[-1]
+        def threaded(record):
+            nonlocal last
+            record = {**{k: last[k] for k in ('sessionId', 'cwd', 'version', 'isSidechain')}, **record,
+                      'uuid': str(uuid.uuid4()), 'parentUuid': last['uuid'], 'timestamp': last['timestamp']}
+            if record['type'] == 'assistant':
+                record['message'].update({'id': 'msg_' + record['uuid'], 'model': 'claude-test', 'type': 'message'})
+            last = record
+            return record
+        running_rows[-1]['message']['content'] = [{'type': 'text', 'text': 'LATEST-REQUEST: keep both facts for the next task.'}]
+        running_rows += [threaded({'type': 'assistant', 'message': {'role': 'assistant', 'content': [
+            {'type': 'text', 'text': 'Checking.'}]}}), threaded(claude_call('still-running'))]
+        claude_running.write_text(''.join(json.dumps(r) + '\n' for r in running_rows))
+        snapshot_converted = directory / 'snapshot-converted.jsonl'
+        snapshot_command = command.copy()
+        snapshot_command[snapshot_command.index(str(source))] = str(claude_running)
+        snapshot_command[snapshot_command.index(str(output))] = str(snapshot_converted)
+        snapped = subprocess.run(snapshot_command + ['--snapshot'], capture_output=True, text=True)
+        assert snapped.returncode == 0, snapped.stderr
+        snapped_receipt = json.loads(snapped.stdout)
+        assert snapped_receipt['snapshot']['omittedRecords'] == 1
+        assert snapped_receipt['snapshot']['runningToolCalls'] == ['Bash']
+        assert snapped_receipt['snapshot']['sourceChangedDuringConversion'] is False
+        snapped_rows = [json.loads(line) for line in snapshot_converted.read_text().splitlines()]
+        snapped_calls, snapped_results = agent_convert.codex_native.history(snapped_rows)
+        assert len(snapped_calls) == len(snapped_results) == 2
+        assert 'still-running' not in snapshot_converted.read_text()
+        assert 'Checking.' in snapshot_converted.read_text()
+        assert agent_convert.unreplayable_reasoning(rows) == 0
+        assert agent_convert.unreplayable_reasoning([
+            {'type': 'response_item', 'payload': {'type': 'reasoning', 'summary': []}},
+            {'type': 'response_item', 'payload': {'type': 'reasoning', 'summary': [], 'encrypted_content': 'gAAA'}}]) == 1
         calls, results = agent_convert.codex_native.history(rows)
         assert len(calls) == len(results) == 2
         pdf_result = next(row for row in rows if row.get('_agent_convert_pdf_results'))

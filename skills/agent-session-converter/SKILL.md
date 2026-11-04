@@ -23,6 +23,13 @@ to the CLI. If it supplies only a title or quotation, find candidates and match
 their dialogue/project. A unique search query can also be passed as the source.
 Ask the user only when the available evidence cannot identify one session.
 
+For a Claude or Codex session that is still running, add `--snapshot` (any
+target). It converts the records completed so far. A tool call still in progress,
+and everything after it, is left out rather than given an invented result. The
+receipt and output name what was left out. Later source updates are not
+synchronized; disclose that the handoff is a snapshot. Without `--snapshot`, a
+source that changes during conversion is refused.
+
 No output path installs Codex or Claude. An output path requests a file export;
 Codex additionally accepts `--install`. Other targets require an output path:
 
@@ -48,6 +55,11 @@ page images in the actual serialized request. It makes no external model
 request and does not rerun historical tools. This is not a live model recall
 test. `--validation artifact` is an explicit reduced check, useful when Codex
 is unavailable for file-only conversion; disclose that limitation.
+
+Do not insert missing-reasoning notices, reasoning labels, or converter
+disclaimers into dialogue. Opaque reasoning and original transport envelopes
+belong in metadata sidecars. The CLI removes its authenticated generated
+placeholders while preserving actual readable text and genuine tool failures.
 
 The source stays intact. Follow the original source's active compaction window.
 Never route a compacted Codex source through a full Loom archive as a workaround.

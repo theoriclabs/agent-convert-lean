@@ -16,6 +16,7 @@ from pathlib import Path
 
 import codex_native
 import claude_results
+import claude_cleanup
 import pdf_results
 import rich_content
 
@@ -199,6 +200,12 @@ def audit_source_tools(transcript, rows, ledger):
     return {'sourceArgumentsAndResults': True, 'latestDialogueRetained': True}
 
 
+def unreplayable_reasoning(rows):
+    """Reasoning items Responses accepts once but cannot chain from (unsupported_persisted_item_context)."""
+    return sum(1 for row in rows if row.get('type') == 'response_item' and
+               row.get('payload', {}).get('type') == 'reasoning' and not row['payload'].get('encrypted_content'))
+
+
 def session_title(source):
     custom = None
     title = None
@@ -215,6 +222,125 @@ def session_title(source):
     except (OSError, UnicodeError):
         pass
     return custom or title or source.stem
+
+
+SNAPSHOT_FORMATS = ('codex', 'claude')
+
+
+def complete_records(data):
+    """Complete JSONL records; a running writer may be partway through its final append."""
+    lines = data.splitlines(keepends=True)
+    records = []
+    for index, line in enumerate(lines):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            row = None
+        if not isinstance(row, dict):
+            if index != len(lines) - 1:
+                raise ValueError('Malformed record before the end of the source session')
+            break
+        records.append((row, line if line.endswith(b'\n') else line + b'\n'))
+    return records
+
+
+def tool_records(source_format, row):
+    """Tool calls, results, and call names recorded by one source record."""
+    if source_format == 'codex':
+        payload = row.get('payload') or {}
+        if row.get('type') != 'response_item':
+            return (), (), {}
+        if payload.get('type') in ('function_call', 'custom_tool_call'):
+            return (payload.get('call_id'),), (), {payload.get('call_id'): payload.get('name')}
+        if payload.get('type') in ('function_call_output', 'custom_tool_call_output'):
+            return (), (payload.get('call_id'),), {}
+        return (), (), {}
+    content = (row.get('message') or {}).get('content')
+    blocks = [block for block in content if isinstance(block, dict)] if isinstance(content, list) else []
+    if row.get('type') == 'assistant':
+        calls = [block for block in blocks if block.get('type') == 'tool_use']
+        return tuple(b.get('id') for b in calls), (), {b.get('id'): b.get('name') for b in calls}
+    if row.get('type') == 'user':
+        return (), tuple(b.get('tool_use_id') for b in blocks if b.get('type') == 'tool_result'), {}
+    return (), (), {}
+
+
+def starts_turn(source_format, row):
+    if source_format == 'codex':
+        return row.get('type') == 'event_msg' and (row.get('payload') or {}).get('type') == 'task_started'
+    if row.get('type') != 'user' or row.get('isMeta') or row.get('isSidechain'):
+        return False
+    content = (row.get('message') or {}).get('content')
+    return isinstance(content, str) or (isinstance(content, list) and not any(
+        isinstance(block, dict) and block.get('type') == 'tool_result' for block in content))
+
+
+def snapshot_file(source_format, source, destination):
+    """Write the longest complete prefix in which every current-turn tool call has its result.
+
+    A running session usually ends inside a tool call. That call and every later
+    record are left out; no result is invented for it. Earlier turns are copied
+    unchanged, so their recorded outcomes keep their source representation.
+    """
+    records = complete_records(source.read_bytes())
+    start = max((i for i, (row, _) in enumerate(records) if starts_turn(source_format, row)), default=0)
+    end = len(records)
+    while True:
+        resolved = {result for row, _ in records[start:end] for result in tool_records(source_format, row)[1]}
+        pending = next((i for i in range(start, end)
+                        if any(call not in resolved for call in tool_records(source_format, records[i][0])[0])), None)
+        if pending is None:
+            break
+        end = pending
+    recorded = {result for row, _ in records for result in tool_records(source_format, row)[1]}
+    running = []
+    for row, _ in records[end:]:
+        calls, _, names = tool_records(source_format, row)
+        running += [names.get(call) or 'tool' for call in calls if call not in recorded]
+    captured = b''.join(line for _, line in records[:end])
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open('xb') as output:
+        output.write(captured)
+    return {'records': end, 'omittedRecords': len(records) - end, 'runningToolCalls': running,
+            'sha256': hashlib.sha256(captured).hexdigest()}
+
+
+def take_snapshot(core, source, directory):
+    """Capture a possibly running session, with its Claude subagent sidecars, for conversion."""
+    detected = json_document(run([core, 'detect', source, '--json']))
+    source_format = detected.get('format') or detected.get('detectedFormat')
+    if source_format not in SNAPSHOT_FORMATS:
+        raise ValueError(f'--snapshot supports Codex and Claude sessions, not {source_format}')
+    path = directory / source.name
+    snapshot = snapshot_file(source_format, source, path)
+    children = source.with_suffix('') / 'subagents'
+    if source_format == 'claude' and children.is_dir():
+        for child in sorted(children.iterdir()):
+            copied = path.with_suffix('') / 'subagents' / child.name
+            if child.suffix == '.jsonl':
+                snapshot_file('claude', child, copied)
+            elif child.is_file():
+                copied.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(child, copied)
+    snapshot['path'] = path
+    return snapshot
+
+
+def snapshot_receipt(snapshot, source, initial_hash):
+    public = {key: value for key, value in snapshot.items() if key != 'path'}
+    public['sourceChangedDuringConversion'] = digest(source) != initial_hash
+    return public
+
+
+def snapshot_line(snapshot):
+    line = f"Snapshot: converted {snapshot['records']} completed records."
+    if snapshot['omittedRecords']:
+        running = sorted(set(snapshot['runningToolCalls']))
+        line += f" Left out the last {snapshot['omittedRecords']} records of the turn in progress"
+        line += f", from the running {', '.join(running)} call onward." if running else '.'
+    return line + ' Later source activity is not included.'
 
 
 def parse_args(argv=None):
@@ -248,6 +374,9 @@ def parse_args(argv=None):
     convert.add_argument('--with-subagents', action='store_true')
     convert.add_argument('--allow-empty-dialogue', action='store_true')
     convert.add_argument('--json', action='store_true', help='Emit one machine-readable receipt')
+    convert.add_argument('--snapshot', action='store_true',
+                         help='Convert a session that may still be running: use the records completed so far, '
+                              'leaving out a tool call still in progress and everything after it')
     convert.add_argument('--keep-work', action='store_true', help='Retain intermediate conversion files on success')
     return parser.parse_args(argv)
 
@@ -264,6 +393,9 @@ def convert(core, args):
     directory = Path(tempfile.mkdtemp(prefix='agent-convert-'))
     successful = False
     try:
+        # Every later step reads `captured`: the source itself, or a fixed snapshot of it.
+        snapshot = take_snapshot(core, source, directory / 'snapshot') if args.snapshot else None
+        captured = snapshot['path'] if snapshot else source
         session_id = args.session_id or str(uuid.uuid4())
         options = ['--target-session-id', session_id]
         if args.with_subagents:
@@ -282,21 +414,35 @@ def convert(core, args):
             existing = next(projects.rglob(session_id + '.jsonl'), None) if projects.exists() else None
             if existing is not None:
                 raise ValueError(f'Claude session ID already exists: {existing}')
-            # The core owns Claude's transactional sidecars, index, and UUID checks.
-            output = run([core, 'convert', source, 'claude'] + options + (['--json'] if args.json else []))
-            if digest(source) != initial_hash:
-                raise ValueError('Source changed during conversion; inspect the reported installed session')
+            # A Codex snapshot enters the core directly, retaining active-context selection.
+            output = run([core, 'convert', captured, 'claude'] + options + ['--json'])
+            summary = json_document(output)
+            installed_path = Path(summary['output'])
+            quiet_reasoning = claude_cleanup.clean_file(installed_path)
+            if snapshot is None and digest(source) != initial_hash:
+                raise ValueError(f'Source changed during conversion; installed snapshot: {installed_path}. '
+                                 'The session is probably still running; use --snapshot to convert its completed records')
+            cwd = summary.get('targetCwd') or summary.get('cwd')
+            receipt = {'cliVersion': VERSION, 'source': str(source), 'target': 'claude',
+                       'sessionId': session_id, 'conversion': summary,
+                       'reasoningRecordsMovedToMetadata': quiet_reasoning,
+                       'sourceSnapshotSha256': snapshot['sha256'] if snapshot else initial_hash,
+                       'outputSha256': digest(installed_path),
+                       'resumeCommand': 'cd ' + shlex.quote(cwd) + ' && ' + shlex.join(['claude', '--resume', session_id])}
+            if snapshot:
+                receipt['snapshot'] = snapshot_receipt(snapshot, source, initial_hash)
+            with Path(str(installed_path) + '.conversion.json').open('x') as stream:
+                json.dump(receipt, stream, indent=2)
             if args.json:
-                summary = json_document(output)
-                cwd = summary.get('targetCwd') or summary.get('cwd')
-                print(json.dumps({'cliVersion': VERSION, 'source': str(source), 'target': 'claude',
-                                  'sessionId': session_id, 'conversion': summary,
-                                  'resumeCommand': 'cd ' + shlex.quote(cwd) + ' && ' + shlex.join(['claude', '--resume', session_id])}))
+                print(json.dumps(receipt))
             else:
-                print(output, end='')
+                print('Output: ' + str(installed_path))
+                if snapshot:
+                    print(snapshot_line(snapshot))
+                print(receipt['resumeCommand'])
             successful = True
             return
-        detected = json_document(run([core, 'detect', source, '--json']))
+        detected = json_document(run([core, 'detect', captured, '--json']))
         source_format = detected.get('format') or detected.get('detectedFormat')
         configured = settings(args.codex_home / 'config.toml') if args.target == 'codex' else {}
         if args.target == 'codex':
@@ -308,15 +454,15 @@ def convert(core, args):
         ledger = []
         rich_ledger = []
         recovered_results = []
-        conversion_source = source
+        conversion_source = captured
         if args.target == 'codex' and source_format == 'claude':
             # Only Claude is projected through the archive. Codex continuation
             # sources always go directly through the core's active-context import.
             archive = directory / 'source.loom.json'
-            run([core, 'convert', source, 'loom', archive,
+            run([core, 'convert', captured, 'loom', archive,
                  '--with-subagents' if args.with_subagents else '--no-subagents'])
             transcript = json.loads(archive.read_text())
-            transcript, recovered_results = claude_results.recover(core, source, transcript, directory, run)
+            transcript, recovered_results = claude_results.recover(core, captured, transcript, directory, run)
             prepared, ledger = pdf_results.project(transcript, directory / 'attachments')
             prepared, rich_ledger = rich_content.project(prepared)
             conversion_source = archive
@@ -325,7 +471,8 @@ def convert(core, args):
                 conversion_source.write_text(json.dumps(prepared, ensure_ascii=False))
         candidate = directory / 'converted.jsonl'
         summary = json_document(run([core, 'convert', conversion_source, args.target, candidate, '--json'] + options))
-        receipt = {'cliVersion': VERSION, 'source': str(source), 'sourceSha256': initial_hash,
+        receipt = {'cliVersion': VERSION, 'source': str(source),
+                   'sourceSha256': snapshot['sha256'] if snapshot else initial_hash,
                    'sourceFormat': source_format, 'target': args.target, 'sessionId': session_id,
                    'core': json_document(run([core, 'version', '--json'])), 'conversion': summary,
                    'recoveredResults': len(recovered_results),
@@ -342,6 +489,10 @@ def convert(core, args):
             calls, results = codex_native.history(rows)
             if len(calls) != summary['toolCallsEmittedNative'] or len(results) != summary['toolResultsEmitted']:
                 raise ValueError('Native history counts disagree with converter summary')
+            unreplayable = unreplayable_reasoning(rows)
+            if unreplayable:
+                raise ValueError(f'{unreplayable} Codex reasoning items lack OpenAI encrypted_content; Responses refuses '
+                                 'to continue such a session after its first tool call (issue #30). Update the Loom core')
             if transcript is not None:
                 receipt['verification'].update(audit_source_tools(transcript, rows, ledger))
             if args.validation == 'native':
@@ -351,8 +502,13 @@ def convert(core, args):
                 receipt['verification']['nativeLoad'] = False
                 receipt['verification']['nativeRequestSerialization'] = False
             candidate.write_text(''.join(json.dumps(row, ensure_ascii=False, separators=(',', ':')) + '\n' for row in rows))
-        if digest(source) != initial_hash:
-            raise ValueError('Source changed during conversion; retry after the source turn finishes')
+        if args.target == 'claude':
+            receipt['reasoningRecordsMovedToMetadata'] = claude_cleanup.clean_file(candidate)
+        if snapshot is None and digest(source) != initial_hash:
+            raise ValueError('Source changed during conversion; the session is probably still running. '
+                             'Use --snapshot to convert its completed records, or retry after the turn finishes')
+        if snapshot:
+            receipt['snapshot'] = snapshot_receipt(snapshot, source, initial_hash)
         destinations = []
         if args.output:
             destinations.append(args.output.expanduser().resolve())
@@ -380,12 +536,15 @@ def convert(core, args):
         if asset_directory.exists():
             raise ValueError(f'Attachment/receipt directory already exists: {asset_directory}')
         asset_directory.mkdir(parents=True)
+        reasoning_archive = Path(str(candidate) + '.reasoning-provenance.json')
+        if reasoning_archive.exists():
+            shutil.copy2(reasoning_archive, asset_directory / 'reasoning-provenance.json')
         for document in ledger:
             pdf = Path(document['pdf'])
             with (asset_directory / pdf.name).open('xb') as output:
                 output.write(pdf.read_bytes())
         receipt.update({'outputs': [str(p) for p in destinations], 'attachments': str(asset_directory),
-                        'outputSha256': digest(candidate), 'sourceUnchanged': True})
+                        'outputSha256': digest(candidate), 'sourceUnchanged': digest(source) == initial_hash})
         if ledger:
             receipt['adaptations'] = ['Recorded PDF results contain extracted text and page images; original PDF bytes are retained in metadata and attachments.']
         if receipt['recoveredResults']:
@@ -403,7 +562,7 @@ def convert(core, args):
         if install:
             header = next(row['payload'] for row in rows if row['type'] == 'session_meta')
             cwd = header['cwd']
-            name = args.name or session_title(source) + ' (converted)'
+            name = args.name or session_title(captured) + ' (converted)'
             try:
                 codex_native.name_session(args.codex, args.codex_home, session_id, name, directory)
                 receipt['registeredName'] = name
@@ -434,6 +593,8 @@ def convert(core, args):
             print(f'Converted {source} → {args.target}')
             for destination in destinations:
                 print(f'Output: {destination}')
+            if snapshot:
+                print(snapshot_line(snapshot))
             if args.target == 'codex':
                 print(f'Native tool history: {len(calls)} calls, {len(results)} results; PDF attachments: {len(ledger)}')
                 print('Validation: ' + ('native loading and local request serialization' if args.validation == 'native' else 'artifact checks only'))

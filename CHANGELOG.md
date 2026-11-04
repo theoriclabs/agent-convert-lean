@@ -5,6 +5,25 @@ lands; move them into a dated version section when publishing a release.
 
 ## [Unreleased]
 
+- Keep unavailable reasoning and converter labels out of Claude dialogue.
+  Preserve source records in a metadata sidecar, repair parent/leaf links when
+  omitting empty reasoning turns, and unwrap native tool transport output for
+  display while retaining genuine failure flags and exact source data.
+
+- Refuse to publish a Codex conversion whose `reasoning` items lack OpenAI
+  `encrypted_content`. Responses accepts such a session once and then fails its
+  first tool-call follow-up with `unsupported_persisted_item_context` (#30).
+
+- Add `agent-convert convert <session> <target> --snapshot` for Claude and Codex
+  sessions that are still running, for every target and output mode. It
+  converts the longest complete prefix in which every current-turn tool call
+  has its recorded result. A call still in progress, and everything after it,
+  is left out rather than given an invented result. Claude subagent sidecars
+  are captured the same way. The receipt and output report the records left
+  out and the running tool names, and active-context import is retained. A
+  source that changes during a non-snapshot conversion is refused with a hint
+  to use `--snapshot`, and installed paths are reported.
+
 - Add an installable `agent-convert` CLI and maintained session-conversion skill.
   Automate source lookup, configured Codex model selection, recorded PDF
   text/page projection and native images with original bytes retained, structured

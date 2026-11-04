@@ -20,6 +20,8 @@ python3 scripts/install-agent-convert.py --build
 agent-convert find "distinctive words"
 agent-convert convert <session-id-or-path> codex --name "My conversation"
 agent-convert convert <session-id-or-path> claude
+# For a Claude or Codex session that is still running:
+agent-convert convert <session-id> codex --snapshot
 ```
 
 This installs `~/.local/bin/agent-convert` and the discoverable
@@ -35,6 +37,10 @@ source arguments/results, and validates the actual native request through a
 localhost test provider before publication. It never reruns historical tools or
 calls an external model for validation. Codex conversions and file exports include a checksum-bound
 conversion receipt. Use `--json` for one machine-readable receipt.
+
+Claude exports keep unavailable reasoning in metadata rather than inserting
+placeholder assistant messages. Native tool transport envelopes are rendered
+as readable output, with exact originals retained in a metadata sidecar.
 
 `agent-convert doctor` checks the installation. PDF results require Poppler;
 native Codex validation requires the Codex CLI. `--validation artifact` explicitly
