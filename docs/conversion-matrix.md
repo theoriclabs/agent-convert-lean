@@ -89,6 +89,12 @@ Claude record can be forwarded; the converter does not cryptographically
 validate provider signatures. This follows Claude's requirement to return its
 own [thinking signatures unchanged](https://platform.claude.com/docs/en/build-with-claude/thinking#thinking-encryption).
 
+In Codex, only Codex-origin reasoning with its OpenAI `encrypted_content`
+becomes a `reasoning` item. Reasoning without that ciphertext is not replayable:
+Responses refuses to chain from a response containing it once a tool call needs
+a follow-up. It is exported as a stamped display-only `agent_reasoning` event
+that the resumed model does not receive.
+
 Claude exports batch events, archived controls, and archived records into one
 `agent-convert-provenance` header. Events retain their position and graph links
 for re-import, while physical conversation parents bypass them. Consumed Codex
