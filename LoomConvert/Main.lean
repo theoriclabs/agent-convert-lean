@@ -99,6 +99,22 @@ private def targetCliConfigurationError? (toFmt : String) (opts : CliOptions) : 
     some "--target-codex-* options are valid only when the target is codex"
   else none
 
+private def cliCodexTargetControls? (opts : CliOptions) : Option Lean.Json := do
+  let approvalPolicy ← opts.codexApprovalPolicy
+  let networkAccess ← opts.codexNetworkAccess
+  let excludeTmpdirEnvVar ← opts.codexExcludeTmpdirEnvVar
+  let excludeSlashTmp ← opts.codexExcludeSlashTmp
+  let summary ← opts.codexSummary
+  pure (Lean.Json.mkObj [
+    ("protocol", Lean.Json.str codexTargetControlsProtocol),
+    ("approval_policy", Lean.Json.str approvalPolicy),
+    ("sandbox_policy", Lean.Json.mkObj [
+      ("type", Lean.Json.str "workspace-write"),
+      ("network_access", Lean.Json.bool networkAccess),
+      ("exclude_tmpdir_env_var", Lean.Json.bool excludeTmpdirEnvVar),
+      ("exclude_slash_tmp", Lean.Json.bool excludeSlashTmp)]),
+    ("summary", Lean.Json.str summary)])
+
 /-- Launch configuration belongs to the target artifact. It must never overwrite
 the source transcript's `EnvInfo`, because doing so would erase the very source
 facts that conversion policy and reversible carriers are required to account for. -/

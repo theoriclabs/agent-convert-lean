@@ -7,7 +7,7 @@ import LoomConvert.CursorAgentSubagents
 
 Single-file staging and multi-file sidecar publication, including thread
 projection, ownership checks, rollback, and fault-injection regressions.
-Only the publication entry points and subagent policy are public. Transaction
+Publication entry points and shared thread projections are public. Transaction
 mechanics and fault injection stay private to this module.
 -/
 
@@ -16,12 +16,12 @@ open Loom
 
 /-- Thread index containing the root conversation. Importers write this at index
 0, but the wire format is explicit, so prefer the declared `main` thread. -/
-private def mainThreadIndex (t : Transcript) : Nat :=
+def mainThreadIndex (t : Transcript) : Nat :=
   match t.threads.toList.zipIdx.find? (fun p => p.1.kind == ThreadKind.main) with
   | some p => p.2
   | none => 0
 
-private def nonMainThreadInfos (t : Transcript) : List (Nat × Thread) :=
+def nonMainThreadInfos (t : Transcript) : List (Nat × Thread) :=
   t.threads.toList.zipIdx.filterMap (fun p =>
     match p.1.kind with
     | ThreadKind.main => none
@@ -52,7 +52,7 @@ private def projectPayload (t : Transcript) (oldIdxs : List Nat) (entry : Entry)
 tool-result `CallRef`s that point inside the selected thread are re-based to the
 new entry indices; cross-thread links are intentionally not encoded as parents.
 Sidechain anchoring is carried by the sidecar metadata/layout instead. -/
-private def projectThread (t : Transcript) (threadIdx : Nat) : Transcript :=
+def projectThread (t : Transcript) (threadIdx : Nat) : Transcript :=
   let pairs := t.entries.toList.zipIdx.filter (fun p => p.1.thread == threadIdx)
   let oldIdxs := pairs.map (fun p => p.2)
   let label := (t.threads[threadIdx]?).bind (fun th => th.label)
