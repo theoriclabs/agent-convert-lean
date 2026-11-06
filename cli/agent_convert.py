@@ -547,6 +547,10 @@ def convert(core, args):
                         'outputSha256': digest(candidate), 'sourceUnchanged': digest(source) == initial_hash})
         if ledger:
             receipt['adaptations'] = ['Recorded PDF results contain extracted text and page images; original PDF bytes are retained in metadata and attachments.']
+        if receipt['verification'].get('nativeImageDetailOmissions'):
+            receipt.setdefault('adaptations', []).append(
+                'Codex omits recorded tool-image detail preferences in serialized requests; '
+                'original image bytes and detail values remain in the installed history and request audit.')
         if receipt['recoveredResults']:
             receipt.setdefault('adaptations', []).append('Retained same-session results omitted by the selected Claude parent walk were restored by exact call identity and source order; no tools were rerun.')
         if receipt['structuredToolReferences']:

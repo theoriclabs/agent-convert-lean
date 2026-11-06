@@ -3561,8 +3561,9 @@ private def exactImportedNativeCallEvidence? (t : Transcript)
       pure { record, kind := .functionCall, callId }
   | some "custom_tool_call" =>
       let input ← ostr payload "input"
-      guard (name.raw == "apply_patch" && ostr payload "name" == some "apply_patch")
-      guard (args == Json.mkObj [("patch", Json.str input)])
+      guard (ostr payload "name" == some name.raw)
+      let inputKey := if name.raw == "apply_patch" then "patch" else "input"
+      guard (args == Json.mkObj [(inputKey, Json.str input)])
       pure { record, kind := .customToolCall, callId }
   | _ => none
 
@@ -7578,6 +7579,42 @@ def codexExactImportedNativeToolCyclesStayExact : Bool :=
       | _, _ => false
 
 example : codexExactImportedNativeToolCyclesStayExact = true := by native_decide
+
+/-- Running Codex sessions also use free-form exec calls. Their original call
+and result kinds and transport fields must survive a same-format fork. -/
+def codexCustomExecCyclesStayExact : Bool :=
+  let records := [
+    Json.mkObj [
+      ("timestamp", Json.str "2026-07-20T01:00:00.000Z"),
+      ("type", Json.str "response_item"), ("payload", Json.mkObj [
+      ("type", Json.str "custom_tool_call"), ("name", Json.str "exec"),
+      ("call_id", Json.str "custom-exec"),
+      ("input", Json.str "text(await tools.exec_command({cmd: 'pwd'}))"),
+      ("namespace", Json.str "functions"), ("status", Json.str "completed")])],
+    Json.mkObj [
+      ("timestamp", Json.str "2026-07-20T01:00:00.000Z"),
+      ("type", Json.str "response_item"), ("payload", Json.mkObj [
+      ("type", Json.str "custom_tool_call_output"),
+      ("call_id", Json.str "custom-exec"),
+      ("output", Json.arr #[
+        Json.mkObj [("type", Json.str "input_text"), ("text", Json.str "Script completed")],
+        Json.mkObj [("type", Json.str "input_text"), ("text", Json.str "/tmp/native")]])])]]
+  let source := String.intercalate "\n" (
+    "{\"type\":\"session_meta\",\"payload\":{\"id\":\"custom-exec-session\"}}" :: records.map Json.compress)
+  match importCodexCli source with
+  | .error _ => false
+  | .ok imported =>
+      let exported := exportCodexCli imported
+      codexNativeToolCallCount imported == 1 &&
+      codexNativeToolResultCount imported == 1 &&
+      codexHistoricalToolCallCount imported == 0 &&
+      codexHistoricalToolResultCount imported == 0 &&
+      match parseCodexSession exported, importCodexCli exported with
+      | .ok (_, restoredRecords), .ok restored =>
+          restoredRecords == records && exportCodexCli restored == exported
+      | _, _ => false
+
+example : codexCustomExecCyclesStayExact = true := by native_decide
 
 private def codexCanonicalizedImportedNativeCallFixture : Transcript :=
   let rawRecord := codexExactNativeToolRecords.head?.getD Json.null

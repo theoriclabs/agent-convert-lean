@@ -38,6 +38,10 @@ localhost test provider before publication. It never reruns historical tools or
 calls an external model for validation. Codex conversions and file exports include a checksum-bound
 conversion receipt. Use `--json` for one machine-readable receipt.
 
+Codex may omit recorded tool-image `detail` preferences when serializing a
+request. Validation records that specific omission in the receipt while keeping
+image bytes, tool text, and ordering exact; installed history retains the preferences.
+
 Claude exports keep unavailable reasoning in metadata rather than inserting
 placeholder assistant messages. Native tool transport envelopes are rendered
 as readable output, with exact originals retained in a metadata sidecar.

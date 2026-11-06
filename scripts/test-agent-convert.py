@@ -84,6 +84,18 @@ def main():
     parser.add_argument('--core', default=os.environ.get('LOOM_BIN', str(ROOT / '.lake/build/bin/loom')))
     parser.add_argument('--native', action='store_true', help='Also exercise installed Codex against a localhost fake provider')
     args = parser.parse_args()
+    # Accept only the observed runtime omission, never changed media or text.
+    image = {'type': 'input_image', 'image_url': 'data:image/png;base64,EXACT', 'detail': 'original'}
+    text = {'type': 'input_text', 'text': 'EXACT recorded output'}
+    serialized_image = {key: value for key, value in image.items() if key != 'detail'}
+    audit = agent_convert.codex_native.tool_image_detail_omissions
+    assert audit([text, image], [text, serialized_image]) == [{'outputIndex': 1, 'detail': 'original'}]
+    assert audit([image], [{**serialized_image, 'image_url': 'changed'}]) is None
+    assert audit([image], [{**image, 'detail': 'high'}]) is None
+    assert audit([text, image], [serialized_image, text]) is None
+    assert audit([text, image], [{'type': 'input_text', 'text': 'changed'}, serialized_image]) is None
+    assert audit([text, image], [text]) is None
+    assert audit('recorded output', 'changed output') is None
     with tempfile.TemporaryDirectory(prefix='agent-convert-test-') as temp:
         directory = Path(temp)
         source, sentinel, long_id = fixture(directory)
