@@ -1,0 +1,16 @@
+{
+  "name": "loom-viewer",
+  "version": "0.1.1",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@assistant-ui/react": "0.15.26",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "esbuild": "0.28.2",
+    "jsdom": "29.1.1"
+  }
+}

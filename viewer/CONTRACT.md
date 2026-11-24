@@ -66,21 +66,20 @@ last few by `(path, modifiedMs)`.
 `web/generated/viewer.mjs` is the LeanJS module (`lake env lean Generate.lean`). It exports
 `Viewer.UI.App`, `Viewer.UI.pageSize`, `Viewer.Harness.parse`, `Viewer.Harness.slug`,
 `Viewer.Harness.all`, `Viewer.Harness.label`, `AssistantUI.Message.ofTranscript`, and imports the
-LeanReact adapter by relative path (`../../../../leanreact/engine/adapters/leanjs-react.mjs`).
+LeanReact adapter by relative path (`../../.lake/packages/leanreact/engine/adapters/leanjs-react.mjs`).
 
 Files: `web/index.html` (loads `./app.js` as a module, `./style.css`, `./thread.css`; a `<div id="root">`),
 `web/main.mjs` (entry), `web/client.mjs` (fetch + decoding, exported for tests), `web/style.css`.
-`scripts/build.mjs` runs esbuild from `../../leanreact/node_modules/esbuild` with
-`nodePaths: ['<abs>/leanreact/node_modules']` (so `react`, `react-dom`, `@assistant-ui/react`
-resolve), bundles `web/main.mjs` to `web/dist/app.js` (esm, browser, es2022, sourcemap,
+`scripts/build.mjs` uses the viewer’s pinned esbuild package to bundle `web/main.mjs` to
+`web/dist/app.js` (esm, browser, es2022, sourcemap,
 `define: {'process.env.NODE_ENV': '"development"'}`), copies `web/index.html`, `web/style.css`
-and `../../leanreact/adapters/assistant-ui/thread.css` into `web/dist/`.
+and `vendor/assistant-ui/thread.css` into `web/dist/`.
 
-`web/main.mjs` must import `../../../leanreact/adapters/assistant-ui/index.mjs` (registers the
+`web/main.mjs` must import `../vendor/assistant-ui/index.mjs` (registers the
 thread) before mounting, then:
 
 ```js
-import { mountElement, ctor } from '../../../leanreact/engine/adapters/leanjs-react.mjs';
+import { mountElement, ctor } from '../.lake/packages/leanreact/engine/adapters/leanjs-react.mjs';
 import * as program from './generated/viewer.mjs';
 import { createService } from './client.mjs';
 createRoot(document.getElementById('root')).render(React.createElement(React.StrictMode, null,
@@ -100,7 +99,7 @@ createRoot(document.getElementById('root')).render(React.createElement(React.Str
   `AssistantUI.ToolResult.mk [value, isError]`, `AssistantUI.MessageStatus.complete|running|cancelled|requiresAction`, `AssistantUI.MessageStatus.failed [error]`.
 - The service: `ctor('Viewer.UI.Service.mk', [sessions, conversation])` where `sessions(query)` and
   `conversation(harness, id)` are JS functions (one parameter per Lean argument) returning an
-  `action(async () => …)` (from `../../../leanreact/engine/runtime/actions.mjs`) that resolves to
+  `action(async () => …)` (from `../.lake/packages/leanreact/engine/runtime/actions.mjs`) that resolves to
   `ctor('Except.ok', [value])` or `ctor('Except.error', [message])`. `query` arrives as
   `Viewer.UI.Query.mk [harness?, text, offset, limit]`.
 - Encode a query as `?harness=<slug>&q=<text>&offset=<n>&limit=<n>` (omit `harness` when none).

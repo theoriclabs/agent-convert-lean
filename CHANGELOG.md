@@ -5,6 +5,11 @@ lands; move them into a dated version section when publishing a release.
 
 ## [Unreleased]
 
+## [0.2.0-preview.5] - 2026-11-24
+
+- Upgrade the core and viewer to Lean 4.36.0. The viewer uses a pinned LeanReact release and includes its assistant-ui binding so it builds from a fresh checkout.
+- Preserve the historical JSONL parser behavior for ordinary Claude and Codex records with duplicate keys. Reserved exporter-owned records still receive their existing source-byte validation.
+
 - Keep unavailable reasoning and converter labels out of Claude dialogue.
   Preserve source records in a metadata sidecar, repair parent/leaf links when
   omitting empty reasoning turns, and unwrap native tool transport output for
@@ -301,7 +306,8 @@ First public prerelease of the Lean session converter.
   must build from source with the pinned Lean toolchain. Cursor IDE extraction
   requires `sqlite3`; the optional MCP server requires Node.js.
 
-[Unreleased]: https://github.com/theoriclabs/agent-convert-lean/compare/v0.2.0-preview.4...HEAD
+[Unreleased]: https://github.com/theoriclabs/agent-convert-lean/compare/v0.2.0-preview.5...HEAD
+[0.2.0-preview.5]: https://github.com/theoriclabs/agent-convert-lean/releases/tag/v0.2.0-preview.5
 [0.2.0-preview.4]: https://github.com/theoriclabs/agent-convert-lean/releases/tag/v0.2.0-preview.4
 [0.2.0-preview.3]: https://github.com/theoriclabs/agent-convert-lean/releases/tag/v0.2.0-preview.3
 [0.2.0-preview.2]: https://github.com/theoriclabs/agent-convert-lean/compare/v0.2.0-preview.1...v0.2.0-preview.2

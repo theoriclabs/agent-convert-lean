@@ -1,4 +1,5 @@
 import Loom
+import LoomConvert.JsonCompat
 import LoomConvert.SourceVersion
 import LoomConvert.Parity
 import LoomOps.Conversion
@@ -2529,7 +2530,7 @@ private def cParseClaudeJsonLines (text : String) : Except String (List Json) :=
         if line.isEmpty then
           .error s!"malformed Claude JSONL at line {index + 1}: empty record"
         else
-          match Json.parse line with
+          match LoomConvert.parseRecordedJson line with
           | .error error =>
               .error s!"malformed Claude JSONL at line {index + 1}: {error}"
           | .ok parsed =>

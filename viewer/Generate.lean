@@ -10,4 +10,4 @@ run_meta do
   LeanJS.writeModule "web/generated/viewer.mjs" #[
     `Viewer.UI.App, `Viewer.UI.pageSize, `Viewer.Harness.parse, `Viewer.Harness.slug, `Viewer.Harness.all,
     `Viewer.Harness.label, `AssistantUI.Message.ofTranscript]
-    (LeanReact.Compiler.options "../../../../leanreact/engine/adapters/leanjs-react.mjs")
+    (LeanReact.Compiler.options "../../.lake/packages/leanreact/engine/adapters/leanjs-react.mjs")

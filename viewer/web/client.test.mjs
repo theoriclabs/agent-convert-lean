@@ -6,8 +6,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-const { linkNodeModules } = await import('../scripts/build.mjs');
-await linkNodeModules();
 const { JSDOM, VirtualConsole } = await import('jsdom');
 
 // assistant-ui's viewport measures and scrolls; jsdom has neither, so the browser-only pieces are stubs.
@@ -22,9 +20,9 @@ globalThis.cancelAnimationFrame = id => clearTimeout(id);
 
 const React = await import('react');
 const { createRoot } = await import('react-dom/client');
-const { mountElement, ctor, runAction } = await import('../../../leanreact/engine/adapters/leanjs-react.mjs');
-const { action } = await import('../../../leanreact/engine/runtime/actions.mjs');
-await import('../../../leanreact/adapters/assistant-ui/index.mjs');
+const { mountElement, ctor, runAction } = await import('../.lake/packages/leanreact/engine/adapters/leanjs-react.mjs');
+const { action } = await import('../.lake/packages/leanreact/engine/runtime/actions.mjs');
+await import('../vendor/assistant-ui/index.mjs');
 const program = await import('./generated/viewer.mjs');
 const { createService, decodeSession, decodeSessionPage, decodeMessage, decodeConversation, queryToSearch } = await import('./client.mjs');
 

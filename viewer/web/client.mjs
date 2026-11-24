@@ -3,8 +3,8 @@
 // order, `Nat` is a bigint, `Option` is `Option.some [v]` / `Option.none`, `Bool` is `Bool.true` /
 // `Bool.false`, arrays are JS arrays. Harness values come from the compiled `Viewer.Harness.parse`,
 // never from tags spelled here.
-import { ctor } from '../../../leanreact/engine/adapters/leanjs-react.mjs';
-import { action } from '../../../leanreact/engine/runtime/actions.mjs';
+import { ctor } from '../.lake/packages/leanreact/engine/adapters/leanjs-react.mjs';
+import { action } from '../.lake/packages/leanreact/engine/runtime/actions.mjs';
 
 const some = value => ctor('Option.some', [value]);
 const none = ctor('Option.none');

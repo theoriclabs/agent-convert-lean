@@ -3,18 +3,19 @@
 Every coding-agent conversation on this machine, in one chat UI. Claude Code, Codex CLI, Pi,
 Cursor Agent and Hermes keep their sessions in different stores and formats; Loom already imports
 each into one transcript IR, and this viewer lists those sessions and shows any of them as a
-thread, rendered by [assistant-ui for Lean](../../leanreact/adapters/assistant-ui/README.md).
+thread, rendered by [assistant-ui for Lean](vendor/assistant-ui/README.md).
 
 It is a sub-package so the Loom core stays dependency-free: `viewer/` requires Loom from the
-parent checkout and LeanReact from the sibling `leanreact` checkout, and LeanReact brings LeanAPI.
+parent checkout and a pinned LeanReact release, which brings LeanAPI.
 
 ## Run it
 
 ```sh
 cd viewer
+npm ci
 lake build loom_viewer          # the server (first build compiles LeanReact's dependencies)
 lake env lean Generate.lean     # the browser-side Lean, compiled to web/generated/viewer.mjs
-node scripts/build.mjs          # the bundle, into web/dist (npm packages come from ../../leanreact)
+node scripts/build.mjs          # the bundle, into web/dist
 .lake/build/bin/loom_viewer     # http://127.0.0.1:4800
 ```
 

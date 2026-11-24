@@ -23,10 +23,10 @@ def fixtures : List (String × String) := [
   ("codex.jsonl", s!".codex/sessions/2026/01/01/rollout-2026-01-01T00-00-00-{codexId}.jsonl"),
   ("pi.jsonl", s!".pi/agent/sessions/-slug-/2026-01-01T00-00-00-000Z_{piId}.jsonl"),
   ("cursor-agent.jsonl", ".cursor/projects/a/b/c/d/e/agent.jsonl"),
-  ("hermes.json", ".hermes/sessions/hermes.json")]
+  ("hermes.json", ".hermes/sessions/session_hermes.json")]
 
 def expectedIds : List (String × String) :=
-  [("claude", claudeId), ("codex", codexId), ("pi", piId), ("cursor-agent", "agent"), ("hermes", "hermes")]
+  [("claude", claudeId), ("codex", codexId), ("pi", piId), ("cursor-agent", "agent"), ("hermes", "session_hermes")]
 
 /-- Some tool call of the conversation carries its result. -/
 def hasResolvedCall (c : Conversation) : Bool :=

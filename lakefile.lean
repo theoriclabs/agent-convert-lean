@@ -2,6 +2,7 @@ import Lake
 open Lake DSL
 
 package loom where
+  version := v!"0.2.0-preview.5"
   moreLeanArgs := #[s!"-Dweak.loom.coreRevision={(get_config? coreRevision).getD "working-tree"}"]
 
 /-- The WHAT: transcript IR, format matrix, validity, claims. -/

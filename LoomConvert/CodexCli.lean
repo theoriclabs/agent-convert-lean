@@ -1,4 +1,5 @@
 import Loom
+import LoomConvert.JsonCompat
 import LoomConvert.SourceVersion
 import LoomConvert.Parity
 import LoomConvert.Hermes
@@ -1599,9 +1600,8 @@ private def parseCodexHistoricalCarrier? (payload : Json) (segment : Nat) :
         let name : ToolName := { raw := rawName, canonical }
         let expected := codexHistoricalToolCallV2Json occurrence rawId name args
         guard (record == expected)
-        -- `Json.parse` collapses duplicate object keys. The carrier is emitted in
-        -- canonical compact form, so exact source bytes are the authority needed
-        -- to reject contradictory lexical fields before they can normalize away.
+        -- Validate the exact compact form emitted by the exporter before
+        -- using the decoded carrier.
         guard (encoded.toString == expected.compress)
         pure canonical
       else none
@@ -2936,7 +2936,7 @@ private def parseCodexSession (text : String) : Except String (Json × List Json
   -- Since Codex 0.142, subagent rollouts use `id` for the current rollout and
   -- may use a different `session_id` for parent-session lineage. The filename
   -- and `parent_thread_id` corpus evidence makes `id` authoritative here.
-  let records ← rest.mapM Json.parse
+  let records ← rest.mapM LoomConvert.parseRecordedJson
   let carrierSession := codexCarrierSessionSelfIdentified payload
   for (sourceLine, record) in rest.zip records do
     match codexReservedRecordSourceFailure? carrierSession sourceLine record with

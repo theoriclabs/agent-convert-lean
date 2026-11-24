@@ -6,9 +6,7 @@ import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
-import playwright from '/Users/harshwork/code/leanreact/node_modules/@playwright/test/index.js';
-
-const { chromium } = playwright;
+import { chromium } from '@playwright/test';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const port = Number(process.env.LOOM_VIEWER_PORT ?? 4811);
 const base = `http://127.0.0.1:${port}`;
