@@ -5,6 +5,10 @@ lands; move them into a dated version section when publishing a release.
 
 ## [Unreleased]
 
+- Find, inspect, and export local Google Antigravity CLI and desktop threads.
+  Add native CLI resume and follow-up prompts, desktop picker instructions,
+  and parent conversation handoffs for named subagents.
+
 - Keep unavailable reasoning and converter labels out of Claude dialogue.
   Preserve source records in a metadata sidecar, repair parent/leaf links when
   omitting empty reasoning turns, and unwrap native tool transport output for

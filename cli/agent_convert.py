@@ -14,6 +14,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
+import antigravity
 import codex_native
 import claude_results
 import claude_cleanup
@@ -352,10 +353,11 @@ def parse_args(argv=None):
     sub.add_parser('doctor', help='Check installed converter and native tools')
     find = sub.add_parser('find', help='Find sessions by words in their messages')
     find.add_argument('query')
-    find.add_argument('--store')
+    find.add_argument('--store', help='Limit to one harness or use antigravity, antigravity-cli, or antigravity-desktop')
     find.add_argument('--cwd')
     find.add_argument('--limit', type=int, default=20)
     find.add_argument('--json', action='store_true')
+    antigravity.add_commands(sub.add_parser('antigravity', help='Find and resume Antigravity conversations'))
     convert = sub.add_parser('convert', help='Convert a session; installs Codex or Claude when output is omitted')
     convert.add_argument('source', help='Session ID, transcript path, or unambiguous search query')
     convert.add_argument('target', choices=TARGETS)
@@ -614,27 +616,39 @@ def convert(core, args):
 def main(argv=None):
     args = parse_args(argv)
     try:
-        core = find_core(args.core)
+        if args.command == 'antigravity':
+            return antigravity.run(args)
+        antigravity_only = args.command == 'find' and args.store in ('antigravity', *antigravity.SEARCH_STORES)
+        core = None if antigravity_only else find_core(args.core)
         if args.command == 'version':
             print(json.dumps({'cliVersion': VERSION, 'corePath': str(core), 'core': json_document(run([core, 'version', '--json']))}))
         elif args.command == 'doctor':
             print(json.dumps({'cliVersion': VERSION, 'corePath': str(core),
                               'core': json_document(run([core, 'version', '--json'])),
-                              'codex': shutil.which('codex'), 'pdftotext': shutil.which('pdftotext'),
+                              'codex': shutil.which('codex'), 'agy': shutil.which('agy'),
+                              'pdftotext': shutil.which('pdftotext'),
                               'pdftoppm': shutil.which('pdftoppm')}, indent=2))
         elif args.command == 'find':
-            hits = search(core, args.query, args.store, args.cwd, args.limit)
+            if args.limit < 1:
+                raise ValueError('--limit must be positive')
+            hits = [] if antigravity_only else search(core, args.query, args.store, args.cwd, args.limit)
+            if (antigravity_only or not args.store) and len(hits) < args.limit:
+                store = None if args.store == 'antigravity' else args.store
+                hits += antigravity.find(antigravity.data_root(), args.query, store, args.cwd, args.limit - len(hits))
             if args.json:
                 print(json.dumps(hits, ensure_ascii=False))
             else:
                 for hit in hits:
-                    print(f"{hit['file']}\n  {hit.get('snippet', '')[:180]}")
+                    label = f"[{hit['store']}] {hit['id']}" if 'surface' in hit else hit['file']
+                    print(f"{label}\n  {hit.get('snippet', '')[:180]}")
         elif args.command == 'convert':
             convert(core, args)
         return 0
-    except (ValueError, OSError, KeyError, subprocess.TimeoutExpired) as error:
+    except (ValueError, OSError, KeyError, subprocess.SubprocessError) as error:
         print(f'agent-convert: {error}', file=sys.stderr)
         return 1
+    except KeyboardInterrupt:
+        return 130
 
 
 if __name__ == '__main__':

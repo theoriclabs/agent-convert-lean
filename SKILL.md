@@ -1,6 +1,6 @@
 ---
 name: agent-convert-lean
-description: Convert and install coding-agent sessions with the agent-convert CLI. Use when a user wants to migrate a conversation between Claude Code, Codex CLI, Pi, Cursor Agent, OpenCode, and Loom.
+description: Migrate coding-agent sessions with agent-convert, or inspect and resume Antigravity CLI and desktop threads.
 ---
 
 # Convert a session
@@ -27,7 +27,7 @@ python3 scripts/install-agent-convert.py --build
 ```
 
 Read the maintained [session-conversion skill](./skills/agent-session-converter/SKILL.md)
-for source acquisition, target handoffs, validation limits, and repair guidance.
+for source acquisition, handoffs, Antigravity thread control, and repair.
 It is installed as `$agent-session-converter` by the command above.
 
 Keep source conversations intact and use the source's active compaction context.

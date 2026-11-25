@@ -1,9 +1,47 @@
 ---
 name: agent-session-converter
-description: Find, convert, validate, and install coding-agent sessions between Claude Code, Codex CLI, Pi, Cursor Agent, OpenCode, and Loom. Use for session migration or repair of imported conversation and tool history.
+description: Find, convert, validate, and install coding-agent sessions between Claude Code, Codex CLI, Pi, Cursor Agent, OpenCode, and Loom. Also use to find, inspect, export, resume, or steer Google Antigravity CLI and desktop conversations.
 ---
 
 # Convert a coding-agent session
+
+## Antigravity conversations
+
+Use `agent-convert antigravity list --json` or
+`agent-convert find "keywords" --store antigravity --json` to identify the thread
+UUID and surface.
+`antigravity show <id> --surface <cli|desktop> --tail 6 --json` reads recent
+dialogue. `antigravity transcript <id> --surface <cli|desktop>` exports the
+recorded Antigravity JSONL log when available.
+
+For a CLI thread, `agent-convert antigravity resume <id> --surface cli` prints
+the native invocation. Add `--launch` in an interactive terminal. Use
+`agent-convert antigravity send <id> --surface cli --prompt-file <path>` when
+asked to send a follow-up and wait for the reply. Use `--prompt` for short text.
+
+For a desktop thread, `agent-convert antigravity resume <id> --surface desktop
+--json` returns the picker shortcut, search text, UUID, and workspace. Open the
+app with computer use if available. Use the conversation picker to search, then
+compare title, workspace, and preview before selecting a result. Verify the UUID
+in the conversation URL when exposed. The reviewed app exposes a local
+`/c/<uuid>` route. For a requested follow-up, paste it into **Message input**
+after verifying the thread and submit if the user asked to send it. If computer
+use is unavailable, provide the picker handoff printed by `resume`.
+
+If the resume plan has `subagents`, start with its `rootId` conversation and
+follow the entries in order. On desktop, open **Overview → Subagents** and
+choose the `agentLabel`. The reviewed app exposes the selected side-panel
+thread as `tab=subagent_convo__<uuid>` in the conversation URL. Check that UUID
+and, for a requested follow-up, use the side-panel composer for that subagent.
+The main composer addresses the parent. On CLI, resume `rootId` and use
+`/agents` to inspect the subagent. Send to the subagent from the interactive
+client using its `@` mention.
+
+To import a desktop thread into Antigravity CLI, use `agy`'s `/resume` picker
+and select the thread from **Other**. Use the resulting CLI copy's UUID for
+subsequent CLI commands.
+
+## Session conversion
 
 Use the installed `agent-convert` CLI. It owns the mechanical workflow: session
 resolution, target settings, recorded PDF/image adaptation, labeled peer
