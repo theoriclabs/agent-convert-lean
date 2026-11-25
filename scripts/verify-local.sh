@@ -59,6 +59,7 @@ node scripts/test-continuation-probe.mjs
 python3 scripts/test-claude-task-notifications.py
 python3 scripts/test-cursor-ide-transcript.py
 python3 scripts/test-agent-convert.py
+python3 scripts/test-antigravity.py
 python3 scripts/test-claude-cleanup.py
 
 echo "== audit harness self-tests =="

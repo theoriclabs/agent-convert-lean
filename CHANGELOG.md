@@ -5,6 +5,10 @@ lands; move them into a dated version section when publishing a release.
 
 ## [Unreleased]
 
+- Find, inspect, and export local Google Antigravity CLI and desktop threads.
+  Add native CLI resume and follow-up prompts, desktop picker instructions,
+  and parent conversation handoffs for named subagents.
+
 ## [0.2.0-preview.5] - 2026-11-24
 
 - Upgrade the core and viewer to Lean 4.36.0. The viewer uses a pinned LeanReact release and includes its assistant-ui binding so it builds from a fresh checkout.

@@ -95,6 +95,41 @@ loom search "distinctive words" --limit 20
 loom text <session-id-or-file>   # JSON rows for indexing
 ```
 
+### Google Antigravity
+
+The installed `agent-convert` CLI can inspect local Antigravity CLI and desktop
+threads. Use `--surface` on thread commands or `--store` on `find` to narrow results.
+
+```sh
+agent-convert antigravity list --json
+agent-convert find "distinctive words" --store antigravity
+agent-convert antigravity show <conversation-id> --surface desktop --tail 5
+agent-convert antigravity transcript <conversation-id> --surface desktop > thread.jsonl
+agent-convert antigravity resume <conversation-id> --surface cli --launch
+agent-convert antigravity send <conversation-id> --surface cli --prompt "Summarize the remaining work."
+agent-convert antigravity resume <conversation-id> --surface desktop --launch
+```
+
+Search covers titles, previews, IDs, and dialogue in available logs. The
+`transcript` command exports Antigravity JSONL, preferring the full log when
+present. Threads without logs can still appear in the list.
+[Antigravity transcript locations](https://antigravity.google/docs/hooks)
+
+For CLI threads, `resume` prints the native `agy` command. Add `--launch` to
+run it. For desktop threads, `resume` gives you the conversation picker
+shortcut and search term. On macOS, `--launch` also opens the app. To import a
+desktop thread into the CLI, select it from the **Other** tab in `agy`'s `/resume`.
+[Desktop search](https://antigravity.google/docs/search/)
+[CLI resume and desktop import](https://antigravity.google/docs/cli/commands/resume/)
+
+Subagents appear in `list`, `find`, and `show` with their recorded labels and
+parent IDs where available. For a subagent UUID, `resume --json` gives the main
+conversation's `rootId` and the `subagents` path. Open the main conversation
+and select the subagent from **Overview → Subagents** on desktop or `/agents`
+in the interactive CLI.
+[Desktop Overview panel](https://antigravity.google/docs/side-panel)
+[CLI Agent Manager](https://antigravity.google/docs/cli/commands/agents)
+
 For agent tool access, see the [MCP server](./mcp/README.md).
 To browse every local session as a chat thread, run the [viewer](./viewer/README.md).
 For changes and design goals, see the [changelog](./CHANGELOG.md) and
