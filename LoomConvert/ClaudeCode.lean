@@ -1,3 +1,4 @@
+import LoomConvert.IRCodec
 import Loom
 import LoomConvert.JsonCompat
 import LoomConvert.SourceVersion
@@ -98,21 +99,6 @@ open Loom
 open Lean (Json)
 
 /-! ## Small Json accessors (Except → Option), distinct from Pi's privates. -/
-
-private def cstr (j : Json) (k : String) : Option String :=
-  (j.getObjVal? k >>= Json.getStr?).toOption
-
-private def cobj (j : Json) (k : String) : Option Json :=
-  (j.getObjVal? k).toOption
-
-private def carr (j : Json) (k : String) : Option (Array Json) :=
-  (j.getObjVal? k >>= Json.getArr?).toOption
-
-private def cbool (j : Json) (k : String) : Bool :=
-  ((j.getObjVal? k >>= Json.getBool?).toOption).getD false
-
-private def cbool? (j : Json) (k : String) : Option Bool :=
-  (j.getObjVal? k >>= Json.getBool?).toOption
 
 private def cClaudeHexDigit (char : Char) : Bool :=
   ('0' <= char && char <= '9') || ('a' <= char && char <= 'f') ||
@@ -355,11 +341,11 @@ private def cBase64ImageLocator (mime data : String) : String :=
 shapes this exporter can reconstruct. Additive or unfamiliar fields stay in an
 open-world block instead of disappearing during the media projection. -/
 private def cExactImageRef? (b : Json) : Option (String × String) := do
-  let src ← cobj b "source"
-  match cstr src "type" with
+  let src ← oobj b "source"
+  match ostr src "type" with
   | some "base64" =>
-      let mime ← cstr src "media_type"
-      let data ← cstr src "data"
+      let mime ← ostr src "media_type"
+      let data ← ostr src "data"
       let expectedSource := Json.mkObj [
         ("type", Json.str "base64"), ("media_type", Json.str mime),
         ("data", Json.str data)]
@@ -369,7 +355,7 @@ private def cExactImageRef? (b : Json) : Option (String × String) := do
       guard (b == expectedBlock)
       pure (mime, cBase64ImageLocator mime data)
   | some "url" =>
-      let url ← cstr src "url"
+      let url ← ostr src "url"
       let expectedSource := Json.mkObj [
         ("type", Json.str "url"), ("url", Json.str url)]
       let expectedBlock := Json.mkObj [
@@ -377,7 +363,7 @@ private def cExactImageRef? (b : Json) : Option (String × String) := do
       guard (b == expectedBlock)
       pure ("image", url)
   | some "file" =>
-      let fileId ← cstr src "file_id"
+      let fileId ← ostr src "file_id"
       let expectedSource := Json.mkObj [
         ("type", Json.str "file"), ("file_id", Json.str fileId)]
       let expectedBlock := Json.mkObj [
@@ -500,7 +486,7 @@ and all six `EnvInfo` fields present as string-or-null; a missing field, wrong
 type, or foreign carrier id refuses (returns `none`) so malformed carriers cannot
 be silently accepted. -/
 private def cDecodeSourceEnv? (j : Json) : Option EnvInfo := do
-  guard (cstr j "carrier" == some claudeSourceEnvCarrierId)
+  guard (ostr j "carrier" == some claudeSourceEnvCarrierId)
   let cwd ← cDecodeNullableString j "cwd"
   let model ← cDecodeNullableString j "model"
   let provider ← cDecodeNullableString j "provider"
@@ -537,7 +523,7 @@ The launch identity is resolved by a hard switch, never a source/target merge:
   supported target key is present the *complete* explicit bundle is required. -/
 
 private def cClaudeExtraString? (t : Transcript) (key : String) : Option String :=
-  t.origin.extras >>= fun extras => cstr extras key
+  t.origin.extras >>= fun extras => ostr extras key
 
 private def cClaudeExtraNonempty? (t : Transcript) (key : String) : Option String :=
   (cClaudeExtraString? t key).bind (fun value =>
@@ -572,7 +558,7 @@ private def cClaudeHasAnyTargetKey (t : Transcript) : Bool :=
   | some _ => false
 
 private def cClaudeSourceEnvCarrier? (t : Transcript) : Option EnvInfo :=
-  t.origin.extras >>= fun extras => cobj extras "source_env" >>= cDecodeSourceEnv?
+  t.origin.extras >>= fun extras => oobj extras "source_env" >>= cDecodeSourceEnv?
 
 /-- Native ⟺ genuine Claude session whose `env` is the physical launch identity.
 Any explicit target key or a restored source-env carrier marks a retargeted
@@ -617,20 +603,10 @@ private def cCallRefRawId (t : Transcript) : CallRef → Option String
       | _ => none
   | .unresolved rawId _ => rawId
 
-private def cHistoricalUserBlockJson : UserBlock → Json
-  | .text text => Json.mkObj [("kind", Json.str "text"), ("text", Json.str text)]
-  | .media mime locator => Json.mkObj [
-      ("kind", Json.str "media"), ("mimeType", Json.str mime),
-      ("locator", Json.str locator)]
-  | .unmodeled label raw => Json.mkObj [
-      ("kind", Json.str "unmodeled"), ("label", Json.str label), ("raw", raw)]
+private def cHistoricalUserBlockJson : UserBlock → Json := toCarrierJson .claude
 
-private def cParseHistoricalUserBlock? (j : Json) : Option UserBlock := do
-  match ← cstr j "kind" with
-  | "text" => pure (.text (← cstr j "text"))
-  | "media" => pure (.media (← cstr j "mimeType") (← cstr j "locator"))
-  | "unmodeled" => pure (.unmodeled (← cstr j "label") (← cobj j "raw"))
-  | _ => none
+private def cParseHistoricalUserBlock? (value : Json) : Option UserBlock :=
+  (Lean.fromJson? value).toOption
 
 private def cClaudeImageSource? (mime locator : String) : Option Json :=
   match locator.dropPrefix? "data:" with
@@ -667,16 +643,7 @@ private def cUnavailableResultPlaceholder? : UserBlock → Option Json
       ("type", Json.str "text"),
       ("text", Json.str s!"[output not retained as readable text: {label}]")])
 
-private def cErrorSignalJson : ErrorSignal → Json
-  | .native isError => Json.mkObj [
-      ("kind", Json.str "native"), ("isError", Json.bool isError)]
-  | .heuristic isError heuristic => Json.mkObj [
-      ("kind", Json.str "heuristic"), ("isError", Json.bool isError),
-      ("method", Json.str heuristic)]
-  | .structured isError source => Json.mkObj [
-      ("kind", Json.str "structured"), ("isError", Json.bool isError),
-      ("source", Json.str source)]
-  | .unrecorded => Json.mkObj [("kind", Json.str "unrecorded")]
+private def cErrorSignalJson : ErrorSignal → Json := toCarrierJson .claude
 
 /-- Only recorded or structured status can assert a native error. Heuristic
 values remain reversible metadata on the native tool-result record. -/
@@ -685,14 +652,8 @@ def errorBool : ErrorSignal → Bool := ErrorSignal.failureFlag
 example : errorBool (.heuristic true "codexOutputIndicatesError (codexAdapter.ts:75)") =
     false := by decide
 
-private def cParseErrorSignal? (j : Json) : Option ErrorSignal := do
-  match ← cstr j "kind" with
-  | "native" => pure (.native (← cbool? j "isError"))
-  | "inferred" => pure (.heuristic (← cbool? j "isError") (← cstr j "heuristic"))
-  | "heuristic" => pure (.heuristic (← cbool? j "isError") (← cstr j "method"))
-  | "structured" => pure (.structured (← cbool? j "isError") (← cstr j "source"))
-  | "unrecorded" => pure .unrecorded
-  | _ => none
+private def cParseErrorSignal? (value : Json) : Option ErrorSignal :=
+  (Lean.fromJson? value).toOption
 
 example : cParseErrorSignal? (Json.mkObj [("kind", Json.str "inferred"),
     ("isError", Json.bool true), ("heuristic", Json.str "legacy")]) =
@@ -701,33 +662,13 @@ example : cParseErrorSignal? (Json.mkObj [("kind", Json.str "inferred"),
 example : cParseErrorSignal? (cErrorSignalJson (.structured true "exit_code")) =
     some (.structured true "exit_code") := by native_decide
 
-private def cCanonicalToolName : CanonicalTool → String
-  | .bash => "bash"
-  | .read => "read"
-  | .write => "write"
-  | .edit => "edit"
-  | .grep => "grep"
-  | .glob => "glob"
-  | .webFetch => "webFetch"
-  | .webSearch => "webSearch"
-  | .agentSpawn => "agentSpawn"
-  | .applyPatch => "applyPatch"
+private def cCanonicalToolName : CanonicalTool → String := canonicalToolToWireString
 
-private def cParseCanonicalTool? : String → Option CanonicalTool
-  | "bash" => some .bash
-  | "read" => some .read
-  | "write" => some .write
-  | "edit" => some .edit
-  | "grep" => some .grep
-  | "glob" => some .glob
-  | "webFetch" => some .webFetch
-  | "webSearch" => some .webSearch
-  | "agentSpawn" => some .agentSpawn
-  | "applyPatch" => some .applyPatch
-  | _ => none
+private def cParseCanonicalTool? (value : String) : Option CanonicalTool :=
+  (Lean.fromJson? (Json.str value)).toOption
 
 private def cParseCanonicalToolField? (j : Json) : Option (Option CanonicalTool) :=
-  match cobj j "canonical" with
+  match oobj j "canonical" with
   | none | some Json.null => some none
   | some (Json.str name) => (cParseCanonicalTool? name).map some
   | some _ => none
@@ -769,13 +710,13 @@ private structure ClaudeHistoricalCall where
 private def parseClaudeHistoricalToolCallCarrier? (text : String) : Option ClaudeHistoricalCall := do
   let encoded ← text.dropPrefix? (claudeHistoricalToolCallCarrierHeader ++ "\n")
   let record ← (Json.parse encoded.toString).toOption
-  guard (cstr record "carrier" == some "agent-convert.claude-tool-call.v1")
-  let name ← cstr record "name"
+  guard (ostr record "carrier" == some "agent-convert.claude-tool-call.v1")
+  let name ← ostr record "name"
   let canonical ← cParseCanonicalToolField? record
-  let args ← cobj record "arguments"
+  let args ← oobj record "arguments"
   pure {
-    block := .toolCall { raw := name, canonical } args (cstr record "id"),
-    occurrence := cstr record "occurrence" }
+    block := .toolCall { raw := name, canonical } args (ostr record "id"),
+    occurrence := ostr record "occurrence" }
 
 private def cCarrierCallRefJson (t : Transcript) : CallRef → Json
   | .resolved entry block => Json.mkObj [
@@ -814,20 +755,20 @@ private def parseClaudeHistoricalToolResultCarrier?
     (text : String) : Option ClaudeHistoricalResult := do
   let encoded ← text.dropPrefix? (claudeHistoricalToolResultCarrierHeader ++ "\n")
   let record ← (Json.parse encoded.toString).toOption
-  guard (cstr record "carrier" == some "agent-convert.claude-tool-result.v1")
-  let callJson ← cobj record "call"
-  let call ← match cstr callJson "kind" with
+  guard (ostr record "carrier" == some "agent-convert.claude-tool-result.v1")
+  let callJson ← oobj record "call"
+  let call ← match ostr callJson "kind" with
     | some "resolved" =>
-        some (.resolved (← cstr callJson "occurrence") (cstr callJson "rawId"))
+        some (.resolved (← ostr callJson "occurrence") (ostr callJson "rawId"))
     | some "unresolved" =>
-        some (.unresolved (cstr callJson "rawId") (← cstr callJson "note"))
+        some (.unresolved (ostr callJson "rawId") (← ostr callJson "note"))
     | _ => none
-  let contentJson ← carr record "content"
+  let contentJson ← oarr record "content"
   let content ← contentJson.toList.mapM cParseHistoricalUserBlock?
-  let error ← cobj record "error" >>= cParseErrorSignal?
+  let error ← oobj record "error" >>= cParseErrorSignal?
   pure {
-    occurrence := ← cstr record "occurrence"
-    call, rawId := cstr record "id", content, error }
+    occurrence := ← ostr record "occurrence"
+    call, rawId := ostr record "id", content, error }
 
 private def cProjectedHistoricalOccurrence?
     (oldEntryIndices : List Nat) (occurrence : String) : Option String := do
@@ -849,8 +790,8 @@ private def cProjectHistoricalCallCarrierText?
     (oldEntryIndices : List Nat) (text : String) : Option String := do
   let encoded ← text.dropPrefix? (claudeHistoricalToolCallCarrierHeader ++ "\n")
   let record ← (Json.parse encoded.toString).toOption
-  guard (cstr record "carrier" == some "agent-convert.claude-tool-call.v1")
-  match cstr record "occurrence" with
+  guard (ostr record "carrier" == some "agent-convert.claude-tool-call.v1")
+  match ostr record "occurrence" with
   | none => pure text
   | some occurrence =>
       let projected ← cProjectedHistoricalOccurrence? oldEntryIndices occurrence
@@ -861,13 +802,13 @@ private def cProjectHistoricalResultCarrierText?
     (oldEntryIndices : List Nat) (text : String) : Option String := do
   let encoded ← text.dropPrefix? (claudeHistoricalToolResultCarrierHeader ++ "\n")
   let record ← (Json.parse encoded.toString).toOption
-  guard (cstr record "carrier" == some "agent-convert.claude-tool-result.v1")
-  let ownOccurrence ← cstr record "occurrence"
+  guard (ostr record "carrier" == some "agent-convert.claude-tool-result.v1")
+  let ownOccurrence ← ostr record "occurrence"
   let projectedOwn ← cProjectedHistoricalOccurrence? oldEntryIndices ownOccurrence
-  let call ← cobj record "call"
+  let call ← oobj record "call"
   let projectedCall :=
-    if cstr call "kind" == some "resolved" then
-      match cstr call "occurrence" >>= cProjectedHistoricalOccurrence? oldEntryIndices with
+    if ostr call "kind" == some "resolved" then
+      match ostr call "occurrence" >>= cProjectedHistoricalOccurrence? oldEntryIndices with
       | some projected => cPutJsonField call "occurrence" (Json.str projected)
       | none => cOverlayJsonObject call (Json.mkObj [
           ("kind", Json.str "unresolved"),
@@ -890,8 +831,8 @@ def claudeMediaCarrierText (mime locator : String) : String :=
 private def parseClaudeMediaCarrier? (text : String) : Option (String × String) := do
   let encoded ← text.dropPrefix? (claudeMediaCarrierHeader ++ "\n")
   let record ← (Json.parse encoded.toString).toOption
-  guard (cstr record "carrier" == some "agent-convert.claude-media.v1")
-  pure (← cstr record "mimeType", ← cstr record "locator")
+  guard (ostr record "carrier" == some "agent-convert.claude-media.v1")
+  pure (← ostr record "mimeType", ← ostr record "locator")
 
 private def claudeUnmodeledAssistantCarrierText (label : String) (raw : Json) : String :=
   claudeUnmodeledAssistantCarrierHeader ++ "\n" ++ (Json.mkObj [
@@ -902,8 +843,8 @@ private def parseClaudeUnmodeledAssistantCarrier?
     (text : String) : Option AssistantBlock := do
   let encoded ← text.dropPrefix? (claudeUnmodeledAssistantCarrierHeader ++ "\n")
   let record ← (Json.parse encoded.toString).toOption
-  guard (cstr record "carrier" == some "agent-convert.claude-assistant-block.v1")
-  pure (.unmodeled (← cstr record "label") (← cobj record "raw"))
+  guard (ostr record "carrier" == some "agent-convert.claude-assistant-block.v1")
+  pure (.unmodeled (← ostr record "label") (← oobj record "raw"))
 
 private def cUnmodeledCarrierText
     (header carrier label : String) (raw : Json) : String :=
@@ -922,8 +863,8 @@ private def cParseUnmodeledCarrier?
     (header carrier text : String) : Option (String × Json) := do
   let encoded ← text.dropPrefix? (header ++ "\n")
   let record ← (Json.parse encoded.toString).toOption
-  guard (cstr record "carrier" == some carrier)
-  pure (← cstr record "label", ← cobj record "raw")
+  guard (ostr record "carrier" == some carrier)
+  pure (← ostr record "label", ← oobj record "raw")
 
 private def parseClaudeUnmodeledUserCarrier? (text : String) : Option UserBlock := do
   let (label, raw) ← cParseUnmodeledCarrier? claudeUnmodeledUserCarrierHeader
@@ -942,7 +883,7 @@ private def cCompactionCoverageJson : CompactionCoverage → Json
       ("firstKept", Json.num (Lean.JsonNumber.fromNat firstKept))]
 
 private def cParseCompactionCoverage? (j : Json) : Option CompactionCoverage := do
-  match ← cstr j "kind" with
+  match ← ostr j "kind" with
   | "unknownPrefix" => pure .unknownPrefix
   | "knownPrefix" =>
       let firstKept ← (j.getObjVal? "firstKept" >>= Json.getNat?).toOption
@@ -974,39 +915,39 @@ private def cTimeProvenanceJson : Time → Option Json
       ("kind", Json.str "absent")])
 
 private def cParseTimeProvenance? (j : Json) : Option Time := do
-  guard (cstr j "carrier" == some "agent-convert.time-provenance.v1")
-  match ← cstr j "kind" with
+  guard (ostr j "carrier" == some "agent-convert.time-provenance.v1")
+  match ← ostr j "kind" with
   | "interpolated" =>
       let ms ← (j.getObjVal? "ms" >>= Json.getNat?).toOption
-      pure (.interpolated ⟨ms⟩ (← cstr j "basis"))
+      pure (.interpolated ⟨ms⟩ (← ostr j "basis"))
   | "sequenced" =>
       pure (.sequenced (← (j.getObjVal? "ordinal" >>= Json.getNat?).toOption))
   | "absent" => pure .absent
   | _ => none
 
 private def cCarrierTimeProvenance? (j : Json) : Option Time := do
-  let marker ← cobj j claudeCarrierMarkerKey
-  guard (cstr marker "protocol" == some claudeCarrierProtocol)
-  cobj marker "timeProvenance" >>= cParseTimeProvenance?
+  let marker ← oobj j claudeCarrierMarkerKey
+  guard (ostr marker "protocol" == some claudeCarrierProtocol)
+  oobj marker "timeProvenance" >>= cParseTimeProvenance?
 
 private def cOptionalNat? (j : Json) (key : String) : Option (Option Nat) :=
-  match cobj j key with
+  match oobj j key with
   | none | some Json.null => some none
   | some value => (value.getNat?).toOption.map some
 
 private def cParseCompactionCarrier? (j : Json) : Option ClaudeCompactionCarrier := do
-  guard (cstr j "type" == some "system")
-  guard (cstr j "subtype" == some "agent_convert_compaction")
-  let marker ← cobj j claudeCarrierMarkerKey
-  guard (cstr marker "protocol" == some claudeCarrierProtocol)
-  let record ← cobj marker "compaction"
-  guard (cstr record "carrier" == some "agent-convert.claude-compaction.v1")
+  guard (ostr j "type" == some "system")
+  guard (ostr j "subtype" == some "agent_convert_compaction")
+  let marker ← oobj j claudeCarrierMarkerKey
+  guard (ostr marker "protocol" == some claudeCarrierProtocol)
+  let record ← oobj marker "compaction"
+  guard (ostr record "carrier" == some "agent-convert.claude-compaction.v1")
   pure {
-    summary := ← cstr record "summary"
-    coverage := ← cobj record "coverage" >>= cParseCompactionCoverage?
+    summary := ← ostr record "summary"
+    coverage := ← oobj record "coverage" >>= cParseCompactionCoverage?
     tokensBefore := ← cOptionalNat? record "tokensBefore"
-    sourceEnvelope := cNonNull (cobj record "sourceEnvelope")
-    sourceBoundary := cNonNull (cobj record "sourceBoundary") }
+    sourceEnvelope := cNonNull (oobj record "sourceEnvelope")
+    sourceBoundary := cNonNull (oobj record "sourceBoundary") }
 
 private def cCompactionCarrierMarker
     (summary : String) (coverage : CompactionCoverage) (tokensBefore : Option Nat)
@@ -1033,20 +974,20 @@ private def cCompactionCarrierMarker
 /-- This stamp describes text already present in the model input. Unlike the
 old system carrier, it never promotes an invisible archive into conversation. -/
 private def cParseContextCompaction? (j : Json) : Option ClaudeCompactionCarrier := do
-  guard (cstr j "type" == some "user")
-  let message ← cobj j "message"
-  guard (cstr message "role" == some "user")
-  let marker ← cobj j claudeCarrierMarkerKey
-  guard (cstr marker "protocol" == some claudeCarrierProtocol)
-  let record ← cobj marker "contextSummary"
+  guard (ostr j "type" == some "user")
+  let message ← oobj j "message"
+  guard (ostr message "role" == some "user")
+  let marker ← oobj j claudeCarrierMarkerKey
+  guard (ostr marker "protocol" == some claudeCarrierProtocol)
+  let record ← oobj marker "contextSummary"
   let synthetic := Json.mkObj [("type", Json.str "system"),
     ("subtype", Json.str "agent_convert_compaction"),
     (claudeCarrierMarkerKey, Json.mkObj [
       ("protocol", Json.str claudeCarrierProtocol), ("compaction", record)])]
   let parsed ← cParseCompactionCarrier? synthetic
-  let expected := if cbool j "isCompactSummary" then parsed.summary
+  let expected := if oboolD j "isCompactSummary" then parsed.summary
     else "[Conversation summary]\n" ++ parsed.summary
-  guard (cstr message "content" == some expected)
+  guard (ostr message "content" == some expected)
   pure parsed
 
 private def cContextCompactionMarker (summary : String) (coverage : CompactionCoverage)
@@ -1064,52 +1005,28 @@ private def cNullableStringJson : Option String → Json
 
 private def cParseNullableStringField?
     (j : Json) (key : String) : Option (Option String) :=
-  match cobj j key with
+  match oobj j key with
   | some Json.null => some none
   | some (Json.str value) => some (some value)
   | _ => none
 
-private def cHistoricalAssistantBlockJson : AssistantBlock -> Json
-  | .text text => Json.mkObj [("kind", Json.str "text"), ("text", Json.str text)]
-  | .thinking thinking signature => Json.mkObj [
-      ("kind", Json.str "thinking"), ("thinking", Json.str thinking),
-      ("signature", signature.map Json.str |>.getD Json.null)]
-  | .toolCall name arguments rawId => Json.mkObj [
-      ("kind", Json.str "toolCall"), ("name", Json.str name.raw),
-      ("canonical", name.canonical.map (Json.str ∘ cCanonicalToolName)
-        |>.getD Json.null),
-      ("arguments", arguments), ("rawId", rawId.map Json.str |>.getD Json.null)]
-  | .media mime locator => Json.mkObj [
-      ("kind", Json.str "media"), ("mimeType", Json.str mime),
-      ("locator", Json.str locator)]
-  | .unmodeled label raw => Json.mkObj [
-      ("kind", Json.str "unmodeled"), ("label", Json.str label), ("raw", raw)]
+private def cHistoricalAssistantBlockJson : AssistantBlock → Json := toCarrierJson .claude
 
-private def cParseHistoricalAssistantBlock? (j : Json) : Option AssistantBlock := do
-  match ← cstr j "kind" with
-  | "text" => pure (.text (← cstr j "text"))
-  | "thinking" => pure (.thinking (← cstr j "thinking")
-      (← cParseNullableStringField? j "signature"))
-  | "toolCall" =>
-      let canonical ← cParseCanonicalToolField? j
-      pure (.toolCall { raw := ← cstr j "name", canonical }
-        (← cobj j "arguments") (← cParseNullableStringField? j "rawId"))
-  | "media" => pure (.media (← cstr j "mimeType") (← cstr j "locator"))
-  | "unmodeled" => pure (.unmodeled (← cstr j "label") (← cobj j "raw"))
-  | _ => none
+private def cParseHistoricalAssistantBlock? (value : Json) : Option AssistantBlock :=
+  (Lean.fromJson? value).toOption
 
 /-- Foreign reasoning is ordinary readable context, never provider-authenticated
 Claude thinking. Ciphertext is retained only in the record-level provenance. -/
 private def cCodexReasoningSummaryText? (raw : Json) : Option String :=
-  match carr raw "summary" with
+  match oarr raw "summary" with
   | none => some ""
   | some summary =>
       (summary.toList.mapM (fun item => do
-        guard (cstr item "type" == some "summary_text")
-        cstr item "text")).map (String.intercalate "\n")
+        guard (ostr item "type" == some "summary_text")
+        ostr item "text")).map (String.intercalate "\n")
 
 private def cCodexReasoningEncryptedContent? (raw : Json) : Option String :=
-  match cstr raw "type", cobj raw "encrypted_content" with
+  match ostr raw "type", oobj raw "encrypted_content" with
   | some _, some (Json.str value) => if value.isEmpty then none else some value
   | _, _ => none
 
@@ -1127,81 +1044,29 @@ private def cReasoningContextBlock? : AssistantBlock → Option Json
   | _ => none
 
 private def cCarrierReasoning? (j : Json) : Option (List (Nat × AssistantBlock)) := do
-  let marker ← cobj j claudeCarrierMarkerKey
-  guard (cstr marker "protocol" == some claudeCarrierProtocol)
-  match cobj marker "reasoning" with
+  let marker ← oobj j claudeCarrierMarkerKey
+  guard (ostr marker "protocol" == some claudeCarrierProtocol)
+  match oobj marker "reasoning" with
   | none => pure []
   | some (.arr values) => values.toList.mapM (fun value => do
-      let block ← cobj value "block" >>= (fun raw => raw.getNat?.toOption)
-      let source ← cobj value "source" >>= cParseHistoricalAssistantBlock?
+      let block ← oobj value "block" >>= (fun raw => raw.getNat?.toOption)
+      let source ← oobj value "source" >>= cParseHistoricalAssistantBlock?
       guard (cReasoningContextBlock? source).isSome
-      guard (value == Json.mkObj [("block", Json.num block),
-        ("source", cHistoricalAssistantBlockJson source)])
+      let rawSource ← oobj value "source"
+      guard (carrierJsonMatches rawSource source)
+      guard (value == Json.mkObj [("block", Json.num block), ("source", rawSource)])
       pure (block, source))
   | _ => none
 
-private def cHistoricalDirectCallRefJson : CallRef -> Json
-  | .resolved entry block => Json.mkObj [
-      ("kind", Json.str "resolved"), ("entry", Json.num entry),
-      ("block", Json.num block)]
-  | .unresolved rawId note => Json.mkObj [
-      ("kind", Json.str "unresolved"),
-      ("rawId", rawId.map Json.str |>.getD Json.null), ("note", Json.str note)]
+private def cHistoricalEnvBlockJson : EnvBlock → Json := toCarrierJson .claude
 
-private def cParseHistoricalDirectCallRef? (j : Json) : Option CallRef := do
-  match ← cstr j "kind" with
-  | "resolved" => pure (.resolved
-      (← (j.getObjVal? "entry" >>= Json.getNat?).toOption)
-      (← (j.getObjVal? "block" >>= Json.getNat?).toOption))
-  | "unresolved" => pure (.unresolved
-      (← cParseNullableStringField? j "rawId") (← cstr j "note"))
-  | _ => none
+private def cParseHistoricalEnvBlock? (value : Json) : Option EnvBlock :=
+  (Lean.fromJson? value).toOption
 
-private def cHistoricalEnvBlockJson : EnvBlock -> Json
-  | .toolResult call content error => Json.mkObj [
-      ("kind", Json.str "toolResult"), ("call", cHistoricalDirectCallRefJson call),
-      ("content", Json.arr (content.map cHistoricalUserBlockJson).toArray),
-      ("error", cErrorSignalJson error)]
-  | .unmodeled label raw => Json.mkObj [
-      ("kind", Json.str "unmodeled"), ("label", Json.str label), ("raw", raw)]
+private def cMetaEventJson : MetaEvent → Json := toCarrierJson .claude
 
-private def cParseHistoricalEnvBlock? (j : Json) : Option EnvBlock := do
-  match ← cstr j "kind" with
-  | "toolResult" =>
-      let content ← carr j "content"
-      pure (.toolResult
-        (← cobj j "call" >>= cParseHistoricalDirectCallRef?)
-        (← content.toList.mapM cParseHistoricalUserBlock?)
-        (← cobj j "error" >>= cParseErrorSignal?))
-  | "unmodeled" => pure (.unmodeled (← cstr j "label") (← cobj j "raw"))
-  | _ => none
-
-private def cMetaEventJson : MetaEvent → Json
-  | .modelChange prev next => Json.mkObj [
-      ("kind", Json.str "modelChange"),
-      ("prev", cNullableStringJson prev), ("next", cNullableStringJson next)]
-  | .thinkingLevelChange prev next => Json.mkObj [
-      ("kind", Json.str "thinkingLevelChange"),
-      ("prev", cNullableStringJson prev), ("next", cNullableStringJson next)]
-  | .permissionMode mode => Json.mkObj [
-      ("kind", Json.str "permissionMode"), ("mode", Json.str mode)]
-  | .branchSummary summary => Json.mkObj [
-      ("kind", Json.str "branchSummary"), ("summary", Json.str summary)]
-  | .custom label raw => Json.mkObj [
-      ("kind", Json.str "custom"), ("label", Json.str label), ("raw", raw)]
-
-private def cParseMetaEvent? (j : Json) : Option MetaEvent := do
-  match ← cstr j "kind" with
-  | "modelChange" =>
-      pure (.modelChange (← cParseNullableStringField? j "prev")
-        (← cParseNullableStringField? j "next"))
-  | "thinkingLevelChange" =>
-      pure (.thinkingLevelChange (← cParseNullableStringField? j "prev")
-        (← cParseNullableStringField? j "next"))
-  | "permissionMode" => pure (.permissionMode (← cstr j "mode"))
-  | "branchSummary" => pure (.branchSummary (← cstr j "summary"))
-  | "custom" => pure (.custom (← cstr j "label") (← cobj j "raw"))
-  | _ => none
+private def cParseMetaEvent? (value : Json) : Option MetaEvent :=
+  (Lean.fromJson? value).toOption
 
 private def cInertPayloadJson : Payload → Option Json
   | .userMsg blocks => some (Json.mkObj [
@@ -1221,32 +1086,32 @@ private def cInertPayloadJson : Payload → Option Json
   | _ => none
 
 private def cParseInertPayloadJson? (j : Json) : Option Payload := do
-  match ← cstr j "kind" with
+  match ← ostr j "kind" with
   | "userMsg" =>
-      let blocks ← carr j "blocks"
+      let blocks ← oarr j "blocks"
       pure (.userMsg (← blocks.toList.mapM cParseHistoricalUserBlock?))
   | "assistantMsg" =>
-      let blocks ← carr j "blocks"
+      let blocks ← oarr j "blocks"
       pure (.assistantMsg (← blocks.toList.mapM cParseHistoricalAssistantBlock?))
   | "envMsg" =>
-      let blocks ← carr j "blocks"
+      let blocks ← oarr j "blocks"
       pure (.envMsg (← blocks.toList.mapM cParseHistoricalEnvBlock?))
   | "otherMsg" =>
-      let blocks ← carr j "blocks"
-      pure (.otherMsg (← cstr j "role")
+      let blocks ← oarr j "blocks"
+      pure (.otherMsg (← ostr j "role")
         (← blocks.toList.mapM cParseHistoricalUserBlock?))
-  | "event" => pure (.event (← cobj j "event" >>= cParseMetaEvent?))
+  | "event" => pure (.event (← oobj j "event" >>= cParseMetaEvent?))
   | _ => none
 
 private def cParseInertPayloadCarrier? (j : Json) : Option Payload := do
-  guard (cstr j "type" == some "system")
-  guard (cstr j "subtype" == some "agent_convert_inert")
-  let marker ← cobj j claudeCarrierMarkerKey
-  guard (cstr marker "protocol" == some claudeCarrierProtocol)
-  let record ← cobj marker "inertPayload"
-  guard (cstr record "carrier" ==
+  guard (ostr j "type" == some "system")
+  guard (ostr j "subtype" == some "agent_convert_inert")
+  let marker ← oobj j claudeCarrierMarkerKey
+  guard (ostr marker "protocol" == some claudeCarrierProtocol)
+  let record ← oobj marker "inertPayload"
+  guard (ostr record "carrier" ==
     some "agent-convert.claude-inert-payload.v1")
-  cobj record "payload" >>= cParseInertPayloadJson?
+  oobj record "payload" >>= cParseInertPayloadJson?
 
 /-- The envelope that actually carries an inert payload across the hop.
 
@@ -1297,9 +1162,9 @@ def claudeStructuredToolResultCarrierText (label : String) (raw : Json) : String
 private def parseClaudeStructuredToolResultCarrier? (text : String) : Option UserBlock := do
   let encoded ← text.dropPrefix? (claudeStructuredToolResultCarrierHeader ++ "\n")
   let record ← (Json.parse encoded.toString).toOption
-  guard (cstr record "carrier" == some "agent-convert.tool-result-block.v1")
-  let label ← cstr record "label"
-  let raw ← cobj record "raw"
+  guard (ostr record "carrier" == some "agent-convert.tool-result-block.v1")
+  let label ← ostr record "label"
+  let raw ← oobj record "raw"
   pure (UserBlock.unmodeled label raw)
 
 /-- Preserve Claude's string-or-array tool result content as ordered IR blocks. -/
@@ -1312,9 +1177,9 @@ private def parseToolResultContent
        else UserBlock.text s]
   | some (Json.arr bs) =>
       bs.toList.map (fun (b : Json) =>
-        match cstr b "type" with
+        match ostr b "type" with
         | some "text" =>
-            let text := (cstr b "text").getD ""
+            let text := (ostr b "text").getD ""
             if carrierMarked then
               (parseClaudeStructuredToolResultCarrier? text).getD (UserBlock.text text)
             else UserBlock.text text
@@ -1335,9 +1200,9 @@ private structure ClaudeParsedAssistantBlock where
   wasCarrier : Bool := false
 
 private def cCarrierBlockIndices? (j : Json) : Option (List Nat) := do
-  let marker ← cobj j claudeCarrierMarkerKey
-  guard (cstr marker "protocol" == some claudeCarrierProtocol)
-  match cobj marker "contentBlocks" with
+  let marker ← oobj j claudeCarrierMarkerKey
+  guard (ostr marker "protocol" == some claudeCarrierProtocol)
+  match oobj marker "contentBlocks" with
   | none => pure []
   | some (Json.arr values) =>
       values.toList.mapM (fun value => (value.getNat?).toOption)
@@ -1398,13 +1263,13 @@ back. The block itself stays a real, executable Claude `tool_use`.
 `cValidateConversationCarrierMarker` rejects at schema time; an absent member
 is the ordinary case and yields `[]`. -/
 private def cCarrierToolCanonical? (j : Json) : Option (List (Nat × CanonicalTool)) := do
-  let marker ← cobj j claudeCarrierMarkerKey
-  guard (cstr marker "protocol" == some claudeCarrierProtocol)
-  match cobj marker "toolCanonical" with
+  let marker ← oobj j claudeCarrierMarkerKey
+  guard (ostr marker "protocol" == some claudeCarrierProtocol)
+  match oobj marker "toolCanonical" with
   | none => pure []
   | some (Json.arr values) =>
       values.toList.mapM (fun value => do
-        let blockIdx ← (cobj value "block").bind (fun raw => raw.getNat?.toOption)
+        let blockIdx ← (oobj value "block").bind (fun raw => raw.getNat?.toOption)
         let canonical ← cParseCanonicalToolField? value
         let canonical ← canonical
         pure (blockIdx, canonical))
@@ -1417,18 +1282,18 @@ private def cCarrierToolCanonical (j : Json) : List (Nat × CanonicalTool) :=
 translated into a different native Claude tool. The target call remains the
 executable truth; this sidecar is audit/round-trip provenance only. -/
 private def cCarrierToolTranslation? (j : Json) : Option (List Json) := do
-  let marker ← cobj j claudeCarrierMarkerKey
-  guard (cstr marker "protocol" == some claudeCarrierProtocol)
-  match cobj marker "toolTranslation" with
+  let marker ← oobj j claudeCarrierMarkerKey
+  guard (ostr marker "protocol" == some claudeCarrierProtocol)
+  match oobj marker "toolTranslation" with
   | none => pure []
   | some (Json.arr values) =>
       values.toList.mapM (fun value => do
-        let _ ← (cobj value "block").bind (fun raw => raw.getNat?.toOption)
-        let sourceFormat ← cstr value "sourceFormat"
-        let sourceName ← cstr value "sourceName"
+        let _ ← (oobj value "block").bind (fun raw => raw.getNat?.toOption)
+        let sourceFormat ← ostr value "sourceFormat"
+        let sourceName ← ostr value "sourceName"
         guard (!sourceFormat.isEmpty && !sourceName.isEmpty)
-        let _ ← cobj value "sourceInput"
-        match cobj value "sourceNamespace" with
+        let _ ← oobj value "sourceInput"
+        match oobj value "sourceNamespace" with
         | none | some (.str _) => pure ()
         | _ => none
         pure value)
@@ -1438,32 +1303,34 @@ private def cCarrierToolTranslation (j : Json) : List Json :=
   (cCarrierToolTranslation? j).getD []
 
 private def cCarrierToolErrors? (j : Json) : Option (List (Nat × ErrorSignal)) := do
-  let marker ← cobj j claudeCarrierMarkerKey
-  guard (cstr marker "protocol" == some claudeCarrierProtocol)
-  match cobj marker "toolResultErrors" with
+  let marker ← oobj j claudeCarrierMarkerKey
+  guard (ostr marker "protocol" == some claudeCarrierProtocol)
+  match oobj marker "toolResultErrors" with
   | none => pure []
   | some (Json.arr values) => values.toList.mapM (fun value => do
-      let block ← cobj value "block" >>= (fun raw => raw.getNat?.toOption)
-      let raw ← cobj value "errorSignal"
+      let block ← oobj value "block" >>= (fun raw => raw.getNat?.toOption)
+      let raw ← oobj value "errorSignal"
       let signal ← cParseErrorSignal? raw
-      guard (raw == cErrorSignalJson signal)
+      guard (carrierJsonMatches raw signal)
       guard (value == Json.mkObj [("block", Json.num block), ("errorSignal", raw)])
       pure (block, signal))
   | some _ => none
 
 private def cCarrierUnavailableOutput? (j : Json) :
     Option (List (Nat × Nat × UserBlock)) := do
-  let marker ← cobj j claudeCarrierMarkerKey
-  guard (cstr marker "protocol" == some claudeCarrierProtocol)
-  match cobj marker "unavailableOutput" with
+  let marker ← oobj j claudeCarrierMarkerKey
+  guard (ostr marker "protocol" == some claudeCarrierProtocol)
+  match oobj marker "unavailableOutput" with
   | none => pure []
   | some (.arr values) => values.toList.mapM (fun value => do
-      let block ← cobj value "block" >>= (fun raw => raw.getNat?.toOption)
-      let content ← cobj value "contentIndex" >>= (fun raw => raw.getNat?.toOption)
-      let source ← cobj value "source" >>= cParseHistoricalUserBlock?
+      let block ← oobj value "block" >>= (fun raw => raw.getNat?.toOption)
+      let content ← oobj value "contentIndex" >>= (fun raw => raw.getNat?.toOption)
+      let source ← oobj value "source" >>= cParseHistoricalUserBlock?
       guard (cUnavailableResultPlaceholder? source).isSome
+      let rawSource ← oobj value "source"
+      guard (carrierJsonMatches rawSource source)
       guard (value == Json.mkObj [("block", Json.num block),
-        ("contentIndex", Json.num content), ("source", cHistoricalUserBlockJson source)])
+        ("contentIndex", Json.num content), ("source", rawSource)])
       pure (block, content, source))
   | _ => none
 
@@ -1481,32 +1348,32 @@ private def cCanonicalForBlock
 The carrier is data only: structural fields are always read from the containing
 record, while this copy is retained for later same-format export. -/
 private def cCarrierRawEnvelope? (j : Json) : Option Json := do
-  let marker ← cobj j claudeCarrierMarkerKey
-  guard (cstr marker "protocol" == some claudeCarrierProtocol)
-  let provenance ← cobj marker "provenance"
-  guard (cstr provenance "carrier" ==
+  let marker ← oobj j claudeCarrierMarkerKey
+  guard (ostr marker "protocol" == some claudeCarrierProtocol)
+  let provenance ← oobj marker "provenance"
+  guard (ostr provenance "carrier" ==
     some "agent-convert.claude-envelope-provenance.v1")
-  let raw ← cobj provenance "rawEnvelope"
+  let raw ← oobj provenance "rawEnvelope"
   match raw with
   | Json.obj _ => pure raw
   | _ => none
 
 private def cCarrierIdentityProvenance? (j : Json) : Option Json := do
-  let marker ← cobj j claudeCarrierMarkerKey
-  guard (cstr marker "protocol" == some claudeCarrierProtocol)
-  let identity ← cobj marker "identityProvenance"
-  guard (cstr identity "carrier" ==
+  let marker ← oobj j claudeCarrierMarkerKey
+  guard (ostr marker "protocol" == some claudeCarrierProtocol)
+  let identity ← oobj marker "identityProvenance"
+  guard (ostr identity "carrier" ==
     some "agent-convert.claude-identity-provenance.v1")
-  guard (cstr identity "trust" == some "historical-unverified")
+  guard (ostr identity "trust" == some "historical-unverified")
   pure identity
 
 private def cParseAssistantBlock
     (carrierMarked : Bool) (expectedOccurrence : String)
     (canonicalOverride : Option CanonicalTool)
     (b : Json) : Option ClaudeParsedAssistantBlock :=
-  match cstr b "type" with
+  match ostr b "type" with
   | some "text" =>
-      let t := (cstr b "text").getD ""
+      let t := (ostr b "text").getD ""
       if carrierMarked then
         match parseClaudeHistoricalToolCallCarrier? t with
         | some call =>
@@ -1524,16 +1391,16 @@ private def cParseAssistantBlock
             | none => some { block := .text t }
       else some { block := .text t }
   | some "thinking" =>
-      let t := (cstr b "thinking").getD ""
-      some { block := .thinking t (cstr b "signature") }
+      let t := (ostr b "thinking").getD ""
+      some { block := .thinking t (ostr b "signature") }
   | some "tool_use" =>
       -- `canonicalOverride` comes from the record-level `_agent_convert`
       -- envelope, not from the block: Claude has no wire slot for it. Absent
       -- (the claude-origin case) it is `none` and this is unchanged.
       some { block := .toolCall
-                           { raw := (cstr b "name").getD "",
+                           { raw := (ostr b "name").getD "",
                              canonical := canonicalOverride }
-                           ((cobj b "input").getD (Json.mkObj [])) (cstr b "id") }
+                           ((oobj b "input").getD (Json.mkObj [])) (ostr b "id") }
   | some "image" =>
       match cExactImageRef? b with
       | some (mime, loc) => some { block := .media mime loc }
@@ -1704,8 +1571,8 @@ private def cHistoricalResultArray?
   guard (!blocks.isEmpty)
   blocks.toList.zipIdx.mapM (fun (block, blockIdx) => do
     guard (carrierIndices.contains blockIdx)
-    guard (cstr block "type" == some "text")
-    let result ← parseClaudeHistoricalToolResultCarrier? ((cstr block "text").getD "")
+    guard (ostr block "type" == some "text")
+    let result ← parseClaudeHistoricalToolResultCarrier? ((ostr block "text").getD "")
     guard (result.occurrence == cOccurrence entryIdx blockIdx)
     pure result)
 
@@ -1772,7 +1639,7 @@ private def cProtoExtras (p : Proto) : Option Json :=
   if fields.isEmpty then none else some (Json.mkObj fields)
 
 private def cOriginCarrierBlocks (origin : Origin) : List Nat :=
-  match origin.extras.bind (fun extras => carr extras claudeCarrierBlocksExtrasKey) with
+  match origin.extras.bind (fun extras => oarr extras claudeCarrierBlocksExtrasKey) with
   | some values =>
       match values.toList.mapM (fun value => (value.getNat?).toOption) with
       | some blocks =>
@@ -1806,7 +1673,7 @@ index and therefore remains byte-exact. -/
 def projectClaudeHistoricalCarrierCoordinates
     (oldEntryIndices : List Nat) (entry : Entry) : Payload :=
   let stamped := entry.origin.extras.bind (fun extras =>
-    cstr extras "claudeCarrierDisposition") ==
+    ostr extras "claudeCarrierDisposition") ==
       some "agent-convert-historical-unverified"
   let carrierBlocks := if entry.disposition == .historicalUnverified || stamped then
     cOriginCarrierBlocks entry.origin else []
@@ -1831,8 +1698,8 @@ def projectClaudeHistoricalCarrierCoordinates
 but an explicit mismatched role denotes control/runtime context rather than
 conversation. Such lines remain available to the parent walk as graph nodes. -/
 private def cConversationKind? (j : Json) : Option String :=
-  let kind := cstr j "type"
-  let role := cobj j "message" >>= fun message => cstr message "role"
+  let kind := ostr j "type"
+  let role := oobj j "message" >>= fun message => ostr message "role"
   match kind with
   | some "user" => if role.isNone || role == some "user" then some "user" else none
   | some "assistant" =>
@@ -1840,15 +1707,15 @@ private def cConversationKind? (j : Json) : Option String :=
   | _ => none
 
 private def cPathRecord (j : Json) : Bool :=
-  match cstr j "type" with
+  match ostr j "type" with
   | some "user" | some "assistant" | some "system" => true
   | _ => false
 
 private def cGraphRecord (j : Json) : Bool :=
-  cPathRecord j || cstr j "type" == some "attachment"
+  cPathRecord j || ostr j "type" == some "attachment"
 
 private def cCompactionBoundary (j : Json) : Bool :=
-  cstr j "type" == some "system" && cstr j "subtype" == some "compact_boundary"
+  ostr j "type" == some "system" && ostr j "subtype" == some "compact_boundary"
 
 /-- Records that natively participate in Claude's resumable graph. Ordinary
 system/control records and explicit role mismatches are only graph-addressable
@@ -1857,19 +1724,19 @@ must not compete with a dialogue node that happens to reuse their UUID. -/
 private def cSemanticGraphRecord (j : Json) : Bool :=
   (cConversationKind? j).isSome || cCompactionBoundary j ||
     (cParseCompactionCarrier? j).isSome || (cParseInertPayloadCarrier? j).isSome ||
-    cstr j "type" == some "attachment"
+    ostr j "type" == some "attachment"
 
 private def cKnownStateRecordType (kind : String) : Bool :=
   ["mode", "permission-mode", "queue-operation", "agent-name", "custom-title",
    "ai-title", "pr-link", "file-history-snapshot", "bridge-session"].contains kind
 
 private def cArchivedRecordReason? (j : Json) : Option String :=
-  match cstr j "type" with
+  match ostr j "type" with
   | some "user" =>
-      if (cobj j "message" >>= fun message => cstr message "role") == some "user" then none
+      if (oobj j "message" >>= fun message => ostr message "role") == some "user" then none
       else some "envelope type and message.role disagree; retained as inert provenance"
   | some "assistant" =>
-      if (cobj j "message" >>= fun message => cstr message "role") == some "assistant" then none
+      if (oobj j "message" >>= fun message => ostr message "role") == some "assistant" then none
       else some "envelope type and message.role disagree; retained as inert provenance"
   | some "system" =>
       if cCompactionBoundary j || (cParseCompactionCarrier? j).isSome ||
@@ -1887,10 +1754,10 @@ private def cArchivedRecordReason? (j : Json) : Option String :=
   | none => some "record without a usable type retained as inert provenance"
 
 private def cMkArchivedRecord (j : Json) (reason : String) : ClaudeArchivedRecord :=
-  let message := cobj j "message"
-  { uuid := cstr j "uuid", ts := cstr j "timestamp",
-    kind := (cstr j "type").getD "unknown",
-    role := message >>= fun m => cstr m "role",
+  let message := oobj j "message"
+  { uuid := ostr j "uuid", ts := ostr j "timestamp",
+    kind := (ostr j "type").getD "unknown",
+    role := message >>= fun m => ostr m "role",
     reason := reason, raw := j }
 
 /-- A pointer-selected graph node which produced no dialogue entry still needs
@@ -1899,38 +1766,38 @@ dialogue roles, gives `activeLeaf` the authoritative identity, and lets the
 existing inert carrier reproduce it without pretending it was user content. -/
 private def cAuthoritativeLeafPayload (j : Json) : Payload :=
   .otherMsg "claude.graph-record" [
-    .unmodeled ((cstr j "type").getD "unknown") j]
+    .unmodeled ((ostr j "type").getD "unknown") j]
 
 private def cOptionalStringField?
     (j : Json) (key : String) : Option (Option String) :=
-  match cobj j key with
+  match oobj j key with
   | none => some none
   | some (Json.str value) => some (some value)
   | some _ => none
 
 private def cParseArchivedControlJson? (j : Json) : Option ClaudeArchivedControl := do
   let sourceBlock ← (j.getObjVal? "contentBlock" >>= Json.getNat?).toOption
-  let rawRecord ← cobj j "record"
+  let rawRecord ← oobj j "record"
   let _ ← match rawRecord with | Json.obj _ => some () | _ => none
   pure {
     uuid := ← cOptionalStringField? j "uuid"
     sourceBlock
     ts := ← cOptionalStringField? j "timestamp"
     envelope := {
-      kind := ← cstr j "kind"
-      rendered := ← cstr j "rendered"
-      raw := ← cstr j "raw" }
+      kind := ← ostr j "kind"
+      rendered := ← ostr j "rendered"
+      raw := ← ostr j "raw" }
     rawRecord }
 
 private def cParseArchivedRecordJson? (j : Json) : Option ClaudeArchivedRecord := do
-  let raw ← cobj j "raw"
+  let raw ← oobj j "raw"
   let _ ← match raw with | Json.obj _ => some () | _ => none
   pure {
     uuid := ← cOptionalStringField? j "uuid"
     ts := ← cOptionalStringField? j "timestamp"
-    kind := ← cstr j "kind"
+    kind := ← ostr j "kind"
     role := ← cOptionalStringField? j "role"
-    reason := ← cstr j "reason"
+    reason := ← ostr j "reason"
     raw }
 
 private inductive ClaudeTranscriptProvenance where
@@ -1942,14 +1809,14 @@ private inductive ClaudeTranscriptProvenance where
 
 private def cParseTranscriptProvenanceCarrier?
     (j : Json) : Option ClaudeTranscriptProvenance := do
-  guard (cstr j "type" == some "agent-convert-provenance")
-  let marker ← cobj j claudeCarrierMarkerKey
-  guard (cstr marker "protocol" == some claudeCarrierProtocol)
-  let carrier ← cobj marker "transcriptProvenance"
-  guard (cstr carrier "carrier" ==
+  guard (ostr j "type" == some "agent-convert-provenance")
+  let marker ← oobj j claudeCarrierMarkerKey
+  guard (ostr marker "protocol" == some claudeCarrierProtocol)
+  let carrier ← oobj marker "transcriptProvenance"
+  guard (ostr carrier "carrier" ==
     some "agent-convert.claude-transcript-provenance.v1")
-  let payload ← cobj carrier "payload"
-  match ← cstr carrier "kind" with
+  let payload ← oobj carrier "payload"
+  match ← ostr carrier "kind" with
   | "control" => pure (.control (← cParseArchivedControlJson? payload))
   | "record" => pure (.record (← cParseArchivedRecordJson? payload))
   | "sourceEnv" => pure (.sourceEnv (← cDecodeSourceEnv? payload) j)
@@ -1978,43 +1845,43 @@ retain their original inert record; consumed Codex mirrors retain their exact
 source record and its owning entry. The ordinal is in the emitted record stream.
 Only inert events may be reinserted by this protocol. -/
 private def cEventBatch? (record : Json) : Option Json :=
-  cobj record claudeCarrierMarkerKey >>= fun marker => cNonNull (cobj marker "eventBatch")
+  oobj record claudeCarrierMarkerKey >>= fun marker => cNonNull (oobj marker "eventBatch")
 
 private def cValidateEventBatch? (batch : Json) : Option Unit := do
-  guard (cstr batch "carrier" == some "agent-convert.claude-events.v1")
-  let events ← carr batch "events"
+  guard (ostr batch "carrier" == some "agent-convert.claude-events.v1")
+  let events ← oarr batch "events"
   for event in events do
     let _ ← (event.getObjVal? "beforeEntry" >>= Json.getNat?).toOption
-    let record ← cobj event "record"
-    match ← cstr event "kind" with
+    let record ← oobj event "record"
+    match ← ostr event "kind" with
     | "entry" =>
         match ← cParseInertPayloadCarrier? record with
         | .event _ => pure ()
         | _ => none
     | "annotation" =>
-        guard ((cstr event "originKey").any (fun key =>
+        guard ((ostr event "originKey").any (fun key =>
           key == "codex_item_completed" || key == "codex_command_completions"))
-        let _ ← cstr event "entryUuid"
-        let _ ← match cobj event "sourceIndex" with
+        let _ ← ostr event "entryUuid"
+        let _ ← match oobj event "sourceIndex" with
           | some Json.null => some ()
           | some value => value.getNat?.toOption.map (fun _ => ())
           | none => none
         match record with | .obj _ => pure () | _ => none
     | _ => none
-  let links ← carr batch "parentLinks"
+  let links ← oarr batch "parentLinks"
   for link in links do
-    let _ ← cstr link "uuid"
-    let _ ← cstr link "parentUuid"
-  match cobj batch "leaf" with
+    let _ ← ostr link "uuid"
+    let _ ← ostr link "parentUuid"
+  match oobj batch "leaf" with
   | some Json.null => pure ()
   | some leaf =>
-      let _ ← cstr leaf "eventUuid"
+      let _ ← ostr leaf "eventUuid"
       let _ ← cParseNullableStringField? leaf "physicalUuid"
-      let _ ← cstr leaf "sessionId"
+      let _ ← ostr leaf "sessionId"
   | none => none
-  for control in ← carr batch "controls" do
+  for control in ← oarr batch "controls" do
     let _ ← cParseArchivedControlJson? control
-  for record in ← carr batch "records" do
+  for record in ← oarr batch "records" do
     let _ ← cParseArchivedRecordJson? record
 
 private def cEventAncestor (fuel : Nat) (events : List Json)
@@ -2023,9 +1890,9 @@ private def cEventAncestor (fuel : Nat) (events : List Json)
   | 0, _ => uuid
   | _ + 1, none => none
   | n + 1, some id =>
-      match events.find? (fun record => cstr record "uuid" == some id) with
+      match events.find? (fun record => ostr record "uuid" == some id) with
       | none => some id
-      | some record => cEventAncestor n events (cstr record "parentUuid")
+      | some record => cEventAncestor n events (ostr record "parentUuid")
 
 /-- Expand the inert batch for Loom's own importer only. The physical parent
 must agree with the collapsed event ancestry, so edited graph links cannot be
@@ -2045,110 +1912,110 @@ private def cExpandEventBatch (records : List Json) : Except String (List Json) 
   | batch :: _ =>
       if (cValidateEventBatch? batch).isNone then
         throw "malformed Claude event batch"
-      let events := ((carr batch "events").getD #[]).toList
-      let entries := events.filter (fun event => cstr event "kind" == some "entry")
-      let rawEntries := entries.filterMap (fun event => cobj event "record")
-      let physical := records.filter (fun record => (cstr record "uuid").isSome)
+      let events := ((oarr batch "events").getD #[]).toList
+      let entries := events.filter (fun event => ostr event "kind" == some "entry")
+      let rawEntries := entries.filterMap (fun event => oobj event "record")
+      let physical := records.filter (fun record => (ostr record "uuid").isSome)
       if entries.any (fun event =>
           ((event.getObjVal? "beforeEntry" >>= Json.getNat?).toOption.getD 0) > physical.length) then
         throw "malformed Claude event batch: beforeEntry is out of range"
-      let ids := rawEntries.filterMap (fun record => cstr record "uuid")
+      let ids := rawEntries.filterMap (fun record => ostr record "uuid")
       if ids.length != rawEntries.length || ids.eraseDups.length != ids.length ||
-          physical.any (fun record => (cstr record "uuid").any ids.contains) then
+          physical.any (fun record => (ostr record "uuid").any ids.contains) then
         throw "malformed Claude event batch: duplicate or missing event identity"
       for event in events do
-        if cstr event "kind" == some "annotation" then
+        if ostr event "kind" == some "annotation" then
           if !(physical.zipIdx.any (fun (record, i) =>
-              cstr record "uuid" == cstr event "entryUuid" &&
+              ostr record "uuid" == ostr event "entryUuid" &&
               (event.getObjVal? "beforeEntry" >>= Json.getNat?).toOption == some i)) then
             throw "malformed Claude event batch: annotation has no matching physical entry position"
-      let links := ((carr batch "parentLinks").getD #[]).toList
-      let linkIds := links.filterMap (fun link => cstr link "uuid")
+      let links := ((oarr batch "parentLinks").getD #[]).toList
+      let linkIds := links.filterMap (fun link => ostr link "uuid")
       if linkIds.eraseDups.length != linkIds.length then
         throw "malformed Claude event batch: duplicate parent link"
       for link in links do
-        let child ← match physical.find? (fun record => cstr record "uuid" == cstr link "uuid") with
+        let child ← match physical.find? (fun record => ostr record "uuid" == ostr link "uuid") with
           | some child => pure child
           | none => throw "malformed Claude event batch: parent link has no physical child"
-        if !(cstr link "parentUuid").any ids.contains ||
-            cstr child "parentUuid" != cEventAncestor (ids.length + 1) rawEntries (cstr link "parentUuid") then
+        if !(ostr link "parentUuid").any ids.contains ||
+            ostr child "parentUuid" != cEventAncestor (ids.length + 1) rawEntries (ostr link "parentUuid") then
           throw "malformed Claude event batch: parent link disagrees with physical ancestry"
       let mut expanded : List Json := []
       let mut position := 0
       for record in records do
-        if (cstr record "uuid").isSome then
+        if (ostr record "uuid").isSome then
           expanded := expanded ++ (entries.filterMap (fun event =>
             if (event.getObjVal? "beforeEntry" >>= Json.getNat?).toOption == some position
-            then cobj event "record" else none))
+            then oobj event "record" else none))
           position := position + 1
-        let record := match links.find? (fun link => cstr link "uuid" == cstr record "uuid") with
+        let record := match links.find? (fun link => ostr link "uuid" == ostr record "uuid") with
           | some link => cOverlayJsonObject record (Json.mkObj [
-              ("parentUuid", (cobj link "parentUuid").getD Json.null)])
+              ("parentUuid", (oobj link "parentUuid").getD Json.null)])
           | none => record
         -- A resumed native turn points to the last physical conversation node.
         -- Restore any trailing event between that node and the appended turn.
-        let record := match cNonNull (cobj batch "leaf") with
+        let record := match cNonNull (oobj batch "leaf") with
           | some leaf =>
               let trailingPosition := entries.findSome? (fun event => do
-                let raw ← cobj event "record"
-                guard (cstr raw "uuid" == cstr leaf "eventUuid")
+                let raw ← oobj event "record"
+                guard (ostr raw "uuid" == ostr leaf "eventUuid")
                 (event.getObjVal? "beforeEntry" >>= Json.getNat?).toOption)
-              if (cstr record "uuid").isSome &&
+              if (ostr record "uuid").isSome &&
                   trailingPosition.any (fun index => position > index) &&
-                  cstr record "parentUuid" == cstr leaf "physicalUuid" then
+                  ostr record "parentUuid" == ostr leaf "physicalUuid" then
                 cOverlayJsonObject record (Json.mkObj [
-                  ("parentUuid", (cobj leaf "eventUuid").getD Json.null)])
+                  ("parentUuid", (oobj leaf "eventUuid").getD Json.null)])
               else record
           | none => record
-        let record := match cobj batch "leaf" with
+        let record := match oobj batch "leaf" with
           | some leaf =>
-              if cstr record "type" == some "last-prompt" &&
-                  cstr record "leafUuid" == cstr leaf "physicalUuid" &&
-                  cstr record "sessionId" == cstr leaf "sessionId" then
+              if ostr record "type" == some "last-prompt" &&
+                  ostr record "leafUuid" == ostr leaf "physicalUuid" &&
+                  ostr record "sessionId" == ostr leaf "sessionId" then
                 cOverlayJsonObject record (Json.mkObj [
-                  ("leafUuid", (cobj leaf "eventUuid").getD Json.null)])
+                  ("leafUuid", (oobj leaf "eventUuid").getD Json.null)])
               else record
           | none => record
         expanded := expanded ++ [record]
       expanded := expanded ++ (entries.filterMap (fun event =>
         if (event.getObjVal? "beforeEntry" >>= Json.getNat?).toOption == some position
-        then cobj event "record" else none))
-      if let some leaf := cNonNull (cobj batch "leaf") then
-        if !(cstr leaf "eventUuid").any ids.contains then
+        then oobj event "record" else none))
+      if let some leaf := cNonNull (oobj batch "leaf") then
+        if !(ostr leaf "eventUuid").any ids.contains then
           throw "malformed Claude event batch: selected event is missing"
-        if cstr leaf "physicalUuid" != cEventAncestor (ids.length + 1) rawEntries (cstr leaf "eventUuid") then
+        if ostr leaf "physicalUuid" != cEventAncestor (ids.length + 1) rawEntries (ostr leaf "eventUuid") then
           throw "malformed Claude event batch: selected event disagrees with physical ancestry"
-        if cobj leaf "physicalUuid" == some Json.null then
+        if oobj leaf "physicalUuid" == some Json.null then
           if !physical.isEmpty then
             throw "malformed Claude event batch: empty physical graph has records"
           expanded := expanded ++ [Json.mkObj [
             ("type", Json.str "last-prompt"),
-            ("sessionId", (cobj leaf "sessionId").getD Json.null),
-            ("leafUuid", (cobj leaf "eventUuid").getD Json.null)]]
+            ("sessionId", (oobj leaf "sessionId").getD Json.null),
+            ("leafUuid", (oobj leaf "eventUuid").getD Json.null)]]
       pure expanded
 
 private def cRestoreEventAnnotations (records : List Json) (entries : List Entry) : List Entry :=
   let events := records.flatMap (fun record =>
-    ((cEventBatch? record >>= fun batch => carr batch "events").getD #[]).toList)
+    ((cEventBatch? record >>= fun batch => oarr batch "events").getD #[]).toList)
   entries.map (fun entry =>
     let attached := events.filter (fun event =>
-      cstr event "kind" == some "annotation" && cstr event "entryUuid" == entry.origin.rawId)
+      ostr event "kind" == some "annotation" && ostr event "entryUuid" == entry.origin.rawId)
     let mirrors := attached.filterMap (fun event =>
-      if cstr event "originKey" == some "codex_item_completed" then
+      if ostr event "originKey" == some "codex_item_completed" then
         some (Json.mkObj [
-          ("recordIndex", (cobj event "sourceIndex").getD Json.null),
-          ("record", (cobj event "record").getD Json.null)]) else none)
-    let commands := attached.filter (fun event => cstr event "originKey" == some "codex_command_completions")
+          ("recordIndex", (oobj event "sourceIndex").getD Json.null),
+          ("record", (oobj event "record").getD Json.null)]) else none)
+    let commands := attached.filter (fun event => ostr event "originKey" == some "codex_command_completions")
     let fields := (if mirrors.isEmpty then [] else [("codex_item_completed", Json.arr mirrors.toArray)]) ++
       (if commands.isEmpty then [] else [
-        ("codex_command_completions", Json.arr (commands.map (fun event => (cobj event "record").getD Json.null)).toArray),
-        ("codex_command_completion_indices", Json.arr (commands.map (fun event => (cobj event "sourceIndex").getD Json.null)).toArray)])
+        ("codex_command_completions", Json.arr (commands.map (fun event => (oobj event "record").getD Json.null)).toArray),
+        ("codex_command_completion_indices", Json.arr (commands.map (fun event => (oobj event "sourceIndex").getD Json.null)).toArray)])
     if fields.isEmpty then entry else
       { entry with origin := { entry.origin with
           extras := some (cOverlayJsonObject (entry.origin.extras.getD (Json.mkObj [])) (Json.mkObj fields)) } })
 
 private def cCompactionTokensBefore? (boundary : Json) : Option Nat := do
-  let metadata ← cobj boundary "compactMetadata"
+  let metadata ← oobj boundary "compactMetadata"
   (metadata.getObjVal? "preTokens" >>= Json.getNat?).toOption
 
 private def cStampNewProtoProvenance
@@ -2168,11 +2035,11 @@ private def cStampNewProtoProvenance
 Their system-origin metadata, rather than XML-looking text alone, identifies
 them as generated controls. Keep literal user examples in the conversation. -/
 private def cSyntheticControlRecord (j : Json) : Bool :=
-  cbool j "isMeta" ||
-    ((cobj j "origin" >>= fun origin => cstr origin "kind") ==
+  oboolD j "isMeta" ||
+    ((oobj j "origin" >>= fun origin => ostr origin "kind") ==
         some "task-notification" &&
-      cstr j "promptSource" == some "system" &&
-      cstr j "turnOrigin" == some "task_notification")
+      ostr j "promptSource" == some "system" &&
+      ostr j "turnOrigin" == some "task_notification")
 
 /-- A peer message: Claude Code 2.1 relays another agent's message (a subagent's hand-back, a
 teammate's note) as a `user` line with `promptSource: "system"`, `turnOrigin: "peer"` and an
@@ -2185,12 +2052,12 @@ private structure ClaudePeerMessage where
   handback : Bool
 
 private def cPeerMessage? (j : Json) : Option ClaudePeerMessage := do
-  guard (cstr j "promptSource" == some "system" && cstr j "turnOrigin" == some "peer")
-  let origin ← cobj j "origin"
-  guard (cstr origin "kind" == some "peer")
-  let sender ← cstr origin "from"
-  let body ← cstr origin "body"
-  pure { sender, name := cstr origin "name", body, handback := cbool origin "handback" }
+  guard (ostr j "promptSource" == some "system" && ostr j "turnOrigin" == some "peer")
+  let origin ← oobj j "origin"
+  guard (ostr origin "kind" == some "peer")
+  let sender ← ostr origin "from"
+  let body ← ostr origin "body"
+  pure { sender, name := ostr origin "name", body, handback := oboolD origin "handback" }
 
 /-- The peer message as conversation: who sent it, then its body verbatim. -/
 private def cPeerMessageText (peer : ClaudePeerMessage) : String :=
@@ -2203,11 +2070,11 @@ private def cPeerMessageText (peer : ClaudePeerMessage) : String :=
 `CallRef`s resolve against `tmap`, which is populated by the assistant lines
 that precede them (a well-formed source calls before it results). -/
 private def stepLine (byUuid : List (String × Json)) (acc : Acc) (j : Json) : Acc :=
-  let mj := (cobj j "message").getD Json.null
+  let mj := (oobj j "message").getD Json.null
   let raw := (cCarrierRawEnvelope? j).getD j
-  let uuid := cstr j "uuid"
-  let parentUuid := cstr j "parentUuid"
-  let ts := cstr j "timestamp"
+  let uuid := ostr j "uuid"
+  let parentUuid := ostr j "parentUuid"
+  let ts := ostr j "timestamp"
   let carrierIndices := cCarrierBlockIndices j
   let toolCanonical := cCarrierToolCanonical j
   let syntheticControl := cSyntheticControlRecord j
@@ -2239,7 +2106,7 @@ private def stepLine (byUuid : List (String × Json)) (acc : Acc) (j : Json) : A
           (rawEnvelope := carrier.sourceEnvelope)
           (rawCompactionBoundary := carrier.sourceBoundary)) }
   | none, none, some "assistant" =>
-      let content := (carr mj "content").getD #[]
+      let content := (oarr mj "content").getD #[]
       let entryIdx := acc.protos.size
       let parsed := content.toList.zipIdx.filterMap (fun (b, sourceIdx) =>
         cParseAssistantBlock (carrierIndices.contains sourceIdx)
@@ -2270,14 +2137,14 @@ private def stepLine (byUuid : List (String × Json)) (acc : Acc) (j : Json) : A
             (rawEnvelope := summary.sourceEnvelope)
             (rawCompactionBoundary := summary.sourceBoundary)
         { acc with protos := acc.protos.push { proto with
-            contextSummaryNative := some (cbool j "isCompactSummary") } }
+            contextSummaryNative := some (oboolD j "isCompactSummary") } }
       else if let some peer := cPeerMessage? j then
         { acc with protos := acc.protos.push (mkProto uuid parentUuid ts
             (Payload.otherMsg "peer" [UserBlock.text (cPeerMessageText peer)])
             (rawEnvelope := some raw)) }
       else
-      if cbool j "isCompactSummary" then
-        let summary := (cstr mj "content").getD ""
+      if oboolD j "isCompactSummary" then
+        let summary := (ostr mj "content").getD ""
         let boundaryFromParent := parentUuid.bind (fun parent =>
           (byUuid.find? (fun item => item.1 == parent)).map Prod.snd) |>.filter
             cCompactionBoundary
@@ -2291,7 +2158,7 @@ private def stepLine (byUuid : List (String × Json)) (acc : Acc) (j : Json) : A
         { acc with protos := acc.protos.push (mkProto uuid parentUuid ts
             (.compaction summary .unknownPrefix (boundary >>= cCompactionTokensBefore?))
             (rawEnvelope := some raw) (rawCompactionBoundary := boundary)) }
-      else match cobj mj "content" with
+      else match oobj mj "content" with
       | some (Json.str s) =>
           cPushUserText acc uuid parentUuid ts 0 (carrierIndices.contains 0)
             syntheticControl s raw
@@ -2305,28 +2172,28 @@ private def stepLine (byUuid : List (String × Json)) (acc : Acc) (j : Json) : A
           | none =>
               blks.toList.zipIdx.foldl (fun (a : Acc) (b, sourceIdx) =>
                 let carrierMarked := carrierIndices.contains sourceIdx
-                match cstr b "type" with
+                match ostr b "type" with
                 | some "tool_result" =>
                     let curIdx := a.protos.size
-                    let tid := (cstr b "tool_use_id").getD ""
+                    let tid := (ostr b "tool_use_id").getD ""
                     let matchingCalls := a.tmap.filter (fun kv =>
                       kv.1 == tid && kv.2.1 < curIdx && !a.matchedCalls.contains kv.2)
                     let call :=
                       match matchingCalls.map Prod.snd with
                       | [(e, bi)] => CallRef.resolved e bi
-                      | [] => CallRef.unresolved (cstr b "tool_use_id")
+                      | [] => CallRef.unresolved (ostr b "tool_use_id")
                           "no unmatched earlier tool_use occurrence"
-                      | _ => CallRef.unresolved (cstr b "tool_use_id")
+                      | _ => CallRef.unresolved (ostr b "tool_use_id")
                           "ambiguous tool_use_id: multiple unmatched earlier occurrences"
                     let resultBlocks := cRestoreUnavailableOutput j sourceIdx
-                      (parseToolResultContent carrierMarked (cobj b "content"))
+                      (parseToolResultContent carrierMarked (oobj b "content"))
                     -- A carrier-marked result is inert historical data: keep the
                     -- honest `.unrecorded` and infer nothing. For live results an
                     -- absent `is_error` is inferred from the output text (see
                     -- claudeStatusHeuristic above) so targets that require a
                     -- terminal status stay reachable without asserting a value
                     -- the source never wrote.
-                    let errSignal := match cobj b "is_error" with
+                    let errSignal := match oobj b "is_error" with
                       | some (Json.bool value) => ErrorSignal.native value
                       | _ => if carrierMarked then ErrorSignal.unrecorded
                         else ErrorSignal.heuristic
@@ -2345,7 +2212,7 @@ private def stepLine (byUuid : List (String × Json)) (acc : Acc) (j : Json) : A
                           | _ => none)),
                       matchedCalls := cRememberResolvedCall a.matchedCalls call }
                 | some "text" =>
-                    let t := (cstr b "text").getD ""
+                    let t := (ostr b "text").getD ""
                     cPushUserText a uuid parentUuid ts sourceIdx carrierMarked
                       syntheticControl t raw
                 | some "image" =>
@@ -2378,7 +2245,7 @@ leaf, follow `parentUuid` to root, keep the user/assistant lines, and chain them
 **sequentially** (parent = previous kept entry) as the TS oracle does. -/
 
 /-- Timestamp of a line (missing → ""), for the newest-leaf pick. -/
-private def clTs (j : Json) : String := (cstr j "timestamp").getD ""
+private def clTs (j : Json) : String := (ostr j "timestamp").getD ""
 
 /-- Fold to the newest line, ties → earliest in original order (replace only on a
 strictly-greater timestamp) — the head of a stable descending sort, i.e. what
@@ -2399,12 +2266,12 @@ private def walkLeafToRoot
   | 0, _, _ => []
   | _+1, none, _ => []
   | fuel+1, some cur, seen =>
-      match cstr cur "uuid" with
+      match ostr cur "uuid" with
       | none => []
       | some u =>
         if seen.contains u then []
         else
-          let parent := (cstr cur "parentUuid").bind (fun pu =>
+          let parent := (ostr cur "parentUuid").bind (fun pu =>
             (byUuid.find? (fun kv => kv.1 == pu)).map Prod.snd)
           let rest := walkLeafToRoot byUuid fuel parent (u :: seen)
           if cPathRecord cur then cur :: rest else rest
@@ -2551,7 +2418,7 @@ private def cSchemaError (line : Nat) (path detail : String) : Except String α 
 
 private def cRequireString
     (line : Nat) (path key : String) (j : Json) : Except String String :=
-  match cobj j key with
+  match oobj j key with
   | none => cSchemaError line (path ++ key) "is required"
   | some (Json.str value) => .ok value
   | some _ => cSchemaError line (path ++ key) "must be a string"
@@ -2570,7 +2437,7 @@ private def cRequireUuidString
 
 private def cRequireObject
     (line : Nat) (path key : String) (j : Json) : Except String Json :=
-  match cobj j key with
+  match oobj j key with
   | none => cSchemaError line (path ++ key) "is required"
   | some value@(Json.obj _) => .ok value
   | some _ => cSchemaError line (path ++ key) "must be an object"
@@ -2616,7 +2483,7 @@ private def cValidateCarrierProtocol
   match record.getObjVal? claudeCarrierMarkerKey with
   | .error _ => pure ()
   | .ok marker@(Json.obj _) =>
-      match cstr marker "protocol" with
+      match ostr marker "protocol" with
       | some protocol =>
           if protocol == claudeCarrierProtocol then pure ()
           else cSchemaError line (claudeCarrierMarkerKey ++ ".protocol")
@@ -2643,7 +2510,7 @@ private def cValidateConversationCarrierMarker
         cSchemaError line claudeCarrierMarkerKey
           "has no recognized conversation-carrier payload"
       else pure ()
-      if (cobj marker "contextSummary").isSome && (cParseContextCompaction? record).isNone then
+      if (oobj marker "contextSummary").isSome && (cParseContextCompaction? record).isNone then
         cSchemaError line (claudeCarrierMarkerKey ++ ".contextSummary")
           "must match the model-facing user summary"
       else pure ()
@@ -2668,7 +2535,7 @@ private def cValidateConversationCarrierMarker
           let nativeCallIndices : List Nat := match content with
             | Json.arr blocks => blocks.toList.zipIdx.filterMap
                 (fun (block, blockIdx) =>
-                  if cstr block "type" == some "tool_use" then some blockIdx else none)
+                  if ostr block "type" == some "tool_use" then some blockIdx else none)
             | _ => []
           pairs.forM (fun (blockIdx, _) =>
             if nativeCallIndices.contains blockIdx then pure ()
@@ -2689,7 +2556,7 @@ private def cValidateConversationCarrierMarker
                 (claudeCarrierMarkerKey ++ ".toolTranslation")
                 "must list block/sourceFormat/sourceName/sourceInput members")
           let indices := translations.filterMap (fun value =>
-            (cobj value "block").bind (fun raw => raw.getNat?.toOption))
+            (oobj value "block").bind (fun raw => raw.getNat?.toOption))
           if cHasDuplicateNat indices then
             cSchemaError line (claudeCarrierMarkerKey ++ ".toolTranslation")
               "must not contain duplicate block indices"
@@ -2697,7 +2564,7 @@ private def cValidateConversationCarrierMarker
           let nativeCallIndices : List Nat := match content with
             | Json.arr blocks => blocks.toList.zipIdx.filterMap
                 (fun (block, blockIdx) =>
-                  if cstr block "type" == some "tool_use" then some blockIdx else none)
+                  if ostr block "type" == some "tool_use" then some blockIdx else none)
             | _ => []
           indices.forM (fun blockIdx =>
             if nativeCallIndices.contains blockIdx then pure ()
@@ -2722,12 +2589,12 @@ private def cValidateConversationCarrierMarker
                 | some block => pure block
                 | none => cSchemaError line "toolResultErrors.block" "is out of range"
               | _ => cSchemaError line "toolResultErrors.block" "requires content array"
-            if cstr block "type" != some "tool_result" then
+            if ostr block "type" != some "tool_result" then
               cSchemaError line "toolResultErrors.block" "must address a native tool_result"
             else pure ()
             let agrees := match signal with
-              | .unrecorded => (cobj block "is_error").isNone
-              | _ => cbool? block "is_error" == some (errorBool signal)
+              | .unrecorded => (oobj block "is_error").isNone
+              | _ => obool block "is_error" == some (errorBool signal)
             if !agrees then
               cSchemaError line "toolResultErrors.errorSignal"
                 "contradicts the emitted native error flag"
@@ -2766,10 +2633,10 @@ private def cValidateConversationCarrierMarker
                 | some block => pure block
                 | none => cSchemaError line "unavailableOutput.block" "is out of range"
               | _ => cSchemaError line "unavailableOutput.block" "requires content array"
-            if cstr block "type" != some "tool_result" then
+            if ostr block "type" != some "tool_result" then
               cSchemaError line "unavailableOutput.block" "must address a native tool_result"
             else pure ()
-            let actual := carr block "content" >>= (fun blocks => blocks[contentIndex]?)
+            let actual := oarr block "content" >>= (fun blocks => blocks[contentIndex]?)
             if actual != cUnavailableResultPlaceholder? source then
               cSchemaError line "unavailableOutput.source" "does not match its native placeholder"
             else pure ())
@@ -2805,13 +2672,13 @@ private def cValidateConversationCarrierMarker
             | Json.arr blocks => blocks.toList.zipIdx.mapM (fun (block, blockIdx) =>
                 match block with
                 | Json.obj _ =>
-                    if cstr block "type" != some "text" then
+                    if ostr block "type" != some "text" then
                       if indices.contains blockIdx then
                         cSchemaError line s!"message.content[{blockIdx}].type"
                           "a marked carrier block must be text"
                       else pure ""
                     else
-                      match cstr block "text" with
+                      match ostr block "text" with
                       | some text => pure text
                       | none => cSchemaError line s!"message.content[{blockIdx}].text"
                           "is required and must be a string"
@@ -2880,7 +2747,7 @@ private def cValidateContentBlocks
             pure ()
         | "thinking" =>
             let _ ← cRequireString line path "thinking" block
-            match cobj block "signature" with
+            match oobj block "signature" with
             | none | some (Json.str _) => pure ()
             | some _ => cSchemaError line (path ++ "signature") "must be a string"
         | "tool_use" =>
@@ -2898,10 +2765,10 @@ private def cValidateContentBlocks
                 "tool_result is not valid in an assistant dialogue record"
             else
               let _ ← cRequireNonemptyString line path "tool_use_id" block
-              match cobj block "is_error" with
+              match oobj block "is_error" with
               | none | some (Json.bool _) => pure ()
               | some _ => cSchemaError line (path ++ "is_error") "must be a boolean"
-              match cobj block "content" with
+              match oobj block "content" with
               | none => cSchemaError line (path ++ "content") "is required"
               | some content => cValidateResultContent line (path ++ "content") content
         | "image" => cValidateImageBlock line path block
@@ -2914,7 +2781,7 @@ private def cValidateConversationRecord
   let message ← cRequireObject line "" "message" j
   let role ← cRequireNonemptyString line "message." "role" message
   let compactSummary ←
-    match cobj j "isCompactSummary" with
+    match oobj j "isCompactSummary" with
     | none => pure false
     | some (Json.bool value) => pure value
     | some _ => cSchemaError line "isCompactSummary" "must be a boolean"
@@ -2922,7 +2789,7 @@ private def cValidateConversationRecord
     cSchemaError line "isCompactSummary"
       "is only valid on a user envelope with message.role user"
   else pure ()
-  let content ← match cobj message "content" with
+  let content ← match oobj message "content" with
   | none => cSchemaError line "message.content" "is required"
   | some content@(Json.str _) =>
       if kind == "assistant" then
@@ -2942,14 +2809,14 @@ private def cValidateGraphIdentity
     (line : Nat) (j : Json) : Except String Unit := do
   let _ ← cRequireUuidString line "" "uuid" j
   let _ ← cRequireUuidString line "" "sessionId" j
-  match cobj j "parentUuid" with
+  match oobj j "parentUuid" with
   | none => cSchemaError line "parentUuid" "is required"
   | some Json.null => pure ()
   | some (Json.str value) =>
       if claudeUuidValid value then pure ()
       else cSchemaError line "parentUuid" "must be a UUID or null"
   | some _ => cSchemaError line "parentUuid" "must be a string or null"
-  match cobj j "forkedFrom" with
+  match oobj j "forkedFrom" with
   | none => pure ()
   | some fork@(Json.obj _) =>
       let _ ← cRequireUuidString line "forkedFrom." "sessionId" fork
@@ -2959,11 +2826,11 @@ private def cValidateGraphIdentity
 
 private def cValidateCarrierTimeProvenance
     (line : Nat) (record : Json) : Except String Unit :=
-  match cobj record claudeCarrierMarkerKey with
+  match oobj record claudeCarrierMarkerKey with
   | some marker =>
-      if cstr marker "protocol" != some claudeCarrierProtocol then pure ()
+      if ostr marker "protocol" != some claudeCarrierProtocol then pure ()
       else
-        match cobj marker "timeProvenance" with
+        match oobj marker "timeProvenance" with
         | none => pure ()
         | some _ =>
             if (cCarrierTimeProvenance? record).isSome then pure ()
@@ -2990,19 +2857,19 @@ private def cValidateRecord (j : Json) (index : Nat) : Except String Unit := do
         let _ ← cRequireString line "" "content" j
         let metadata ← cRequireObject line "" "compactMetadata" j
         let _ ← cRequireUuidString line "" "logicalParentUuid" j
-        match cobj metadata "preTokens" with
+        match oobj metadata "preTokens" with
         | none => pure ()
         | some value =>
             match value.getNat? with
             | .ok _ => pure ()
             | .error _ =>
                 cSchemaError line "compactMetadata.preTokens" "must be a natural number"
-      else if cstr j "subtype" == some "agent_convert_compaction" then
+      else if ostr j "subtype" == some "agent_convert_compaction" then
         if (cParseCompactionCarrier? j).isSome then cValidateGraphIdentity line j
         else
           cSchemaError line (claudeCarrierMarkerKey ++ ".compaction")
             "is not a valid agent-convert compaction carrier"
-      else if cstr j "subtype" == some "agent_convert_inert" then
+      else if ostr j "subtype" == some "agent_convert_inert" then
         if (cParseInertPayloadCarrier? j).isSome then cValidateGraphIdentity line j
         else
           cSchemaError line (claudeCarrierMarkerKey ++ ".inertPayload")
@@ -3012,7 +2879,7 @@ private def cValidateRecord (j : Json) (index : Nat) : Except String Unit := do
   | "last-prompt" =>
       let _ ← cRequireUuidString line "" "leafUuid" j
       let _ ← cRequireUuidString line "" "sessionId" j
-      match cobj j "lastPrompt" with
+      match oobj j "lastPrompt" with
       | none | some (Json.str _) => pure ()
       | some _ => cSchemaError line "lastPrompt" "must be a string"
   | "agent-convert-provenance" =>
@@ -3026,9 +2893,9 @@ private def cAdjacentCompactionBoundary?
     (records : List (Json × Nat)) (summaryIndex : Nat) : Option (Json × Nat) :=
   records.find? (fun (candidate, index) =>
     index + 1 == summaryIndex && cCompactionBoundary candidate &&
-      cstr candidate "sessionId" ==
+      ostr candidate "sessionId" ==
         (records.find? (fun (_, i) => i == summaryIndex) >>= fun (summary, _) =>
-          cstr summary "sessionId"))
+          ostr summary "sessionId"))
 
 /-- Claude 2.1.274 decouples the `compact_boundary` audit marker from the
 resume-summary message: an `isCompactSummary` record's `parentUuid` now names
@@ -3048,13 +2915,13 @@ private def cValidateCompactionLinks
     (records : List (Json × Nat)) : Except String Unit := do
   let _ ← records.mapM (fun (record, index) => do
     let line := index + 1
-    if cbool record "isCompactSummary" then
-      match cobj record "parentUuid" with
+    if oboolD record "isCompactSummary" then
+      match oobj record "parentUuid" with
       | some (Json.str parent) =>
           let candidates := records.filter (fun (candidate, _) =>
-            cstr candidate "uuid" == some parent)
+            ostr candidate "uuid" == some parent)
           let sameSession := candidates.filter (fun (candidate, _) =>
-            cstr candidate "sessionId" == cstr record "sessionId")
+            ostr candidate "sessionId" == ostr record "sessionId")
           match sameSession with
           | [_] => pure ()
           | [] =>
@@ -3109,13 +2976,13 @@ private def cSourceEnvCarrierPayload? (rawCarrier : Json) : Option Json := do
   match cParseTranscriptProvenanceCarrier? rawCarrier with
   | some (.sourceEnv _ _) => pure ()
   | _ => none
-  let marker ← cobj rawCarrier claudeCarrierMarkerKey
-  let carrier ← cobj marker "transcriptProvenance"
-  cobj carrier "payload"
+  let marker ← oobj rawCarrier claudeCarrierMarkerKey
+  let carrier ← oobj marker "transcriptProvenance"
+  oobj carrier "payload"
 
 private def cClaudeRawSourceEnvCarrier? (t : Transcript) : Option Json := do
   let raw ← t.origin.extras >>= fun extras =>
-    cobj extras claudeSourceEnvRawCarrierExtrasKey
+    oobj extras claudeSourceEnvRawCarrierExtrasKey
   let _ ← cSourceEnvCarrierPayload? raw
   pure raw
 
@@ -3124,11 +2991,11 @@ Unknown record, marker, carrier, and payload fields survive; generated
 discriminators and the current typed `EnvInfo` always win for controlled fields. -/
 private def cSourceEnvCarrierForExport (t : Transcript) : Json :=
   let rawRecord := (cClaudeRawSourceEnvCarrier? t).getD (Json.mkObj [])
-  let rawMarker := (cobj rawRecord claudeCarrierMarkerKey).getD (Json.mkObj [])
-  let rawCarrier := (cobj rawMarker "transcriptProvenance").getD (Json.mkObj [])
-  let rawPayload := (cobj rawCarrier "payload").getD (Json.mkObj [])
+  let rawMarker := (oobj rawRecord claudeCarrierMarkerKey).getD (Json.mkObj [])
+  let rawCarrier := (oobj rawMarker "transcriptProvenance").getD (Json.mkObj [])
+  let rawPayload := (oobj rawCarrier "payload").getD (Json.mkObj [])
   let currentPayload := (t.origin.extras >>= fun extras =>
-    cobj extras "source_env").getD (Json.mkObj [])
+    oobj extras "source_env").getD (Json.mkObj [])
   let payload := cOverlayJsonObject
     (cOverlayJsonObject rawPayload currentPayload) (cSourceEnvJson t.env)
   let carrier := cOverlayJsonObject rawCarrier (Json.mkObj [
@@ -3194,23 +3061,23 @@ private def cResumableRecord (j : Json) : Bool :=
 private def cGraphCandidates
     (records : List (Json × Nat)) (uuid sessionId : String) : List (Json × Nat) :=
   let addressable := records.filter (fun (record, _) =>
-    cGraphRecord record && cstr record "uuid" == some uuid &&
-      cstr record "sessionId" == some sessionId)
+    cGraphRecord record && ostr record "uuid" == some uuid &&
+      ostr record "sessionId" == some sessionId)
   let semantic := addressable.filter (fun (record, _) => cSemanticGraphRecord record)
   if semantic.isEmpty then addressable else semantic
 
 private def cAllGraphCandidates
     (records : List (Json × Nat)) (uuid : String) : List (Json × Nat) :=
   let addressable := records.filter (fun (record, _) =>
-    cGraphRecord record && cstr record "uuid" == some uuid)
+    cGraphRecord record && ostr record "uuid" == some uuid)
   let semantic := addressable.filter (fun (record, _) => cSemanticGraphRecord record)
   if semantic.isEmpty then addressable else semantic
 
 private def cHasExternalLineage (record : Json) : Bool :=
-  match cobj record "forkedFrom" with
+  match oobj record "forkedFrom" with
   | some fork@(Json.obj _) =>
-      cstr fork "messageUuid" == cstr record "uuid" &&
-        cstr fork "sessionId" != cstr record "sessionId"
+      ostr fork "messageUuid" == ostr record "uuid" &&
+        ostr fork "sessionId" != ostr record "sessionId"
   | _ => false
 
 private partial def cValidateSelectedPath
@@ -3235,10 +3102,10 @@ private partial def cValidateSelectedPath
     -- node. Treat that adjacent boundary as the effective soft-cut parent so
     -- pre-compaction history is not pulled into the active leaf walk.
     let adjacentBoundary? :=
-      if cbool record "isCompactSummary" then
+      if oboolD record "isCompactSummary" then
         cAdjacentCompactionBoundary? records index
       else none
-    match cobj record "parentUuid", adjacentBoundary? with
+    match oobj record "parentUuid", adjacentBoundary? with
     | some Json.null, some boundary =>
         let (ancestors, notes) ←
           cValidateSelectedPath records (fuel - 1) boundary (uuid :: seen)
@@ -3277,7 +3144,7 @@ private partial def cValidateSelectedPath
                 else
                   match cAllGraphCandidates records parentUuid with
                   | foreign :: _ =>
-                      let foreignSession := (cstr foreign.1 "sessionId").getD "<missing>"
+                      let foreignSession := (ostr foreign.1 "sessionId").getD "<missing>"
                       cSchemaError line "parentUuid" (s!"references UUID '{parentUuid}' in session '{foreignSession}', expected '{sessionId}'")
                   | [] =>
                       -- A parent UUID absent from the file is normal in real
@@ -3307,7 +3174,7 @@ private def cValidateLastPromptTarget
     (records : List (Json × Nat)) :
     Except String (Option ((Json × Nat) × (Json × Nat))) := do
   let pointers := records.filter (fun (record, _) =>
-    cstr record "type" == some "last-prompt")
+    ostr record "type" == some "last-prompt")
   match pointers.getLast? with
   | none => pure none
   | some pointer@(record, index) =>
@@ -3319,7 +3186,7 @@ private def cValidateLastPromptTarget
     | [] =>
         match cAllGraphCandidates records leafUuid with
         | foreign :: _ =>
-            let targetSession := (cstr foreign.1 "sessionId").getD "<missing>"
+            let targetSession := (ostr foreign.1 "sessionId").getD "<missing>"
             cSchemaError line "leafUuid" (s!"references record in session '{targetSession}', expected '{pointerSession}'")
         | [] => cSchemaError line "leafUuid" s!"references missing UUID '{leafUuid}'"
     | _ => cSchemaError line "leafUuid" (s!"references ambiguous UUID '{leafUuid}'")
@@ -3339,15 +3206,15 @@ def importClaudeCode (text : String) : Except String Transcript := do
     let lastPrompt ← cValidateLastPromptTarget indexed
     let chatLines := indexed.filter (fun (record, _) => cResumableRecord record)
     let hasSameSessionChild := fun (record : Json) =>
-      match cstr record "uuid", cstr record "sessionId" with
+      match ostr record "uuid", ostr record "sessionId" with
       | some uuid, some sessionId => indexed.any (fun (child, _) =>
-          cSemanticGraphRecord child && cstr child "parentUuid" == some uuid &&
-            cstr child "sessionId" == some sessionId)
+          cSemanticGraphRecord child && ostr child "parentUuid" == some uuid &&
+            ostr child "sessionId" == some sessionId)
       | _, _ => false
     -- Leaves = chat lines nothing points to; prefer the newest non-sidechain one,
     -- else the newest leaf, else the last chat line (claudeCode.ts:598-601).
     let leaves := chatLines.filter (fun (record, _) => !(hasSameSessionChild record))
-    let nonSide := leaves.filter (fun (record, _) => !(cbool record "isSidechain"))
+    let nonSide := leaves.filter (fun (record, _) => !(oboolD record "isSidechain"))
     let guessedLeaf : Option (Json × Nat) :=
       ((nonSide.foldl cNewestIndexedLine none).orElse
         (fun _ => leaves.foldl cNewestIndexedLine none)).orElse
@@ -3365,16 +3232,16 @@ def importClaudeCode (text : String) : Except String Transcript := do
       if cPathRecord record then some record else none)
     let selectedIndices := selectedLeafToRoot.map Prod.snd
     let byUuid : List (String × Json) := selectedLeafToRoot.filterMap (fun (record, _) =>
-      (cstr record "uuid").map (fun uuid => (uuid, record)))
-    let sid := cstr leaf.1 "sessionId"
+      (ostr record "uuid").map (fun uuid => (uuid, record)))
+    let sid := ostr leaf.1 "sessionId"
     let stamped := parsed.find? (fun record =>
-      cstr record "sessionId" == sid && (cstr record "cwd").isSome)
-    let cwd := stamped.bind (fun record => cstr record "cwd")
+      ostr record "sessionId" == sid && (ostr record "cwd").isSome)
+    let cwd := stamped.bind (fun record => ostr record "cwd")
     let decodedProvenance := parsed.filterMap cParseTranscriptProvenanceCarrier?
     let batchControls := parsed.flatMap (fun record =>
-      ((cEventBatch? record >>= fun batch => carr batch "controls").getD #[]).toList.filterMap cParseArchivedControlJson?)
+      ((cEventBatch? record >>= fun batch => oarr batch "controls").getD #[]).toList.filterMap cParseArchivedControlJson?)
     let batchRecords := parsed.flatMap (fun record =>
-      ((cEventBatch? record >>= fun batch => carr batch "records").getD #[]).toList.filterMap cParseArchivedRecordJson?)
+      ((cEventBatch? record >>= fun batch => oarr batch "records").getD #[]).toList.filterMap cParseArchivedRecordJson?)
     let decodedControls := batchControls ++ decodedProvenance.filterMap (fun
       | .control value => some value
       | _ => none)
@@ -3391,7 +3258,7 @@ def importClaudeCode (text : String) : Except String Transcript := do
     let folded0 := active.foldl (stepLine byUuid) {
       protos := #[], tmap := [], omap := [], matchedCalls := [],
       controls := decodedControls.toArray, archived := decodedRecords.toArray }
-    let leafUuid := cstr leaf.1 "uuid"
+    let leafUuid := ostr leaf.1 "uuid"
     let representedLeafUuid := folded0.protos.back?.bind (fun proto => proto.uuid)
     -- True when the active branch's newest record is a non-dialogue graph
     -- record (attachment/bridge) that `stepLine` cannot represent as an entry.
@@ -3409,7 +3276,7 @@ def importClaudeCode (text : String) : Except String Transcript := do
       match cParseTranscriptProvenanceCarrier? record with
       | some _ => none
       | none =>
-          if cstr record "type" == some "last-prompt" &&
+          if ostr record "type" == some "last-prompt" &&
               authoritativePointerIndex == some index then none else
           if leafIsGraphRecord && index == leaf.2 then
             some (cMkArchivedRecord record
@@ -3485,7 +3352,7 @@ def importClaudeCode (text : String) : Except String Transcript := do
     let leafNotes : List ImportNote :=
       if lastPrompt.isSome then [] else
         [({ kind := AssumptionKind.activeLeafGuessed,
-            loc := cstr leaf.1 "uuid",
+            loc := ostr leaf.1 "uuid",
             detail := "no last-prompt resume pointer was present; selected newest non-sidechain leaf" }
           : ImportNote)]
     let sourceEnvNotes : List ImportNote :=
@@ -3511,11 +3378,11 @@ def importClaudeCode (text : String) : Except String Transcript := do
     -- Retargeted artifacts restore the inert source env; native sessions keep the
     -- physical record identity as their env. The target launch identity is always
     -- the physical records (`cwd`/`sid`), carried in `origin.extras` when retargeted.
-    let observedVersion := latestSourceVersion (physical.filterMap (fun record => cstr record "version"))
+    let observedVersion := latestSourceVersion (physical.filterMap (fun record => ostr record "version"))
     let env : EnvInfo := match sourceEnv? with
       | some sourceEnv => sourceEnv
       | none => { cwd := cwd, sessionId := sid, harnessVersion := observedVersion }
-    let physicalTimestamp := stamped.bind (fun record => cstr record "timestamp")
+    let physicalTimestamp := stamped.bind (fun record => ostr record "timestamp")
     pure (reviewSourceVersion .claudeCode observedVersion {
       threads := #[{ kind := ThreadKind.main }],
       entries := entries.toArray,
@@ -3887,14 +3754,14 @@ private def cReplaceJsonField (j : Json) (key : String) (value : Json) : Json :=
   | other => other
 
 private def cUuidFixtureField (j : Json) (key : String) : Json :=
-  match cstr j key with
+  match ostr j key with
   | some value => cReplaceJsonField j key (Json.str (cClaudeFixtureUuid value))
   | none => j
 
 private def cUuidFixtureRecord (j : Json) : Json :=
   let record := ["uuid", "parentUuid", "sessionId", "leafUuid", "logicalParentUuid"].foldl
     cUuidFixtureField j
-  match cobj record "forkedFrom" with
+  match oobj record "forkedFrom" with
   | some fork@(Json.obj _) =>
       let fork := ["sessionId", "messageUuid"].foldl cUuidFixtureField fork
       cReplaceJsonField record "forkedFrom" fork
@@ -3985,13 +3852,13 @@ private def cEntryUserText? (t : Transcript) (i : Nat) : Option String := do
 
 private def cArchivedControls? (t : Transcript) : Option (Array Json) := do
   let extras ← t.origin.extras
-  carr extras "raw_control_messages"
+  oarr extras "raw_control_messages"
 
 private def cArchivedControlValue?
     (t : Transcript) (i : Nat) (key : String) : Option String := do
   let controls ← cArchivedControls? t
   let control ← controls[i]?
-  cstr control key
+  ostr control key
 
 private def cControlNoteLocs (t : Transcript) : List String :=
   t.importNotes.filterMap (fun note =>
@@ -4082,7 +3949,7 @@ def claudeTaskOriginControlsArchived : Bool :=
       (cArchivedControls? transcript).map Array.size == some 1 &&
       cArchivedControlValue? transcript 0 "raw" == some claudeControlTaskCompactRaw &&
       ((cArchivedControls? transcript >>= fun controls => controls[0]? >>= fun control =>
-        cobj control "record") == some generated) &&
+        oobj control "record") == some generated) &&
       (Loom.violations transcript).isEmpty
 
 example : claudeTaskOriginControlsArchived = true := by native_decide
@@ -4280,7 +4147,7 @@ private def claudeToolResultContentToJson (blocks : List UserBlock) : Json :=
 /-- A raw open-world block with a native lifecycle discriminator must not skip
 the modeled lifecycle checks merely because it sits in `.unmodeled`. -/
 private def cRawClaudeLifecycleBlock (raw : Json) : Bool :=
-  match cstr raw "type" with
+  match ostr raw "type" with
   | some kind =>
       kind == "tool_use" || kind == "tool_result" ||
       kind.endsWith "_tool_use" || kind.endsWith "_tool_result"
@@ -4500,11 +4367,11 @@ private def cClaudeBashInput (command : String) (cwd : Option String) : Json :=
 
 private def cFirstString (args : Json) : List String → Option String
   | [] => none
-  | key :: rest => (cstr args key).orElse (fun _ => cFirstString args rest)
+  | key :: rest => (ostr args key).orElse (fun _ => cFirstString args rest)
 
 private def cFirstJson (args : Json) : List String → Option Json
   | [] => none
-  | key :: rest => (cobj args key).orElse (fun _ => cFirstJson args rest)
+  | key :: rest => (oobj args key).orElse (fun _ => cFirstJson args rest)
 
 private def cJsonFields (fields : List (String × Option Json)) : Json :=
   Json.mkObj (fields.filterMap (fun (key, value) => value.map (fun v => (key, v))))
@@ -4596,7 +4463,7 @@ private def cClaudeTargetToolAt?
     else none
   if entry.origin.format == Format.claudeCode then rawNative
   else if entry.origin.format == Format.codexCli && name.raw == "exec" then
-    match cstr args "input" >>= cCodexWrappedExec? with
+    match ostr args "input" >>= cCodexWrappedExec? with
     | some wrapped =>
         let input := cClaudeBashInput wrapped.command wrapped.cwd
         pure { name := "Bash", input, canonical := some .bash }
@@ -4749,11 +4616,11 @@ private def cNativeClaudeThinkingAt
   | some entry, some signature =>
       entry.origin.format == .claudeCode && !signature.isEmpty &&
       entry.disposition == .native && !(cEntryCarrierForced t entryIdx blockIdx) &&
-      match entry.origin.extras >>= (fun extras => cobj extras "claudeRawEnvelope")
-          >>= (fun raw => cobj raw "message") >>= (fun msg => carr msg "content")
+      match entry.origin.extras >>= (fun extras => oobj extras "claudeRawEnvelope")
+          >>= (fun raw => oobj raw "message") >>= (fun msg => oarr msg "content")
           >>= (fun blocks => blocks[blockIdx]?) with
-      | some raw => cstr raw "type" == some "thinking" &&
-          cstr raw "thinking" == some text && cstr raw "signature" == some signature
+      | some raw => ostr raw "type" == some "thinking" &&
+          ostr raw "thinking" == some text && ostr raw "signature" == some signature
       | none => false
   | _, _ => false
 
@@ -4817,24 +4684,26 @@ tool_result handling). The `tool_use_id` is recovered from the `CallRef`'s targe
 def claudeEnvBlockToJson (t : Transcript) : EnvBlock → Json
   | block => cEnvBlockToJsonAt t 0 0 block
 
-private def cUserBlockNeedsCarrier : UserBlock → Bool
-  | .media mime locator => (cClaudeImageSource? mime locator).isNone
-  | .unmodeled _ _ => true
-  | _ => false
+private def cMediaSupported (mime locator : String) : Bool :=
+  (cClaudeImageSource? mime locator).isSome
+
+private def cUserBlockNeedsCarrier (block : UserBlock) : Bool :=
+  (Block.commonNeedsCarrier block cMediaSupported).getD false
 
 private def cAssistantBlockNeedsCarrier
-    (t : Transcript) (entry block : Nat) : AssistantBlock → Bool
-  | .toolCall name args rawId =>
-      !(cNativeClaudeCallAt t entry block name args rawId)
-  | .media mime locator => (cClaudeImageSource? mime locator).isNone
-  | .unmodeled _ raw => (cCodexReasoningEncryptedContent? raw).isNone
-  | _ => false
+    (t : Transcript) (entry blockIndex : Nat) (block : AssistantBlock) : Bool :=
+  (Block.commonNeedsCarrier block cMediaSupported
+    (fun _ raw => (cCodexReasoningEncryptedContent? raw).isSome)).getD
+    (match block with
+     | .toolCall name args rawId => !(cNativeClaudeCallAt t entry blockIndex name args rawId)
+     | _ => false)
 
-private def cEnvBlockNeedsCarrier (t : Transcript) : EnvBlock → Bool
-  | .toolResult (.resolved callEntry callBlock) _ _ =>
-      !(cCallAtIsNative t callEntry callBlock)
-  | .toolResult (.unresolved _ _) _ _ => true
-  | .unmodeled _ _ => true
+private def cEnvBlockNeedsCarrier (t : Transcript) (block : EnvBlock) : Bool :=
+  (Block.commonNeedsCarrier block cMediaSupported).getD
+    (match block with
+     | .toolResult (.resolved callEntry callBlock) _ _ => !(cCallAtIsNative t callEntry callBlock)
+     | .toolResult (.unresolved _ _) _ _ => true
+     | _ => false)
 
 def claudeNativeToolCallCount (t : Transcript) : Nat :=
   t.entries.toList.zipIdx.foldl (fun total (entry, entryIdx) =>
@@ -4935,7 +4804,7 @@ from the imported raw envelope so E-I-E does not erase it. -/
 private def cEntryToolTranslation
     (t : Transcript) (entryIdx : Nat) (entry : Entry) : List Json :=
   if entry.origin.format == .claudeCode then
-    (entry.origin.extras >>= fun extras => cobj extras "claudeRawEnvelope")
+    (entry.origin.extras >>= fun extras => oobj extras "claudeRawEnvelope")
       |>.map cCarrierToolTranslation |>.getD []
   else
     match entry.payload with
@@ -4948,8 +4817,8 @@ private def cEntryToolTranslation
                 ("sourceFormat", Json.str (cToolSourceFormatName entry.origin.format)),
                 ("sourceName", Json.str name.raw),
                 ("sourceInput", args)] ++
-                (match entry.origin.extras >>= (fun extras => cobj extras "raw_native_tool_record")
-                    >>= (fun record => cobj record "payload") >>= (fun payload => cstr payload "namespace") with
+                (match entry.origin.extras >>= (fun extras => oobj extras "raw_native_tool_record")
+                    >>= (fun record => oobj record "payload") >>= (fun payload => ostr payload "namespace") with
                  | some sourceNamespace => [("sourceNamespace", Json.str sourceNamespace)]
                  | none => [])))
             else none
@@ -4962,7 +4831,7 @@ the existing inert block carriers keep that representation for E-I-E stability. 
 private def cEntryNeedsWholeHistoricalCarrier
     (t : Transcript) (entryIdx : Nat) (entry : Entry)
     (carrierIndices : List Nat) : Bool :=
-  let splitArchive := entry.origin.extras.any (fun extras => cbool extras "claudeMixedBlockArchive")
+  let splitArchive := entry.origin.extras.any (fun extras => oboolD extras "claudeMixedBlockArchive")
   let userBlockAlreadyInert := fun (block : UserBlock) =>
     match block with
     | .text text =>
@@ -5074,13 +4943,13 @@ private def cSplitMixedEntries (t : Transcript) : Transcript := Id.run do
           | .userMsg blocks => .userMsg (selected.filterMap (fun b => blocks[b]?))
           | .envMsg blocks => .envMsg (selected.filterMap (fun b => blocks[b]?))
           | other => other
-        let raw := entry.origin.extras >>= fun extras => cobj extras "claudeRawEnvelope"
+        let raw := entry.origin.extras >>= fun extras => oobj extras "claudeRawEnvelope"
         let subsetRaw := raw.map (fun envelope =>
-          let message := (cobj envelope "message").getD (Json.mkObj [])
-          let content := (carr message "content").getD #[]
-          let marker := (cobj envelope claudeCarrierMarkerKey).getD (Json.mkObj [])
-          let translations := ((carr marker "toolTranslation").getD #[]).toList.filterMap (fun value => do
-            let b ← cobj value "block" >>= fun n => n.getNat?.toOption
+          let message := (oobj envelope "message").getD (Json.mkObj [])
+          let content := (oarr message "content").getD #[]
+          let marker := (oobj envelope claudeCarrierMarkerKey).getD (Json.mkObj [])
+          let translations := ((oarr marker "toolTranslation").getD #[]).toList.filterMap (fun value => do
+            let b ← oobj value "block" >>= fun n => n.getNat?.toOption
             let localIndex ← (selected.zipIdx.find? (fun pair => pair.1 == b)).map Prod.snd
             pure (cOverlayJsonObject value (Json.mkObj [("block", Json.num localIndex)])))
           cOverlayJsonObject envelope (Json.mkObj [
@@ -5124,11 +4993,11 @@ def prepareClaudeMixedEntries (t : Transcript) : Transcript := cSplitMixedEntrie
 private def cEntryIdentityProvenance?
     (t : Transcript) (uuidPlan : List String) (entryIdx : Nat)
     (entry : Entry) : Option Json :=
-  match entry.origin.extras >>= fun extras => cobj extras "claudeIdentityProvenance" with
+  match entry.origin.extras >>= fun extras => oobj extras "claudeIdentityProvenance" with
   | some identity =>
-      if cstr identity "carrier" ==
+      if ostr identity "carrier" ==
           some "agent-convert.claude-identity-provenance.v1" &&
-          cstr identity "trust" == some "historical-unverified" then
+          ostr identity "trust" == some "historical-unverified" then
         some identity
       else none
   | none =>
@@ -5236,7 +5105,7 @@ private def cCarrierTopLevelStampWithRaw
 
 private def cRawEnvelopeForExport (t : Transcript) (entry : Entry) : Option Json :=
   if t.origin.format == Format.claudeCode && entry.origin.format == Format.claudeCode then
-    entry.origin.extras >>= fun extras => cNonNull (cobj extras "claudeRawEnvelope")
+    entry.origin.extras >>= fun extras => cNonNull (oobj extras "claudeRawEnvelope")
   else none
 
 /-- Merge preserved metadata into a generated envelope. Native structural
@@ -5253,7 +5122,7 @@ private def cMergeClaudeEnvelopeMetadata (raw generated : Json) : Json :=
       let metadata := protectedKeys.foldl
         (fun (fields : Std.TreeMap.Raw String Json) key => fields.erase key) rawFields
       let generatedFields :=
-        match cobj raw "message", cobj generated "message" with
+        match oobj raw "message", oobj generated "message" with
         | some (Json.obj rawMessage), some (Json.obj generatedMessage) =>
             let rawMessage := ["role", "content"].foldl
               (fun (fields : Std.TreeMap.Raw String Json) key => fields.erase key) rawMessage
@@ -5307,12 +5176,12 @@ private def cNativeCompactionBoundary? (entry : Entry) : Option Json := do
   guard (entry.disposition == EntryDisposition.native)
   guard (entry.origin.format == Format.claudeCode)
   guard ((entry.origin.extras >>= fun extras =>
-    cobj extras "claudeContextSummaryNative") != some (Json.bool false))
+    oobj extras "claudeContextSummaryNative") != some (Json.bool false))
   let .compaction _ .unknownPrefix _ := entry.payload | none
   let boundary ← entry.origin.extras >>= fun extras =>
-    cobj extras "claudeRawCompactionBoundary"
+    oobj extras "claudeRawCompactionBoundary"
   guard (cCompactionBoundary boundary)
-  guard ((cstr boundary "logicalParentUuid").any claudeUuidValid)
+  guard ((ostr boundary "logicalParentUuid").any claudeUuidValid)
   pure boundary
 
 private def cCompactionBoundaryUuidPlan (t : Transcript) (uuids : List String) : List (Option String) := Id.run do
@@ -5321,7 +5190,7 @@ private def cCompactionBoundaryUuidPlan (t : Transcript) (uuids : List String) :
   let mut out := []
   for entry in t.entries.toList do
     if let some boundary := cNativeCompactionBoundary? entry then
-      let preferred := (cstr boundary "uuid").filter (fun id =>
+      let preferred := (ostr boundary "uuid").filter (fun id =>
         claudeUuidValid id && !used.contains id)
       let (id, next) := match preferred with
         | some id => (id, counter)
@@ -5338,7 +5207,7 @@ private def cClaudeEntryTimestamp? (t : Transcript) (e : Entry) : Option String 
   | .recorded timestamp => some (epochMsToIso8601 timestamp)
   | .absent | .interpolated _ _ | .sequenced _ =>
       cClaudeTargetTimestamp? t <|>
-        (e.origin.extras >>= fun extras => cstr extras "ts")
+        (e.origin.extras >>= fun extras => ostr extras "ts")
 
 /-- One entry → one Claude JSONL line object using the transcript's UUID plan. -/
 private def cClaudeEntryToJson
@@ -5370,7 +5239,7 @@ private def cClaudeEntryToJson
       match e.payload with
       | Payload.compaction summary coverage tokensBefore =>
           let sourceBoundary := e.origin.extras.bind (fun extras =>
-            cNonNull (cobj extras "claudeRawCompactionBoundary"))
+            cNonNull (oobj extras "claudeRawCompactionBoundary"))
           Json.mkObj ([("type", Json.str "system"),
               ("subtype", Json.str "agent_convert_compaction")] ++ stamp ++ [
             ("content", Json.str
@@ -5413,7 +5282,7 @@ private def cClaudeEntryToJson
                 identityProvenance timeProvenance)])
     | Payload.compaction summary coverage tokensBefore =>
         let sourceBoundary := e.origin.extras.bind (fun extras =>
-          cNonNull (cobj extras "claudeRawCompactionBoundary"))
+          cNonNull (oobj extras "claudeRawCompactionBoundary"))
         let boundaryId := ((cCompactionBoundaryUuidPlan t uuidPlan)[i]?).join
         let fields := [("type", Json.str "user")] ++ stamp ++ [
           ("message", Json.mkObj [("role", Json.str "user"),
@@ -5450,12 +5319,12 @@ def claudeEntryToJson (t : Transcript) (i : Nat) (e : Entry) : Json :=
   cClaudeEntryToJson t (cClaudeEntryUuidPlan t) i e
 
 private def cTranscriptArchivedControls (t : Transcript) : List ClaudeArchivedControl :=
-  match t.origin.extras >>= fun extras => carr extras "raw_control_messages" with
+  match t.origin.extras >>= fun extras => oarr extras "raw_control_messages" with
   | some values => values.toList.filterMap cParseArchivedControlJson?
   | none => []
 
 private def cTranscriptArchivedRecords (t : Transcript) : List ClaudeArchivedRecord :=
-  match t.origin.extras >>= fun extras => carr extras "raw_inert_records" with
+  match t.origin.extras >>= fun extras => oarr extras "raw_inert_records" with
   | some values => values.toList.filterMap cParseArchivedRecordJson?
   | none => []
 
@@ -5467,14 +5336,14 @@ private def cExportLastPrompt?
     ("type", Json.str "last-prompt"),
     ("sessionId", Json.str (cClaudeTargetSessionId t)),
     ("leafUuid", Json.str leafUuid)]
-  let raw := t.origin.extras >>= fun extras => cobj extras "raw_last_prompt"
+  let raw := t.origin.extras >>= fun extras => oobj extras "raw_last_prompt"
   pure (match raw with
     | some source => cMergeClaudeEnvelopeMetadata source generated
     | none => generated)
 
 private def cClaudeTimestampFieldError
     (ctx key : String) (j : Json) : Option String :=
-  match cobj j key with
+  match oobj j key with
   | none => none
   | some (Json.str value) =>
       if (iso8601ToEpochMs? value).isSome then none
@@ -5489,7 +5358,7 @@ private def cClaudeOriginTimestampErrors
       (match cClaudeTimestampFieldError (ctx ++ ".ts") "ts" extras with
        | some error => [error]
        | none => []) ++
-      (match cobj extras "claudeRawEnvelope" with
+      (match oobj extras "claudeRawEnvelope" with
        | some raw@(Json.obj _) =>
            match cClaudeTimestampFieldError
                (ctx ++ ".claudeRawEnvelope.timestamp") "timestamp" raw with
@@ -5498,7 +5367,7 @@ private def cClaudeOriginTimestampErrors
        | _ => [])
 
 private def cClaudeTimestampMs? (j : Json) (key : String) : Option Nat := do
-  let value ← cstr j key
+  let value ← ostr j key
   pure (← iso8601ToEpochMs? value).ms
 
 private def cClaudeRecordedTimeConflictErrors
@@ -5512,7 +5381,7 @@ private def cClaudeRecordedTimeConflictErrors
             else [s!"{ctx}.{field} conflicts with typed recorded time"]
         | none => []
       conflict "origin.ts" (cClaudeTimestampMs? extras "ts") ++
-        (match cobj extras "claudeRawEnvelope" with
+        (match oobj extras "claudeRawEnvelope" with
          | some raw@(Json.obj _) => conflict "origin.claudeRawEnvelope.timestamp"
              (cClaudeTimestampMs? raw "timestamp")
          | _ => [])
@@ -5556,14 +5425,14 @@ def claudeExportPrerequisiteErrors (t : Transcript) : List String :=
     let unsupportedTargetErrors := (cClaudeUnsupportedTargetKeys t).map (fun key =>
       s!"Claude export does not support target field '{key}'; Claude's resumable JSONL has no slot for it")
     let carrierErrors :=
-      match t.origin.extras >>= fun extras => cobj extras "source_env" with
+      match t.origin.extras >>= fun extras => oobj extras "source_env" with
       | some _ =>
           if (cClaudeSourceEnvCarrier? t).isSome then []
           else ["Claude export source_env carrier is malformed and refused"]
       | none => []
     let rawCarrierErrors :=
       match t.origin.extras >>= fun extras =>
-          cobj extras claudeSourceEnvRawCarrierExtrasKey with
+          oobj extras claudeSourceEnvRawCarrierExtrasKey with
       | some _ =>
           if (cClaudeRawSourceEnvCarrier? t).isSome then []
           else ["Claude export preserved source-environment carrier is malformed and refused"]
@@ -5669,43 +5538,43 @@ private def cRenderClaudeCodeCandidate (t : Transcript) : String :=
       ("entryUuid", Json.str uuid), ("originKey", Json.str key),
       ("sourceIndex", index), ("record", raw)]
     let extras := entry.origin.extras.getD Json.null
-    let mirrors := ((carr extras "codex_item_completed").getD #[]).toList.map (fun value =>
-      item "codex_item_completed" ((cobj value "recordIndex").getD Json.null)
-        ((cobj value "record").getD Json.null))
-    let indices := (carr extras "codex_command_completion_indices").getD #[]
-    let commands := ((carr extras "codex_command_completions").getD #[]).toList.zipIdx.map (fun (raw, j) =>
+    let mirrors := ((oarr extras "codex_item_completed").getD #[]).toList.map (fun value =>
+      item "codex_item_completed" ((oobj value "recordIndex").getD Json.null)
+        ((oobj value "record").getD Json.null))
+    let indices := (oarr extras "codex_command_completion_indices").getD #[]
+    let commands := ((oarr extras "codex_command_completions").getD #[]).toList.zipIdx.map (fun (raw, j) =>
       item "codex_command_completions" ((indices[j]?).getD Json.null) raw)
     mirrors ++ commands)
   let physical := rendered.filter (fun record => !isEvent record)
   let links := physical.filterMap (fun record =>
-    if eventRecords.any (fun event => cstr event "uuid" == cstr record "parentUuid") then
+    if eventRecords.any (fun event => ostr event "uuid" == ostr record "parentUuid") then
       some (Json.mkObj [
-        ("uuid", (cobj record "uuid").getD Json.null),
-        ("parentUuid", (cobj record "parentUuid").getD Json.null)]) else none)
+        ("uuid", (oobj record "uuid").getD Json.null),
+        ("parentUuid", (oobj record "parentUuid").getD Json.null)]) else none)
   let boundaryIds := cCompactionBoundaryUuidPlan t uuidPlan
   let entryLines := physical.flatMap (fun record =>
     let projected := cOverlayJsonObject record (Json.mkObj [
       ("parentUuid", cNullableStringJson
-        (cEventAncestor (n + 1) eventRecords (cstr record "parentUuid")))])
+        (cEventAncestor (n + 1) eventRecords (ostr record "parentUuid")))])
     let boundary := t.entries.toList.zipIdx.findSome? (fun (entry, i) => do
-      guard (uuidPlan[i]? == cstr record "uuid")
+      guard (uuidPlan[i]? == ostr record "uuid")
       let raw ← cNativeCompactionBoundary? entry
       let id ← (boundaryIds[i]?).join
       pure (cOverlayJsonObject raw (Json.mkObj [
         ("uuid", Json.str id), ("parentUuid", Json.null),
         ("sessionId", Json.str (cClaudeTargetSessionId t)),
-        ("cwd", (cobj record "cwd").getD Json.null),
-        ("timestamp", (cobj record "timestamp").getD Json.null)])))
+        ("cwd", (oobj record "cwd").getD Json.null),
+        ("timestamp", (oobj record "timestamp").getD Json.null)])))
     (boundary.toList ++ [projected]).map Json.compress)
   let originalPointer := cExportLastPrompt? t uuidPlan
   let activeEvent := originalPointer.bind (fun pointer =>
-    eventRecords.find? (fun event => cstr event "uuid" == cstr pointer "leafUuid"))
+    eventRecords.find? (fun event => ostr event "uuid" == ostr pointer "leafUuid"))
   let physicalLeaf := originalPointer.bind (fun pointer =>
-    cEventAncestor (n + 1) eventRecords (cstr pointer "leafUuid"))
+    cEventAncestor (n + 1) eventRecords (ostr pointer "leafUuid"))
   let leaf := match activeEvent with
     | none => Json.null
     | some event => Json.mkObj [
-        ("eventUuid", (cobj event "uuid").getD Json.null),
+        ("eventUuid", (oobj event "uuid").getD Json.null),
         ("physicalUuid", cNullableStringJson physicalLeaf),
         ("sessionId", Json.str (cClaudeTargetSessionId t))]
   let controls := (cTranscriptArchivedControls t).map cArchivedControlJson
@@ -5717,7 +5586,7 @@ private def cRenderClaudeCodeCandidate (t : Transcript) : String :=
     ("parentLinks", Json.arr links.toArray), ("leaf", leaf),
     ("controls", Json.arr controls.toArray), ("records", Json.arr records.toArray)]
   let header := cSourceEnvCarrierForExport t
-  let marker := match (cobj header claudeCarrierMarkerKey).getD (Json.mkObj []) with
+  let marker := match (oobj header claudeCarrierMarkerKey).getD (Json.mkObj []) with
     | Json.obj fields => Json.mkObj (fields.toList.filter (fun (key, _) => key != "eventBatch"))
     | other => other
   let header := cOverlayJsonObject header (Json.mkObj [
@@ -5769,8 +5638,8 @@ def claudeControlsNeverExportedAsConversation : Bool :=
       match cParseClaudeJsonLines exported, importClaudeCode exported with
       | .ok records, .ok restored =>
           records.countP (fun record =>
-            cstr record "type" == some "user" ||
-              cstr record "type" == some "assistant") == 3 &&
+            ostr record "type" == some "user" ||
+              ostr record "type" == some "assistant") == 3 &&
           cControlConversationPreserved restored &&
           (cArchivedControls? restored).map Array.size ==
             (cArchivedControls? imported).map Array.size
@@ -5923,15 +5792,15 @@ def claudeExportUuidTopologyChecked : Bool :=
   match cParseClaudeJsonLines (cExportClaudeFixture source) with
   | .error _ => false
   | .ok records =>
-      let entryRecords := records.filter (fun record => (cstr record "uuid").isSome)
-      let uuids := entryRecords.filterMap (fun record => cstr record "uuid")
+      let entryRecords := records.filter (fun record => (ostr record "uuid").isSome)
+      let uuids := entryRecords.filterMap (fun record => ostr record "uuid")
       uuids.length == source.entries.size && cStringsDistinct uuids &&
         entryRecords.zipIdx.all (fun (record, entryIdx) =>
           match source.entries[entryIdx]? with
           | none => false
           | some entry =>
-              cstr record "uuid" == uuids[entryIdx]? &&
-              cstr record "parentUuid" == entry.parent.bind (fun parent => uuids[parent]?))
+              ostr record "uuid" == uuids[entryIdx]? &&
+              ostr record "parentUuid" == entry.parent.bind (fun parent => uuids[parent]?))
 
 example : claudeExportUuidTopologyChecked = true := by native_decide
 
@@ -6162,8 +6031,8 @@ def claudeControlRolesNeverBecomeUserDialogue : Bool :=
   | .ok records, .ok restored, .ok mismatched =>
       match records[1]?, records[2]? with
       | some systemRecord, some developerRecord =>
-          cstr systemRecord "type" == some "system" &&
-          cstr developerRecord "type" == some "system" &&
+          ostr systemRecord "type" == some "system" &&
+          ostr developerRecord "type" == some "system" &&
           (match restored.entries[1]?, restored.entries[2]? with
            | some systemEntry, some developerEntry =>
                (match systemEntry.payload with
@@ -6419,7 +6288,7 @@ private def cTranslatedBashRestored (expected : String) (text : String) : Bool :
        | some entry => match entry.payload with
          | .assistantMsg [.toolCall name args (some _)] =>
              name.raw == "Bash" && name.canonical == some .bash &&
-               cstr args "command" == some expected
+               ostr args "command" == some expected
          | _ => false
        | _ => false) &&
       (match transcript.entries[1]? with
@@ -6661,8 +6530,8 @@ def claudeLastPromptAuthoritativeChecked : Bool :=
   match importClaudeCode claudeLastPromptFixture with
   | .ok transcript =>
       shape transcript &&
-      (transcript.origin.extras >>= fun extras => cobj extras "raw_last_prompt" >>=
-        fun record => cstr record "leafUuid") ==
+      (transcript.origin.extras >>= fun extras => oobj extras "raw_last_prompt" >>=
+        fun record => ostr record "leafUuid") ==
         some (cClaudeFixtureUuid "lp-attachment") &&
       let exported := exportClaudeCode transcript
       (match cParseClaudeJsonLines exported with
@@ -6670,7 +6539,7 @@ def claudeLastPromptAuthoritativeChecked : Bool :=
            -- The source pointer addressed an archived non-dialogue record.
            -- Physical output must instead point at the represented active
            -- conversational leaf or the resumed artifact is dangling.
-           (records.getLast? >>= fun pointer => cstr pointer "leafUuid") ==
+           (records.getLast? >>= fun pointer => ostr pointer "leafUuid") ==
              some (cClaudeFixtureUuid "lp-selected")
        | .error _ => false) &&
       match importClaudeCode exported with
@@ -6699,11 +6568,11 @@ def claudeOptionalLastPromptTextChecked : Bool :=
   match importClaudeCode source with
   | .ok transcript =>
       transcript.activeLeaf == some 0 &&
-      (transcript.origin.extras >>= fun extras => cobj extras "raw_last_prompt" >>=
-        fun record => cstr record "leafUuid") ==
+      (transcript.origin.extras >>= fun extras => oobj extras "raw_last_prompt" >>=
+        fun record => ostr record "leafUuid") ==
           some (cClaudeFixtureUuid "lp-pointer") &&
-      (transcript.origin.extras >>= fun extras => cobj extras "raw_last_prompt" >>=
-        fun record => cobj record "lastPrompt") == none
+      (transcript.origin.extras >>= fun extras => oobj extras "raw_last_prompt" >>=
+        fun record => oobj record "lastPrompt") == none
   | .error _ => false
 
 example : claudeLastPromptAuthoritativeChecked = true := by native_decide
@@ -6741,10 +6610,10 @@ private def cCompactionShape (transcript : Transcript) : Bool :=
       (match entry.payload with
        | .compaction "summary text" .unknownPrefix (some 321) => true
        | _ => false) &&
-      (entry.origin.extras >>= fun extras => cobj extras "claudeRawEnvelope") ==
+      (entry.origin.extras >>= fun extras => oobj extras "claudeRawEnvelope") ==
         some claudeCompactionSummaryJson &&
       (entry.origin.extras >>= fun extras =>
-        cobj extras "claudeRawCompactionBoundary") == some claudeCompactionBoundaryJson
+        oobj extras "claudeRawCompactionBoundary") == some claudeCompactionBoundaryJson
   | none => false
 
 def claudeCompactionBoundaryChecked : Bool :=
@@ -6756,14 +6625,14 @@ def claudeCompactionBoundaryChecked : Bool :=
       match cParseClaudeJsonLines exported, importClaudeCode exported with
       | .ok [boundary, record, pointer], .ok restored =>
           cCompactionBoundary boundary &&
-          cstr record "type" == some "user" && cbool record "isCompactSummary" &&
-          cstr record "parentUuid" == cstr boundary "uuid" &&
-          (cobj record "message" >>= fun message => cstr message "content") == some "summary text" &&
-          (cobj record claudeCarrierMarkerKey >>= fun marker =>
-            cobj marker "contextSummary" >>= fun carrier => cstr carrier "summary") ==
+          ostr record "type" == some "user" && oboolD record "isCompactSummary" &&
+          ostr record "parentUuid" == ostr boundary "uuid" &&
+          (oobj record "message" >>= fun message => ostr message "content") == some "summary text" &&
+          (oobj record claudeCarrierMarkerKey >>= fun marker =>
+            oobj marker "contextSummary" >>= fun carrier => ostr carrier "summary") ==
               some "summary text" &&
-          cstr pointer "type" == some "last-prompt" &&
-          cstr pointer "leafUuid" == cstr record "uuid" &&
+          ostr pointer "type" == some "last-prompt" &&
+          ostr pointer "leafUuid" == ostr record "uuid" &&
           cCompactionShape restored
       | _, _ => false
 
@@ -6810,8 +6679,8 @@ def claudeAdjacentCompactionBoundaryChecked : Bool :=
             | .compaction "adjacent summary" .unknownPrefix (some 99) => true
             | _ => false) &&
            (entry.origin.extras >>= fun extras =>
-             cobj extras "claudeRawCompactionBoundary" >>= fun boundary =>
-               cstr boundary "uuid") == some (cClaudeFixtureUuid "adj-boundary") &&
+             oobj extras "claudeRawCompactionBoundary" >>= fun boundary =>
+               ostr boundary "uuid") == some (cClaudeFixtureUuid "adj-boundary") &&
            imported.importNotes.any (fun note =>
              match note.kind with
              | .other "adjacentCompactionBoundary" => true
@@ -6942,17 +6811,17 @@ def claudeOpenWorldLifecycleSafetyChecked : Bool :=
   let exported := cExportClaudeFixture claudeRawLifecycleFixture
   cRawClaudeLifecycleBlock claudeRawServerToolUse &&
   cRawClaudeLifecycleBlock claudeRawWebToolResult &&
-  cstr (claudeUserBlockToJson (.unmodeled "user-lifecycle" claudeRawUserToolResult))
+  ostr (claudeUserBlockToJson (.unmodeled "user-lifecycle" claudeRawUserToolResult))
       "type" == some "text" &&
-  cstr (claudeAssistantBlockToJson
+  ostr (claudeAssistantBlockToJson
       (.unmodeled "server-lifecycle" claudeRawServerToolUse)) "type" == some "text" &&
-  cstr (claudeEnvBlockToJson claudeRawLifecycleFixture
+  ostr (claudeEnvBlockToJson claudeRawLifecycleFixture
       (.unmodeled "result-lifecycle" claudeRawWebToolResult)) "type" == some "text" &&
   match cParseClaudeJsonLines exported, importClaudeCode exported with
   | .ok records, .ok restored =>
       (records.take 3).all (fun record =>
-        (cobj record "message" >>= fun message => carr message "content" >>=
-          fun blocks => blocks[0]? >>= fun block => cstr block "type") == some "text") &&
+        (oobj record "message" >>= fun message => oarr message "content" >>=
+          fun blocks => blocks[0]? >>= fun block => ostr block "type") == some "text") &&
       cRawLifecycleShape restored
   | _, _ => false
 
@@ -6962,13 +6831,13 @@ def claudeMismatchedRolesArchivedChecked : Bool :=
   match importClaudeCode claudeMismatchedRoleFixture with
   | .error _ => false
   | .ok transcript =>
-      match transcript.origin.extras >>= fun extras => carr extras "raw_inert_records" with
+      match transcript.origin.extras >>= fun extras => oarr extras "raw_inert_records" with
       | some records =>
           records.size == 2 &&
-          (records[0]? >>= fun record => cobj record "raw" >>= fun raw =>
-            cobj raw "message" >>= fun message => cstr message "role") == some "system" &&
-          (records[1]? >>= fun record => cobj record "raw" >>= fun raw =>
-            cobj raw "message" >>= fun message => cstr message "role") == some "developer"
+          (records[0]? >>= fun record => oobj record "raw" >>= fun raw =>
+            oobj raw "message" >>= fun message => ostr message "role") == some "system" &&
+          (records[1]? >>= fun record => oobj record "raw" >>= fun raw =>
+            oobj raw "message" >>= fun message => ostr message "role") == some "developer"
       | none => false
 
 example : claudeMismatchedRolesArchivedChecked = true := by native_decide
@@ -7031,29 +6900,29 @@ def claudeMetadataProvenanceChecked : Bool :=
       transcript.env.sessionId == some (cClaudeFixtureUuid "metadata-session") &&
       (match transcript.entries[0]? with
        | some entry =>
-           (entry.origin.extras >>= fun extras => cobj extras "claudeRawEnvelope") ==
+           (entry.origin.extras >>= fun extras => oobj extras "claudeRawEnvelope") ==
              some claudeMetadataRecord
        | none => false) &&
       match cParseClaudeJsonLines (exportClaudeCode transcript) with
       | .ok [record, pointer] =>
-          cstr record "type" == some "assistant" &&
-          cstr record "uuid" == some (cClaudeFixtureUuid "metadata") &&
-          cstr record "sessionId" == some (cClaudeFixtureUuid "metadata-session") &&
-          cstr record "version" == some "2.1.199" &&
-          cstr record "gitBranch" == some "feature/provenance" &&
-          (cobj record "environment" >>= fun environment =>
-            cstr environment "sandbox") == some "workspace-write" &&
-          (cobj record "message" >>= fun message => cstr message "model") ==
+          ostr record "type" == some "assistant" &&
+          ostr record "uuid" == some (cClaudeFixtureUuid "metadata") &&
+          ostr record "sessionId" == some (cClaudeFixtureUuid "metadata-session") &&
+          ostr record "version" == some "2.1.199" &&
+          ostr record "gitBranch" == some "feature/provenance" &&
+          (oobj record "environment" >>= fun environment =>
+            ostr environment "sandbox") == some "workspace-write" &&
+          (oobj record "message" >>= fun message => ostr message "model") ==
             some "claude-test" &&
-          (cobj record "message" >>= fun message => cobj message "usage") ==
-            (cobj claudeMetadataRecord "message" >>= fun message =>
-              cobj message "usage") &&
-          cstr pointer "type" == some "last-prompt" &&
-          cstr pointer "leafUuid" == some (cClaudeFixtureUuid "metadata") &&
+          (oobj record "message" >>= fun message => oobj message "usage") ==
+            (oobj claudeMetadataRecord "message" >>= fun message =>
+              oobj message "usage") &&
+          ostr pointer "type" == some "last-prompt" &&
+          ostr pointer "leafUuid" == some (cClaudeFixtureUuid "metadata") &&
           match importClaudeCode (exportClaudeCode transcript) with
           | .ok restored =>
               (restored.entries[0]? >>= fun entry => entry.origin.extras >>=
-                fun extras => cobj extras "claudeRawEnvelope") ==
+                fun extras => oobj extras "claudeRawEnvelope") ==
                   some claudeMetadataRecord
           | .error _ => false
       | _ => false
@@ -7176,7 +7045,7 @@ def claudeExternalLineageIsInertChecked : Bool :=
       transcript.entries.size == 1 && transcript.entries[0]?.bind (fun entry =>
         entry.parent) == none &&
       (transcript.entries[0]? >>= fun entry => entry.origin.extras >>=
-        fun extras => cobj extras "claudeRawEnvelope") ==
+        fun extras => oobj extras "claudeRawEnvelope") ==
           some claudeExternalLineageRecord &&
       transcript.importNotes.any (fun note =>
         match note.kind with
@@ -7194,8 +7063,8 @@ private def cLocalCommandControl (slug : String) : Json := cUuidFixtureRecord (J
     ("sessionId", Json.str "archive"), ("messageUuid", Json.str "prior")])])
 
 private def cArchivedRaws (transcript : Transcript) : List Json :=
-  match transcript.origin.extras >>= fun extras => carr extras "raw_inert_records" with
-  | some records => records.toList.filterMap (fun record => cobj record "raw")
+  match transcript.origin.extras >>= fun extras => oarr extras "raw_inert_records" with
+  | some records => records.toList.filterMap (fun record => oobj record "raw")
   | none => []
 
 def claudeDuplicateInertControlsAreOccurrencesChecked : Bool :=
@@ -7334,9 +7203,9 @@ def claudeDecoupledCompactionAccepted : Bool :=
             | _ => false)
        | none => false) &&
       (cArchivedRaws imported).any (fun raw =>
-        cstr raw "subtype" == some "compact_boundary" &&
-        cstr raw "uuid" == some (cClaudeFixtureUuid "decoupled-boundary") &&
-        (cobj raw "compactMetadata" >>= fun m =>
+        ostr raw "subtype" == some "compact_boundary" &&
+        ostr raw "uuid" == some (cClaudeFixtureUuid "decoupled-boundary") &&
+        (oobj raw "compactMetadata" >>= fun m =>
           (m.getObjVal? "preTokens" >>= Json.getNat?).toOption) == some 19)
 
 example : claudeDecoupledCompactionAccepted = true := by native_decide
@@ -7373,13 +7242,13 @@ def claudeInertPayloadCarriersChecked : Bool :=
   let exported := cExportClaudeFixture claudeInertPayloadFixture
   match cParseClaudeJsonLines exported, importClaudeCode exported with
   | .ok [other, sourceEnv, pointer], .ok restored =>
-      cstr other "type" == some "system" &&
-      cstr other "subtype" == some "agent_convert_inert" &&
-      (cEventBatch? sourceEnv >>= fun batch => carr batch "events").map Array.size == some 1 &&
-      cstr sourceEnv "type" == some "agent-convert-provenance" &&
+      ostr other "type" == some "system" &&
+      ostr other "subtype" == some "agent_convert_inert" &&
+      (cEventBatch? sourceEnv >>= fun batch => oarr batch "events").map Array.size == some 1 &&
+      ostr sourceEnv "type" == some "agent-convert-provenance" &&
       (match cParseTranscriptProvenanceCarrier? sourceEnv with
        | some (.sourceEnv _ _) => true | _ => false) &&
-      cstr pointer "type" == some "last-prompt" &&
+      ostr pointer "type" == some "last-prompt" &&
       cInertPayloadShape restored &&
       exportClaudeCode restored == exported
   | _, _ => false
@@ -7470,26 +7339,26 @@ private def claudePoisonedMetadataFixture : Transcript :=
 def claudeRawEnvelopeCannotOverrideStructureChecked : Bool :=
   match cParseClaudeJsonLines (cExportClaudeFixture claudePoisonedMetadataFixture) with
   | .ok [record, _sourceEnv, pointer] =>
-      cstr record "type" == some "assistant" && cstr record "subtype" == none &&
-      cstr record "uuid" == some (cClaudeFixtureUuid "generated-id") &&
-      cobj record "parentUuid" == some Json.null &&
-      cstr record "sessionId" == some (cClaudeFixtureUuid "generated-session") &&
-      cstr record "cwd" == some "/generated" &&
-      !cbool record "isSidechain" &&
-      cstr record "timestamp" == some "2026-07-20T00:00:00.000Z" &&
-      cstr record "version" == some "poison-metadata-version" &&
-      (cobj record "message" >>= fun message => cstr message "role") ==
+      ostr record "type" == some "assistant" && ostr record "subtype" == none &&
+      ostr record "uuid" == some (cClaudeFixtureUuid "generated-id") &&
+      oobj record "parentUuid" == some Json.null &&
+      ostr record "sessionId" == some (cClaudeFixtureUuid "generated-session") &&
+      ostr record "cwd" == some "/generated" &&
+      !oboolD record "isSidechain" &&
+      ostr record "timestamp" == some "2026-07-20T00:00:00.000Z" &&
+      ostr record "version" == some "poison-metadata-version" &&
+      (oobj record "message" >>= fun message => ostr message "role") ==
         some "assistant" &&
-      (cobj record "message" >>= fun message => cstr message "model") ==
+      (oobj record "message" >>= fun message => ostr message "model") ==
         some "metadata-model" &&
-      (cobj record "message" >>= fun message => carr message "content" >>=
-        fun blocks => blocks[0]? >>= fun block => cstr block "text") ==
+      (oobj record "message" >>= fun message => oarr message "content" >>=
+        fun blocks => blocks[0]? >>= fun block => ostr block "text") ==
           some "generated content" &&
-      cstr pointer "leafUuid" == some (cClaudeFixtureUuid "generated-id") &&
+      ostr pointer "leafUuid" == some (cClaudeFixtureUuid "generated-id") &&
       match importClaudeCode (cExportClaudeFixture claudePoisonedMetadataFixture) with
       | .ok restored =>
           (restored.entries[0]? >>= fun entry => entry.origin.extras >>=
-            fun extras => cobj extras "claudeRawEnvelope") ==
+            fun extras => oobj extras "claudeRawEnvelope") ==
               some claudePoisonedRawEnvelope
       | .error _ => false
   | _ => false
@@ -7663,7 +7532,7 @@ def claudeExportPrerequisitesAndStabilityChecked : Bool :=
     match exportClaudeCodeChecked transcript with
     | .ok output =>
         match cParseClaudeJsonLines output with
-        | .ok (record :: _) => cstr record "timestamp" == some target
+        | .ok (record :: _) => ostr record "timestamp" == some target
         | _ => false
     | .error _ => false
   let preservesTime := fun (transcript : Transcript) (expected : Time) =>
@@ -7728,19 +7597,19 @@ def claudeExportPrerequisitesAndStabilityChecked : Bool :=
       cContains first ("\"" ++ claudeCarrierMarkerKey ++ "\"") &&
       match cParseClaudeJsonLines first, importClaudeCode first with
       | .ok [record, sourceEnv, pointer], .ok restored =>
-          cstr record "uuid" == some (cGeneratedClaudeUuid
+          ostr record "uuid" == some (cGeneratedClaudeUuid
             (cClaudeFixtureUuid "target-session") 1) &&
-          cstr record "sessionId" == some (cClaudeFixtureUuid "target-session") &&
-          cstr record "cwd" == some "/target" &&
-          cstr record "timestamp" == some target &&
+          ostr record "sessionId" == some (cClaudeFixtureUuid "target-session") &&
+          ostr record "cwd" == some "/target" &&
+          ostr record "timestamp" == some target &&
           (match cParseTranscriptProvenanceCarrier? sourceEnv with
            | some (.sourceEnv env _) => env == valid.env
            | _ => false) &&
           restored.env == valid.env &&
-          (cobj record claudeCarrierMarkerKey >>= fun marker =>
-            cobj marker "identityProvenance" >>= fun identity =>
-            cstr identity "sourceEntryId") == some "" &&
-          cstr pointer "leafUuid" == some (cGeneratedClaudeUuid
+          (oobj record claudeCarrierMarkerKey >>= fun marker =>
+            oobj marker "identityProvenance" >>= fun identity =>
+            ostr identity "sourceEntryId") == some "" &&
+          ostr pointer "leafUuid" == some (cGeneratedClaudeUuid
             (cClaudeFixtureUuid "target-session") 1) &&
           match exportClaudeCodeChecked restored with
           | .ok second => second == first
@@ -7817,9 +7686,9 @@ private def claudeUuidReservationFixture : Transcript :=
         ("target_harness_version", Json.str claudeTargetValidationBuild)]) } }
 
 private def cIdentitySourceEntry? (record : Json) : Option Json := do
-  let marker ← cobj record claudeCarrierMarkerKey
-  let identity ← cobj marker "identityProvenance"
-  cobj identity "sourceEntryId"
+  let marker ← oobj record claudeCarrierMarkerKey
+  let identity ← oobj marker "identityProvenance"
+  oobj identity "sourceEntryId"
 
 /-- Reservation is transcript-wide, not left-to-right: an invalid early ID
 cannot synthesize the UUID explicitly owned by a later entry. Duplicate valid
@@ -7835,13 +7704,13 @@ def claudeUuidReservationAndStabilityChecked : Bool :=
   | .ok first =>
       match cParseClaudeJsonLines first, importClaudeCode first with
       | .ok records, .ok restored =>
-          let entries := records.filter (fun record => (cstr record "uuid").isSome)
-          let uuids := entries.filterMap (fun record => cstr record "uuid")
+          let entries := records.filter (fun record => (ostr record "uuid").isSome)
+          let uuids := entries.filterMap (fun record => ostr record "uuid")
           uuids == expected && cStringsDistinct uuids && uuids.all claudeUuidValid &&
           (cIdentitySourceEntry? entries[0]!).getD Json.null == Json.str "foreign-entry" &&
           (cIdentitySourceEntry? entries[2]!).getD Json.null ==
             Json.str "11111111-1111-4111-8111-111111111111" &&
-          (records.getLast? >>= fun pointer => cstr pointer "leafUuid") ==
+          (records.getLast? >>= fun pointer => ostr pointer "leafUuid") ==
             some (cGeneratedClaudeUuid sessionId 4) &&
           match exportClaudeCodeChecked restored with
           | .ok second => second == first
@@ -7914,12 +7783,12 @@ def claudeForgedCompleteCarriersRemainHistoricalChecked : Bool :=
       match cParseClaudeJsonLines compactionExport,
           importClaudeCode compactionExport with
       | .ok [record, pointer], .ok restored =>
-          cstr record "subtype" == some "agent_convert_compaction" &&
-          cstr record "subtype" != some "compact_boundary" &&
-          (cobj record claudeCarrierMarkerKey >>= fun marker =>
-            cobj marker "compaction" >>= fun carrier => cstr carrier "carrier") ==
+          ostr record "subtype" == some "agent_convert_compaction" &&
+          ostr record "subtype" != some "compact_boundary" &&
+          (oobj record claudeCarrierMarkerKey >>= fun marker =>
+            oobj marker "compaction" >>= fun carrier => ostr carrier "carrier") ==
               some "agent-convert.claude-compaction.v1" &&
-          cstr pointer "leafUuid" == cstr record "uuid" &&
+          ostr pointer "leafUuid" == ostr record "uuid" &&
           !cContains compactionExport "\"type\":\"tool_use\"" &&
           exportClaudeCode restored == compactionExport
       | _, _ => false
@@ -8287,8 +8156,8 @@ private def cSourceEnvExtensionCarrier (env : EnvInfo) : Json :=
   let payload := cOverlayJsonObject (cSourceEnvJson env) (Json.mkObj [
     ("futurePayload", Json.mkObj [("marker", Json.str "payload-extension")])])
   let base := cTranscriptProvenanceCarrier "sourceEnv" payload
-  let marker := (cobj base claudeCarrierMarkerKey).getD (Json.mkObj [])
-  let carrier := (cobj marker "transcriptProvenance").getD (Json.mkObj [])
+  let marker := (oobj base claudeCarrierMarkerKey).getD (Json.mkObj [])
+  let carrier := (oobj marker "transcriptProvenance").getD (Json.mkObj [])
   let carrier := cOverlayJsonObject carrier (Json.mkObj [
     ("futureCarrier", Json.str "carrier-extension")])
   let marker := cOverlayJsonObject marker (Json.mkObj [
@@ -8326,26 +8195,26 @@ def claudeSourceEnvironmentExtensionsRoundTripChecked : Bool :=
           match cParseClaudeJsonLines first, importClaudeCode first with
           | .ok records, .ok restored =>
               match records.find? (fun record =>
-                cstr record "type" == some "agent-convert-provenance"),
+                ostr record "type" == some "agent-convert-provenance"),
                 exportClaudeCodeChecked restored with
               | some emittedCarrier, .ok second =>
-                  let marker := (cobj emittedCarrier claudeCarrierMarkerKey).getD
+                  let marker := (oobj emittedCarrier claudeCarrierMarkerKey).getD
                     (Json.mkObj [])
-                  let provenance := (cobj marker "transcriptProvenance").getD
+                  let provenance := (oobj marker "transcriptProvenance").getD
                     (Json.mkObj [])
-                  let payload := (cobj provenance "payload").getD (Json.mkObj [])
+                  let payload := (oobj provenance "payload").getD (Json.mkObj [])
                   restored.env == mutatedEnv && second == first &&
-                  cstr emittedCarrier "futureRecord" == some "record-extension" &&
-                  cstr marker "futureMarker" == some "marker-extension" &&
-                  cstr provenance "futureCarrier" == some "carrier-extension" &&
-                  (cobj payload "futurePayload" >>= fun extension =>
-                    cstr extension "marker") == some "payload-extension" &&
-                  cstr payload "cwd" == mutatedEnv.cwd &&
-                  cstr payload "model" == mutatedEnv.model &&
-                  cstr payload "provider" == mutatedEnv.provider &&
-                  cstr payload "harnessVersion" == mutatedEnv.harnessVersion &&
-                  cstr payload "instructions" == mutatedEnv.instructions &&
-                  cstr payload "sessionId" == mutatedEnv.sessionId
+                  ostr emittedCarrier "futureRecord" == some "record-extension" &&
+                  ostr marker "futureMarker" == some "marker-extension" &&
+                  ostr provenance "futureCarrier" == some "carrier-extension" &&
+                  (oobj payload "futurePayload" >>= fun extension =>
+                    ostr extension "marker") == some "payload-extension" &&
+                  ostr payload "cwd" == mutatedEnv.cwd &&
+                  ostr payload "model" == mutatedEnv.model &&
+                  ostr payload "provider" == mutatedEnv.provider &&
+                  ostr payload "harnessVersion" == mutatedEnv.harnessVersion &&
+                  ostr payload "instructions" == mutatedEnv.instructions &&
+                  ostr payload "sessionId" == mutatedEnv.sessionId
               | _, _ => false
           | _, _ => false
 
@@ -8356,7 +8225,7 @@ example : claudeSourceEnvironmentExtensionsRoundTripChecked = true := by
 
 private def cArchivedControlRecordIsMeta (transcript : Transcript) (index : Nat) : Bool :=
   ((cArchivedControls? transcript >>= fun controls => controls[index]? >>= fun control =>
-    cobj control "record" >>= fun record => cbool? record "isMeta")).getD false
+    oobj control "record" >>= fun record => obool record "isMeta")).getD false
 
 def claudeStaleIsMetaMutationText : String :=
   "<system-reminder>literal current user text</system-reminder>"
@@ -8380,9 +8249,9 @@ def claudeTypedUserClearsStaleIsMetaChecked : Bool :=
         match exportClaudeCodeChecked mutated, exportClaudeCodeChecked genuine with
         | .ok first, .ok genuineExport =>
             let ordinaryRecord := (cParseClaudeJsonLines first).toOption >>= fun records =>
-              records.find? (fun record => cstr record "type" == some "user")
+              records.find? (fun record => ostr record "type" == some "user")
             ordinaryRecord.isSome &&
-              (ordinaryRecord >>= fun record => cbool? record "isMeta").isNone &&
+              (ordinaryRecord >>= fun record => obool record "isMeta").isNone &&
               match importClaudeCode first, importClaudeCode genuineExport with
               | .ok restored, .ok restoredGenuine =>
                   restored.entries.size == 1 &&
@@ -8435,5 +8304,13 @@ def claudeCompleteTargetBundleRequiredChecked : Bool :=
      | .ok _ => false)
 
 example : claudeCompleteTargetBundleRequiredChecked = true := by native_decide
+
+/-- Both on-disk media spellings enter through this adapter's carrier decoder. -/
+example : ["locator", "data"].all (fun key =>
+    let raw := Json.mkObj [("kind", Json.str "media"),
+      ("mimeType", Json.str "image/png"), (key, Json.str "legacy-image")]
+    match cParseHistoricalUserBlock? raw with
+    | some (.media mime locator) => mime == "image/png" && locator == "legacy-image"
+    | _ => false) = true := by native_decide
 
 end LoomConvert

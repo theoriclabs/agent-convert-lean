@@ -1,6 +1,7 @@
 import Loom.Concepts
 import Loom.Provenance
 import Loom.Core
+import Loom.Block
 import Loom.Temporal
 import Loom.WellFormed
 import Loom.Render

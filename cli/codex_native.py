@@ -85,6 +85,27 @@ def history(rows):
     return calls, results
 
 
+def tool_image_detail_omissions(before, after):
+    """Recognize only the runtime's removal of tool-image detail preferences.
+
+    Keep image URLs/bytes, text, ordering, and every other field exact. The
+    installed history retains each preference; the request audit reports it.
+    """
+    if not isinstance(before, list) or not isinstance(after, list) or len(before) != len(after):
+        return None
+    omissions = []
+    for index, (recorded, serialized) in enumerate(zip(before, after)):
+        if recorded == serialized:
+            continue
+        if (not isinstance(recorded, dict) or not isinstance(serialized, dict) or
+                recorded.get('type') != 'input_image' or 'detail' not in recorded or 'detail' in serialized):
+            return None
+        if {key: value for key, value in recorded.items() if key != 'detail'} != serialized:
+            return None
+        omissions.append({'outputIndex': index, 'detail': recorded['detail']})
+    return omissions
+
+
 def validate(rows, directory, executable, model=None, model_cache=None, context_window=None):
     """Ask the actual Codex runtime to load and serialize a temporary copy.
 
@@ -188,13 +209,18 @@ def validate(rows, directory, executable, model=None, model_cache=None, context_
         actual_calls = [p for p in actual if p.get('type') in ('function_call', 'custom_tool_call')]
         actual_results = [p for p in actual if p.get('type') in ('function_call_output', 'custom_tool_call_output')]
         calls, results = history(rows)
+        image_detail_omissions = []
         for expected, received, label in ((calls, actual_calls, 'calls'), (results, actual_results, 'results')):
             if len(expected) != len(received):
                 raise ValueError(f'Codex omitted native {label}: expected {len(expected)}, received {len(received)}')
             for before, after in zip(expected, received):
                 for key in ('type', 'call_id', 'name', 'arguments', 'input', 'output'):
                     if key in before and before[key] != after.get(key):
-                        raise ValueError(f'Codex changed native {label} field {key}')
+                        omissions = (tool_image_detail_omissions(before[key], after.get(key))
+                                     if label == 'results' and key == 'output' else None)
+                        if omissions is None:
+                            raise ValueError(f'Codex changed native {label} field {key}')
+                        image_detail_omissions.extend({'callId': before['call_id'], **item} for item in omissions)
         # Framework instructions may be inserted, but native conversation
         # messages (including labeled peer context and user images) must remain.
         def message_signature(item):
@@ -227,7 +253,8 @@ def validate(rows, directory, executable, model=None, model_cache=None, context_
         images = sum(1 for p in actual_results if isinstance(p.get('output'), list)
                      for item in p['output'] if item.get('type') == 'input_image')
         return {'nativeLoad': True, 'nativeRequestSerialization': True, 'nativeCalls': len(calls),
-                'nativeResults': len(results), 'nativeImages': images, 'nativeMessages': len(expected_messages), 'liveModelRecall': False,
+                'nativeResults': len(results), 'nativeImages': images,
+                'nativeImageDetailOmissions': image_detail_omissions, 'nativeMessages': len(expected_messages), 'liveModelRecall': False,
                 'historicalToolsRerun': 0, 'externalModelRequests': 0}
     finally:
         server.shutdown()

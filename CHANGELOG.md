@@ -5,6 +5,11 @@ lands; move them into a dated version section when publishing a release.
 
 ## [Unreleased]
 
+- Share the Loom IR, JSON accessors, and sidecar publication logic across
+  converters while preserving each format's historical record fields.
+- Preserve custom Codex tool calls and report when Codex omits tool-image
+  detail preferences in the serialized request.
+
 ## [0.2.0-preview.6] - 2026-11-25
 
 - Find, inspect, and export local Google Antigravity CLI and desktop threads.

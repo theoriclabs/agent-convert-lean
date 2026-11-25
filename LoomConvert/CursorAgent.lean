@@ -1,3 +1,4 @@
+import LoomConvert.IRCodec
 import Loom
 import LoomConvert.SourceVersion
 import LoomConvert.Parity
@@ -46,21 +47,6 @@ open Loom
 open Lean (Json)
 
 /-! ## Small Json accessors (Except → Option), per the Pi.lean scaffold. -/
-
-private def ostr (j : Json) (k : String) : Option String :=
-  (j.getObjVal? k >>= Json.getStr?).toOption
-
-private def oobj (j : Json) (k : String) : Option Json :=
-  (j.getObjVal? k).toOption
-
-private def oarr (j : Json) (k : String) : Option (Array Json) :=
-  (j.getObjVal? k >>= Json.getArr?).toOption
-
-private def onat (j : Json) (k : String) : Option Nat :=
-  (j.getObjVal? k >>= Json.getNat?).toOption
-
-private def obool (j : Json) (k : String) : Option Bool :=
-  (j.getObjVal? k >>= Json.getBool?).toOption
 
 private def cursorAgentHistoricalRecordType : String :=
   "agent_convert_historical_entry"
@@ -193,30 +179,10 @@ def cursorCanonicalTool (name : Option String) : Option CanonicalTool :=
   | "apply_patch" | "applyPatch" => some .applyPatch
   | _ => none
 
-private def cursorHistoricalCanonicalTool : CanonicalTool -> String
-  | .bash => "bash"
-  | .read => "read"
-  | .write => "write"
-  | .edit => "edit"
-  | .grep => "grep"
-  | .glob => "glob"
-  | .webFetch => "webFetch"
-  | .webSearch => "webSearch"
-  | .agentSpawn => "agentSpawn"
-  | .applyPatch => "applyPatch"
+private def cursorHistoricalCanonicalTool : CanonicalTool → String := canonicalToolToWireString
 
-private def cursorParseHistoricalCanonicalTool? : String -> Option CanonicalTool
-  | "bash" => some .bash
-  | "read" => some .read
-  | "write" => some .write
-  | "edit" => some .edit
-  | "grep" => some .grep
-  | "glob" => some .glob
-  | "webFetch" => some .webFetch
-  | "webSearch" => some .webSearch
-  | "agentSpawn" => some .agentSpawn
-  | "applyPatch" => some .applyPatch
-  | _ => none
+private def cursorParseHistoricalCanonicalTool? (value : String) : Option CanonicalTool :=
+  (Lean.fromJson? (Json.str value)).toOption
 
 private def cursorHistoricalOptionalString : Option String -> Json
   | some value => Json.str value
@@ -258,97 +224,40 @@ private def cursorHistoricalRawIdField (key : String)
   | .explicitNull => [(key, Json.null)]
   | .string value => [(key, Json.str value)]
 
-private def cursorHistoricalUserBlockJson : UserBlock -> Json
-  | .text text => Json.mkObj [("kind", Json.str "text"), ("text", Json.str text)]
-  | .media mimeType data => Json.mkObj [
-      ("kind", Json.str "media"), ("mimeType", Json.str mimeType),
-      ("data", Json.str data)]
-  | .unmodeled label raw => Json.mkObj [
-      ("kind", Json.str "unmodeled"), ("label", Json.str label), ("raw", raw)]
+private def cursorHistoricalUserBlockJson : UserBlock → Json := toCarrierJson .cursorAgent
 
-private def cursorHistoricalUserBlock? (j : Json) : Option UserBlock := do
-  match ← ostr j "kind" with
-  | "text" => pure (.text (← ostr j "text"))
-  | "media" => pure (.media (← ostr j "mimeType") (← ostr j "data"))
-  | "unmodeled" => pure (.unmodeled (← ostr j "label") (← oobj j "raw"))
-  | _ => none
+private def cursorHistoricalUserBlock? (value : Json) : Option UserBlock :=
+  (Lean.fromJson? value).toOption
 
 private def cursorHistoricalAssistantBlockJsonWithRawId
-    (sourceRawId? : Option CursorHistoricalRawId) : AssistantBlock -> Json
-  | .text text => Json.mkObj [("kind", Json.str "text"), ("text", Json.str text)]
-  | .thinking thinking signature => Json.mkObj [
-      ("kind", Json.str "thinking"), ("thinking", Json.str thinking),
-      ("signature", cursorHistoricalOptionalString signature)]
-  | .toolCall name arguments rawId => Json.mkObj ([
-      ("kind", Json.str "toolCall"), ("name", Json.str name.raw),
-      ("canonical", name.canonical.map (fun canonical =>
-        Json.str (cursorHistoricalCanonicalTool canonical)) |>.getD Json.null),
-      ("arguments", arguments)] ++
-      cursorHistoricalRawIdField "rawId" (match sourceRawId? with
-        | some sourceRawId =>
-            if sourceRawId.value == rawId then sourceRawId
+    (sourceRawId? : Option CursorHistoricalRawId) (block : AssistantBlock) : Json :=
+  let encoded := toCarrierJson .cursorAgent block
+  match block with
+  | .toolCall _ _ rawId =>
+      let sourceRawId := match sourceRawId? with
+        | some sourceRawId => if sourceRawId.value == rawId then sourceRawId
             else cursorHistoricalRawIdFromValue rawId
-        | none => cursorHistoricalRawIdFromValue rawId))
-  | .media mimeType data => Json.mkObj [
-      ("kind", Json.str "media"), ("mimeType", Json.str mimeType),
-      ("data", Json.str data)]
-  | .unmodeled label raw => Json.mkObj [
-      ("kind", Json.str "unmodeled"), ("label", Json.str label), ("raw", raw)]
+        | none => cursorHistoricalRawIdFromValue rawId
+      match encoded with
+      | .obj fields => Json.mkObj ((fields.erase "rawId").toList ++
+          cursorHistoricalRawIdField "rawId" sourceRawId)
+      | _ => encoded
+  | _ => encoded
 
 private def cursorHistoricalAssistantBlockJson : AssistantBlock -> Json :=
   cursorHistoricalAssistantBlockJsonWithRawId none
 
-private def cursorHistoricalAssistantBlock? (j : Json) : Option AssistantBlock := do
-  match ← ostr j "kind" with
-  | "text" => pure (.text (← ostr j "text"))
-  | "thinking" => pure (.thinking (← ostr j "thinking")
-      (← cursorHistoricalOptionalString? j "signature"))
-  | "toolCall" =>
-      let canonical ← match oobj j "canonical" with
-        | some Json.null => some none
-        | some (Json.str value) => (cursorParseHistoricalCanonicalTool? value).map some
-        | _ => none
-      let rawId ← cursorHistoricalRawId? j "rawId"
-      pure (.toolCall { raw := ← ostr j "name", canonical }
-        (← oobj j "arguments") rawId.value)
-  | "media" => pure (.media (← ostr j "mimeType") (← ostr j "data"))
-  | "unmodeled" => pure (.unmodeled (← ostr j "label") (← oobj j "raw"))
-  | _ => none
+private def cursorHistoricalAssistantBlock? (value : Json) : Option AssistantBlock := do
+  if ostr value "kind" == some "toolCall" then
+    guard (oobj value "canonical").isSome
+  if ostr value "kind" == some "thinking" then
+    guard ((oobj value "signature").isSome || (oobj value "thinkingSignature").isSome)
+  (Lean.fromJson? value).toOption
 
-private def cursorHistoricalCallRefJson : CallRef -> Json
-  | .resolved entry block => Json.mkObj [
-      ("kind", Json.str "resolved"), ("entry", Json.num entry),
-      ("block", Json.num block)]
-  | .unresolved rawId note => Json.mkObj [
-      ("kind", Json.str "unresolved"),
-      ("rawId", cursorHistoricalOptionalString rawId), ("note", Json.str note)]
+private def cursorHistoricalErrorJson : ErrorSignal → Json := toCarrierJson .cursorAgent
 
-private def cursorHistoricalCallRef? (j : Json) : Option CallRef := do
-  match ← ostr j "kind" with
-  | "resolved" => pure (.resolved (← onat j "entry") (← onat j "block"))
-  | "unresolved" => pure (.unresolved
-      (← cursorHistoricalOptionalString? j "rawId") (← ostr j "note"))
-  | _ => none
-
-private def cursorHistoricalErrorJson : ErrorSignal -> Json
-  | .native value => Json.mkObj [
-      ("kind", Json.str "native"), ("value", Json.bool value)]
-  | .heuristic value heuristic => Json.mkObj [
-      ("kind", Json.str "heuristic"), ("value", Json.bool value),
-      ("method", Json.str heuristic)]
-  | .structured value source => Json.mkObj [
-      ("kind", Json.str "structured"), ("value", Json.bool value),
-      ("source", Json.str source)]
-  | .unrecorded => Json.mkObj [("kind", Json.str "unrecorded")]
-
-private def cursorHistoricalError? (j : Json) : Option ErrorSignal := do
-  match ← ostr j "kind" with
-  | "native" => pure (.native (← obool j "value"))
-  | "inferred" => pure (.heuristic (← obool j "value") (← ostr j "heuristic"))
-  | "heuristic" => pure (.heuristic (← obool j "value") (← ostr j "method"))
-  | "structured" => pure (.structured (← obool j "value") (← ostr j "source"))
-  | "unrecorded" => pure .unrecorded
-  | _ => none
+private def cursorHistoricalError? (value : Json) : Option ErrorSignal :=
+  (Lean.fromJson? value).toOption
 
 example : cursorHistoricalError? (Json.mkObj [("kind", Json.str "inferred"),
     ("value", Json.bool true), ("heuristic", Json.str "legacy")]) =
@@ -357,63 +266,20 @@ example : cursorHistoricalError? (Json.mkObj [("kind", Json.str "inferred"),
 example : cursorHistoricalError? (cursorHistoricalErrorJson (.structured true "exit_code")) =
     some (.structured true "exit_code") := by native_decide
 
-private def cursorHistoricalEnvBlockJson : EnvBlock -> Json
-  | .toolResult call content error => Json.mkObj [
-      ("kind", Json.str "toolResult"), ("call", cursorHistoricalCallRefJson call),
-      ("content", Json.arr (content.map cursorHistoricalUserBlockJson).toArray),
-      ("error", cursorHistoricalErrorJson error)]
-  | .unmodeled label raw => Json.mkObj [
-      ("kind", Json.str "unmodeled"), ("label", Json.str label), ("raw", raw)]
+private def cursorHistoricalEnvBlockJson : EnvBlock → Json := toCarrierJson .cursorAgent
 
-private def cursorHistoricalEnvBlock? (j : Json) : Option EnvBlock := do
-  match ← ostr j "kind" with
-  | "toolResult" =>
-      let content ← oarr j "content"
-      pure (.toolResult (← oobj j "call" >>= cursorHistoricalCallRef?)
-        (← content.toList.mapM cursorHistoricalUserBlock?)
-        (← oobj j "error" >>= cursorHistoricalError?))
-  | "unmodeled" => pure (.unmodeled (← ostr j "label") (← oobj j "raw"))
-  | _ => none
+private def cursorHistoricalEnvBlock? (value : Json) : Option EnvBlock :=
+  (Lean.fromJson? value).toOption
 
-private def cursorHistoricalCoverageJson : CompactionCoverage -> Json
-  | .knownPrefix firstKept => Json.mkObj [
-      ("kind", Json.str "knownPrefix"), ("firstKept", Json.num firstKept)]
-  | .unknownPrefix => Json.mkObj [("kind", Json.str "unknownPrefix")]
+private def cursorHistoricalCoverageJson : CompactionCoverage → Json := toCarrierJson .cursorAgent
 
-private def cursorHistoricalCoverage? (j : Json) : Option CompactionCoverage := do
-  match ← ostr j "kind" with
-  | "knownPrefix" => pure (.knownPrefix (← onat j "firstKept"))
-  | "unknownPrefix" => pure .unknownPrefix
-  | _ => none
+private def cursorHistoricalCoverage? (value : Json) : Option CompactionCoverage :=
+  (Lean.fromJson? value).toOption
 
-private def cursorHistoricalMetaEventJson : MetaEvent -> Json
-  | .modelChange previous next => Json.mkObj [
-      ("kind", Json.str "modelChange"),
-      ("previous", cursorHistoricalOptionalString previous),
-      ("next", cursorHistoricalOptionalString next)]
-  | .thinkingLevelChange previous next => Json.mkObj [
-      ("kind", Json.str "thinkingLevelChange"),
-      ("previous", cursorHistoricalOptionalString previous),
-      ("next", cursorHistoricalOptionalString next)]
-  | .permissionMode mode => Json.mkObj [
-      ("kind", Json.str "permissionMode"), ("mode", Json.str mode)]
-  | .branchSummary summary => Json.mkObj [
-      ("kind", Json.str "branchSummary"), ("summary", Json.str summary)]
-  | .custom label raw => Json.mkObj [
-      ("kind", Json.str "custom"), ("label", Json.str label), ("raw", raw)]
+private def cursorHistoricalMetaEventJson : MetaEvent → Json := toCarrierJson .cursorAgent
 
-private def cursorHistoricalMetaEvent? (j : Json) : Option MetaEvent := do
-  match ← ostr j "kind" with
-  | "modelChange" => pure (.modelChange
-      (← cursorHistoricalOptionalString? j "previous")
-      (← cursorHistoricalOptionalString? j "next"))
-  | "thinkingLevelChange" => pure (.thinkingLevelChange
-      (← cursorHistoricalOptionalString? j "previous")
-      (← cursorHistoricalOptionalString? j "next"))
-  | "permissionMode" => pure (.permissionMode (← ostr j "mode"))
-  | "branchSummary" => pure (.branchSummary (← ostr j "summary"))
-  | "custom" => pure (.custom (← ostr j "label") (← oobj j "raw"))
-  | _ => none
+private def cursorHistoricalMetaEvent? (value : Json) : Option MetaEvent :=
+  (Lean.fromJson? value).toOption
 
 private def cursorHistoricalPayloadJson : Payload -> Json
   | .userMsg blocks => Json.mkObj [
@@ -483,7 +349,8 @@ private def cursorHistoricalStrictPayload? (j : Json) : Option Payload := do
           ("kind", Json.str "assistantMsg"),
           ("blocks", Json.arr rendered.toArray)])
     | payload => pure (cursorHistoricalPayloadJson payload)
-  guard (j == canonical)
+  guard (carrierJsonMatches j payload)
+  let _ := canonical
   pure payload
 
 private def cursorHistoricalSourceRawRecord? (j : Json) : Option (Option Json) :=
@@ -3425,5 +3292,13 @@ tool_call that spawned it from the data alone; any parent-call binding must be
 heuristic (positional) and flagged approximate. This also means the eventual
 oracle for D16 is NOT `adaptCursorAgent` (single-file) — parity for the stitched
 result needs a multi-file reference, which does not yet exist on the TS side. -/
+
+/-- Both on-disk media spellings enter through this adapter's carrier decoder. -/
+example : ["locator", "data"].all (fun key =>
+    let raw := Json.mkObj [("kind", Json.str "media"),
+      ("mimeType", Json.str "image/png"), (key, Json.str "legacy-image")]
+    match cursorHistoricalUserBlock? raw with
+    | some (.media mime locator) => mime == "image/png" && locator == "legacy-image"
+    | _ => false) = true := by native_decide
 
 end LoomConvert

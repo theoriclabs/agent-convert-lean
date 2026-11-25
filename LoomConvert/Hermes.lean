@@ -1,3 +1,4 @@
+import LoomConvert.IRCodec
 import Loom
 import LoomConvert.Parity
 
@@ -62,12 +63,6 @@ open Loom
 open Lean (Json)
 
 /-! ## Small Json accessors (copied scaffold from `LoomConvert.Pi`). -/
-
-private def ostr (j : Json) (k : String) : Option String :=
-  (j.getObjVal? k >>= Json.getStr?).toOption
-
-private def oobj (j : Json) (k : String) : Option Json :=
-  (j.getObjVal? k).toOption
 
 private def hSchemaError (ctx detail : String) : Except String α :=
   .error s!"malformed Hermes {ctx}: {detail}"

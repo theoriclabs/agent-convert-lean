@@ -29,28 +29,6 @@ def emit (out : String) (outp : Option String) (n : Nat) : IO UInt32 := do
       | .ok _ => IO.println s!"wrote {o} ({n} entries)"; pure 0
   | none   => IO.print out; pure 0
 
-structure CliOptions where
-  tsParity     : Bool := false
-  /-- `none` = default policy (`resolveWithSubagents`); `some` = explicit flag. -/
-  withSubagents : Option Bool := none
-  json         : Bool := false
-  allowEmptyDialogue : Bool := false
-  cwd          : Option String := none
-  provider     : Option String := none
-  model        : Option String := none
-  harnessVersion : Option String := none
-  sessionId    : Option String := none
-  targetTimestamp : Option String := none
-  piAssistantHistory : Option String := none
-  codexApprovalPolicy : Option String := none
-  codexNetworkAccess : Option Bool := none
-  codexExcludeTmpdirEnvVar : Option Bool := none
-  codexExcludeSlashTmp : Option Bool := none
-  codexSummary : Option String := none
-  store        : Option String := none
-  limit        : Option Nat := none
-  role         : Option String := none
-
 private def parseCliBool (option value : String) : Except String Bool :=
   if value == "true" then .ok true
   else if value == "false" then .ok false
@@ -113,50 +91,13 @@ private def parseCli (args : List String) : Except String (CliOptions × List St
         else loop rest opts (arg :: positional)
   loop args {} []
 
-private def sourceOriginExtrasArchiveKey : String :=
-  "_agent_convert_source_origin_extras"
-
-private def setOriginExtra (origin : Origin) (key : String) (value : Lean.Json) : Origin :=
-  let extras := match origin.extras with
-    | some (.obj fields) => Lean.Json.obj (fields.insert key value)
-    | some prior => Lean.Json.mkObj [
-        (sourceOriginExtrasArchiveKey, Lean.Json.mkObj [
-          ("protocol", Lean.Json.str "agent-convert.source-origin-extras.v1"),
-          ("raw", prior)]),
-        (key, value)]
-    | none => Lean.Json.mkObj [(key, value)]
-  { origin with extras := some extras }
-
-private def applyTargetExtra (origin : Origin) (key : String) : Option String -> Origin
-  | some value => setOriginExtra origin key (Lean.Json.str value)
-  | none => origin
-
-private def targetConfigurationKeys : List String := [
-  "target_cwd", "target_provider", "target_model", "target_session_id",
-  "target_timestamp", "target_harness_version", "target_cli_version",
-  "target_originator", "target_turn_context_record", codexTargetControlsKey,
-  cursorAgentTargetControlsKey, "pi_assistant_history"]
-
-private def sourceTargetConfigurationArchiveKey : String :=
-  "_agent_convert_source_target_configuration"
-
-/-- A source artifact cannot authorize the next target's identity or runtime
-controls. Only values supplied by this invocation are eligible for activation. -/
-private def clearTargetConfiguration (origin : Origin) : Origin :=
-  match origin.extras with
-  | some (.obj fields) =>
-      let raw := Lean.Json.obj fields
-      let cleared := targetConfigurationKeys.filterMap (fun key =>
-        (raw.getObjVal? key).toOption.map (fun value => (key, value)))
-      let retained := targetConfigurationKeys.foldl (fun acc key => acc.erase key) fields
-      let retained := if cleared.isEmpty then retained else
-        let prior := (raw.getObjVal? sourceTargetConfigurationArchiveKey).toOption
-        retained.insert sourceTargetConfigurationArchiveKey (Lean.Json.mkObj [
-          ("protocol", Lean.Json.str "agent-convert.source-target-configuration.v1"),
-          ("prior", prior.getD Lean.Json.null),
-          ("cleared", Lean.Json.mkObj cleared)])
-      { origin with extras := some (.obj retained) }
-  | _ => origin
+private def targetCliConfigurationError? (toFmt : String) (opts : CliOptions) : Option String :=
+  let missing := missingCodexControlFlags opts
+  if toFmt == "codex" && !missing.isEmpty then
+    some s!"Codex target requires explicit controls: {String.intercalate ", " missing}"
+  else if toFmt != "codex" && hasAnyCodexControlOption opts then
+    some "--target-codex-* options are valid only when the target is codex"
+  else none
 
 private def cliCodexTargetControls? (opts : CliOptions) : Option Lean.Json := do
   let approvalPolicy ← opts.codexApprovalPolicy
@@ -173,26 +114,6 @@ private def cliCodexTargetControls? (opts : CliOptions) : Option Lean.Json := do
       ("exclude_tmpdir_env_var", Lean.Json.bool excludeTmpdirEnvVar),
       ("exclude_slash_tmp", Lean.Json.bool excludeSlashTmp)]),
     ("summary", Lean.Json.str summary)])
-
-private def missingCodexControlFlags (opts : CliOptions) : List String :=
-  [
-    ("--target-codex-approval-policy", opts.codexApprovalPolicy.isNone),
-    ("--target-codex-network-access", opts.codexNetworkAccess.isNone),
-    ("--target-codex-exclude-tmpdir-env-var", opts.codexExcludeTmpdirEnvVar.isNone),
-    ("--target-codex-exclude-slash-tmp", opts.codexExcludeSlashTmp.isNone),
-    ("--target-codex-summary", opts.codexSummary.isNone)
-  ].filterMap (fun (flag, missing) => if missing then some flag else none)
-
-private def hasAnyCodexControlOption (opts : CliOptions) : Bool :=
-  (missingCodexControlFlags opts).length < 5
-
-private def targetCliConfigurationError? (toFmt : String) (opts : CliOptions) : Option String :=
-  let missing := missingCodexControlFlags opts
-  if toFmt == "codex" && !missing.isEmpty then
-    some s!"Codex target requires explicit controls: {String.intercalate ", " missing}"
-  else if toFmt != "codex" && hasAnyCodexControlOption opts then
-    some "--target-codex-* options are valid only when the target is codex"
-  else none
 
 /-- Launch configuration belongs to the target artifact. It must never overwrite
 the source transcript's `EnvInfo`, because doing so would erase the very source
@@ -525,23 +446,6 @@ def coreCapabilities : Array String := #["claude.semantic-tool-translation.v1"]
 
 private def coreCapabilitiesJson : Lean.Json :=
   Lean.Json.arr (coreCapabilities.map Lean.Json.str)
-
-private def transcriptMessageCount (t : Transcript) : Nat :=
-  t.entries.toList.countP (fun e => match e.payload with
-    | .userMsg _ | .assistantMsg _ | .envMsg _ | .otherMsg _ _ => true
-    | _ => false)
-
-private def transcriptToolCallCount (t : Transcript) : Nat :=
-  t.entries.toList.foldl (fun n e => n + match e.payload with
-    | .assistantMsg blocks => blocks.countP (fun
-        | AssistantBlock.toolCall _ _ _ => true | _ => false)
-    | _ => 0) (0 : Nat)
-
-private def transcriptToolResultCount (t : Transcript) : Nat :=
-  t.entries.toList.foldl (fun n e => n + match e.payload with
-    | .envMsg blocks => blocks.countP (fun
-        | EnvBlock.toolResult _ _ _ => true | _ => false)
-    | _ => 0) (0 : Nat)
 
 private def transcriptThinkingCount (t : Transcript) : Nat :=
   t.entries.toList.foldl (fun n e => n + match e.payload with
@@ -1027,12 +931,8 @@ example : continuationContextGuardPinned = true := by native_decide
 
 private def transcriptMentions (t : Transcript) (needle : String) : Bool :=
   t.entries.any (fun e => match e.payload with
-    | .userMsg blocks => blocks.any (fun b => match b with
-        | .text s => (s.splitOn needle).length > 1
-        | _ => false)
-    | .assistantMsg blocks => blocks.any (fun b => match b with
-        | .text s => (s.splitOn needle).length > 1
-        | _ => false)
+    | .userMsg blocks => blocks.any (Block.mentions needle)
+    | .assistantMsg blocks => blocks.any (Block.mentions needle)
     | _ => false)
 
 /-- A Codex 0.153 rollout with one compaction, in the current record shape
@@ -1261,18 +1161,7 @@ example : claudeProjectDirName "plain" = "plain" := by native_decide
 /-- Nothing in the class survives, including spaces and non-ASCII. -/
 example : claudeProjectDirName "/a b/Ç9" = "-a-b--9" := by native_decide
 
-/-- Latest recorded entry time, as the target launch stamp. The converted
-session is stamped from the conversation it contains, not from the wall clock
-at conversion time — so converting the same source twice is deterministic. -/
-private def latestRecordedIso? (t : Transcript) : Option String :=
-  (t.entries.toList.foldl (fun acc entry =>
-    match entry.time with
-    | .recorded value =>
-        match acc with
-        | some best => some (if value.ms > best then value.ms else best)
-        | none => some value.ms
-    | _ => acc) none).map (fun ms => Loom.epochMsToIso8601 ⟨ms⟩)
-
+/-- Earliest recorded entry time for the installed session's creation time. -/
 private def firstRecordedIso? (t : Transcript) : Option String :=
   (t.entries.toList.foldl (fun acc entry =>
     match entry.time with
@@ -1492,21 +1381,6 @@ public CLI is deliberately smaller: give `loom convert` a session id or path
 and a target. This wrapper resolves and detects the source, derives only target
 values that have an unambiguous continuation default, and delegates to the same
 checked pipeline. Explicit flags always win. -/
-
-/-- Stable UUIDv8 for a foreign source whose native session id is not a UUID.
-An explicit `--target-session-id` is never repaired, so invalid caller input
-still receives the target validator's diagnostic. -/
-private def smartGeneratedUuid (material : String) : String :=
-  let upper := (String.hash ("agent-convert.smart.uuid.a|" ++ material)).toNat
-  let lower := (String.hash ("agent-convert.smart.uuid.b|" ++ material)).toNat
-  let packed := upper * (2 ^ 64) + lower
-  let raw := (Nat.toDigits 16 packed).reverse.take 30 |>.reverse
-  let digits := List.replicate (30 - raw.length) '0' ++ raw
-  String.ofList (digits.take 8) ++ "-" ++
-    String.ofList ((digits.drop 8).take 4) ++ "-8" ++
-    String.ofList ((digits.drop 12).take 3) ++ "-8" ++
-    String.ofList ((digits.drop 15).take 3) ++ "-" ++
-    String.ofList ((digits.drop 18).take 12)
 
 private def smartTargetOptions (toFmt : String) (source : Transcript)
     (opts : CliOptions) : CliOptions :=
