@@ -5,6 +5,8 @@ lands; move them into a dated version section when publishing a release.
 
 ## [Unreleased]
 
+## [0.2.0-preview.6] - 2026-11-25
+
 - Find, inspect, and export local Google Antigravity CLI and desktop threads.
   Add native CLI resume and follow-up prompts, desktop picker instructions,
   and parent conversation handoffs for named subagents.
@@ -310,7 +312,8 @@ First public prerelease of the Lean session converter.
   must build from source with the pinned Lean toolchain. Cursor IDE extraction
   requires `sqlite3`; the optional MCP server requires Node.js.
 
-[Unreleased]: https://github.com/theoriclabs/agent-convert-lean/compare/v0.2.0-preview.5...HEAD
+[Unreleased]: https://github.com/theoriclabs/agent-convert-lean/compare/v0.2.0-preview.6...HEAD
+[0.2.0-preview.6]: https://github.com/theoriclabs/agent-convert-lean/releases/tag/v0.2.0-preview.6
 [0.2.0-preview.5]: https://github.com/theoriclabs/agent-convert-lean/releases/tag/v0.2.0-preview.5
 [0.2.0-preview.4]: https://github.com/theoriclabs/agent-convert-lean/releases/tag/v0.2.0-preview.4
 [0.2.0-preview.3]: https://github.com/theoriclabs/agent-convert-lean/releases/tag/v0.2.0-preview.3

@@ -32,7 +32,7 @@ node -e '
 const version = JSON.parse(process.argv[1]);
 const revisionOk = version.coreRevision === "working-tree" ||
   /^[0-9a-f]{40}$/.test(version.coreRevision);
-if (version.engine !== "lean" || version.engineVersion !== "0.2.0-preview.5" ||
+if (version.engine !== "lean" || version.engineVersion !== "0.2.0-preview.6" ||
     version.protocolVersion !== "loom.cli.v1" || !revisionOk ||
     version.sourceRepository !== "https://github.com/theoriclabs/agent-convert-lean" ||
     version.sourcePath !== "." || !version.targetTriple ||
